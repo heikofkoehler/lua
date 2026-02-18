@@ -134,6 +134,9 @@ std::unique_ptr<StmtNode> Parser::statement() {
     if (match(TokenType::RETURN)) {
         return returnStatement();
     }
+    if (match(TokenType::BREAK)) {
+        return breakStatement();
+    }
 
     // Check for assignment (simple lookahead for IDENTIFIER = )
     if (current_.type == TokenType::IDENTIFIER) {
@@ -390,6 +393,11 @@ std::unique_ptr<StmtNode> Parser::returnStatement() {
     }
 
     return std::make_unique<ReturnStmtNode>(std::move(value), line);
+}
+
+std::unique_ptr<StmtNode> Parser::breakStatement() {
+    int line = previous_.line;
+    return std::make_unique<BreakStmtNode>(line);
 }
 
 std::unique_ptr<ExprNode> Parser::expression() {

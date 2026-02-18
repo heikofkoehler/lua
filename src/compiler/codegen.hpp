@@ -32,6 +32,7 @@ public:
     void visitForStmt(ForStmtNode* node) override;
     void visitFunctionDecl(FunctionDeclNode* node) override;
     void visitReturn(ReturnStmtNode* node) override;
+    void visitBreak(BreakStmtNode* node) override;
     void visitProgram(ProgramNode* node) override;
 
 private:
@@ -57,6 +58,9 @@ private:
     int localCount_;
     std::vector<CompilerState> compilerStack_;
 
+    // Loop context for break statements
+    std::vector<std::vector<size_t>> breakJumps_;  // Stack of break jump lists
+
     // Bytecode emission
     void emitByte(uint8_t byte);
     void emitBytes(uint8_t byte1, uint8_t byte2);
@@ -78,6 +82,11 @@ private:
     // Compiler state management
     void pushCompilerState();
     void popCompilerState();
+
+    // Loop context management for break statements
+    void beginLoop();
+    void endLoop();
+    void addBreakJump(size_t jump);
 
     // Get current chunk
     Chunk* currentChunk() { return chunk_.get(); }
