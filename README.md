@@ -4,12 +4,16 @@ A minimal Lua implementation in C++ featuring a stack-based bytecode virtual mac
 
 ## Features
 
-### Implemented (MVP)
+### Implemented
 - **Stack-based Virtual Machine**: Bytecode interpreter with efficient execution
 - **NaN-boxing Values**: 64-bit value representation supporting nil, boolean, and number types
 - **Arithmetic Operations**: +, -, *, /, % (modulo), ^ (power)
-- **Comparison Operations**: ==, !=, <, <=, >, >=
+- **Comparison Operations**: ==, ~=, <, <=, >, >= (Lua-compliant ~= operator)
 - **Unary Operations**: - (negation), not
+- **Control Flow**:
+  - **If-Then-Elseif-Else-End**: Conditional branching with multiple elseif branches
+  - **While-Do-End**: Conditional loops
+  - **Repeat-Until**: Post-test loops
 - **Print Statement**: Built-in print() function
 - **REPL**: Interactive read-eval-print loop
 - **File Execution**: Run Lua scripts from files
@@ -115,7 +119,7 @@ print(2 ^ 3 ^ 2)      -- 512 (right-associative: 2^9)
 print(5 < 10)         -- true
 print(5 > 10)         -- false
 print(5 == 5)         -- true
-print(5 != 3)         -- true
+print(5 ~= 3)         -- true (Lua's not-equal operator)
 ```
 
 ### Boolean and Nil
@@ -124,6 +128,56 @@ print(5 != 3)         -- true
 print(true)           -- true
 print(false)          -- false
 print(nil)            -- nil
+```
+
+### Control Flow
+
+#### If-Then-Else
+
+```lua
+if 5 > 3 then
+    print(1)
+end
+
+if false then
+    print(999)
+else
+    print(2)
+end
+
+-- Multiple branches with elseif
+if 1 > 2 then
+    print(999)
+elseif 2 > 3 then
+    print(999)
+elseif 3 < 5 then
+    print(3)
+else
+    print(999)
+end
+```
+
+#### While Loops
+
+```lua
+-- Note: Without variables, these examples are limited
+-- Full loop functionality requires variable support (coming in Phase 2)
+while false do
+    print(999)  -- Never executes
+end
+```
+
+#### Repeat-Until Loops
+
+```lua
+-- Executes body at least once
+repeat
+    print(1)
+    print(2)
+until true
+
+-- Loops until condition becomes true
+-- (Note: Full functionality requires variables)
 ```
 
 ## Project Structure
@@ -179,7 +233,10 @@ Uses **NaN-boxing** technique:
 | OP_ADD, OP_SUB, OP_MUL, OP_DIV | Arithmetic |
 | OP_MOD, OP_POW | Modulo, power |
 | OP_NEG, OP_NOT | Unary operations |
-| OP_EQUAL, OP_LESS, etc. | Comparisons |
+| OP_EQUAL, OP_LESS, OP_GREATER, etc. | Comparisons |
+| OP_JUMP | Unconditional jump |
+| OP_JUMP_IF_FALSE | Conditional jump |
+| OP_LOOP | Jump backward (for loops) |
 | OP_PRINT | Print value |
 | OP_POP | Discard stack top |
 | OP_RETURN | End execution |
@@ -199,11 +256,14 @@ Recursive descent with proper operator precedence:
 
 ## Future Enhancements
 
-### Phase 2: Variables & Control Flow
-- Local and global variables
-- If/else statements
-- While loops
-- Variable scoping
+### Phase 2: Variables & Control Flow (Partially Complete)
+- ✅ If/then/elseif/else statements
+- ✅ While loops
+- ✅ Repeat-until loops
+- ⏳ Local and global variables
+- ⏳ For loops (numeric and generic)
+- ⏳ Variable scoping
+- ⏳ Break statement
 
 ### Phase 3: Functions
 - Function declarations

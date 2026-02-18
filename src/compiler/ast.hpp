@@ -114,6 +114,79 @@ private:
     std::unique_ptr<ExprNode> expr_;
 };
 
+// If statement: if-then-elseif-else-end
+class IfStmtNode : public StmtNode {
+public:
+    struct ElseIfBranch {
+        std::unique_ptr<ExprNode> condition;
+        std::vector<std::unique_ptr<StmtNode>> body;
+    };
+
+    IfStmtNode(std::unique_ptr<ExprNode> condition,
+               std::vector<std::unique_ptr<StmtNode>> thenBranch,
+               int line)
+        : StmtNode(line), condition_(std::move(condition)),
+          thenBranch_(std::move(thenBranch)) {}
+
+    void accept(ASTVisitor& visitor) override;
+
+    ExprNode* condition() const { return condition_.get(); }
+    const std::vector<std::unique_ptr<StmtNode>>& thenBranch() const { return thenBranch_; }
+    const std::vector<ElseIfBranch>& elseIfBranches() const { return elseIfBranches_; }
+    const std::vector<std::unique_ptr<StmtNode>>& elseBranch() const { return elseBranch_; }
+
+    void addElseIfBranch(std::unique_ptr<ExprNode> condition,
+                         std::vector<std::unique_ptr<StmtNode>> body) {
+        elseIfBranches_.push_back({std::move(condition), std::move(body)});
+    }
+
+    void setElseBranch(std::vector<std::unique_ptr<StmtNode>> body) {
+        elseBranch_ = std::move(body);
+    }
+
+private:
+    std::unique_ptr<ExprNode> condition_;
+    std::vector<std::unique_ptr<StmtNode>> thenBranch_;
+    std::vector<ElseIfBranch> elseIfBranches_;
+    std::vector<std::unique_ptr<StmtNode>> elseBranch_;
+};
+
+// While loop: while-do-end
+class WhileStmtNode : public StmtNode {
+public:
+    WhileStmtNode(std::unique_ptr<ExprNode> condition,
+                  std::vector<std::unique_ptr<StmtNode>> body,
+                  int line)
+        : StmtNode(line), condition_(std::move(condition)), body_(std::move(body)) {}
+
+    void accept(ASTVisitor& visitor) override;
+
+    ExprNode* condition() const { return condition_.get(); }
+    const std::vector<std::unique_ptr<StmtNode>>& body() const { return body_; }
+
+private:
+    std::unique_ptr<ExprNode> condition_;
+    std::vector<std::unique_ptr<StmtNode>> body_;
+};
+
+// Repeat-until loop: repeat-until
+class RepeatStmtNode : public StmtNode {
+public:
+    RepeatStmtNode(std::vector<std::unique_ptr<StmtNode>> body,
+                   std::unique_ptr<ExprNode> condition,
+                   int line)
+        : StmtNode(line), body_(std::move(body)), condition_(std::move(condition)) {}
+
+    void accept(ASTVisitor& visitor) override;
+
+    const std::vector<std::unique_ptr<StmtNode>>& body() const { return body_; }
+    ExprNode* condition() const { return condition_.get(); }
+
+private:
+    std::vector<std::unique_ptr<StmtNode>> body_;
+    std::unique_ptr<ExprNode> condition_;
+};
+
 // Program: list of statements
 class ProgramNode : public ASTNode {
 public:
@@ -143,6 +216,9 @@ public:
     virtual void visitBinary(BinaryNode* node) = 0;
     virtual void visitPrintStmt(PrintStmtNode* node) = 0;
     virtual void visitExprStmt(ExprStmtNode* node) = 0;
+    virtual void visitIfStmt(IfStmtNode* node) = 0;
+    virtual void visitWhileStmt(WhileStmtNode* node) = 0;
+    virtual void visitRepeatStmt(RepeatStmtNode* node) = 0;
     virtual void visitProgram(ProgramNode* node) = 0;
 };
 
@@ -165,6 +241,18 @@ inline void PrintStmtNode::accept(ASTVisitor& visitor) {
 
 inline void ExprStmtNode::accept(ASTVisitor& visitor) {
     visitor.visitExprStmt(this);
+}
+
+inline void IfStmtNode::accept(ASTVisitor& visitor) {
+    visitor.visitIfStmt(this);
+}
+
+inline void WhileStmtNode::accept(ASTVisitor& visitor) {
+    visitor.visitWhileStmt(this);
+}
+
+inline void RepeatStmtNode::accept(ASTVisitor& visitor) {
+    visitor.visitRepeatStmt(this);
 }
 
 inline void ProgramNode::accept(ASTVisitor& visitor) {

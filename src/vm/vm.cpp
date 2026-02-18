@@ -149,6 +149,26 @@ bool VM::run(const Chunk& chunk) {
                 pop();
                 break;
 
+            case OpCode::OP_JUMP: {
+                uint16_t offset = readByte() | (readByte() << 8);
+                ip_ += offset;
+                break;
+            }
+
+            case OpCode::OP_JUMP_IF_FALSE: {
+                uint16_t offset = readByte() | (readByte() << 8);
+                if (peek(0).isFalsey()) {
+                    ip_ += offset;
+                }
+                break;
+            }
+
+            case OpCode::OP_LOOP: {
+                uint16_t offset = readByte() | (readByte() << 8);
+                ip_ -= offset;
+                break;
+            }
+
             case OpCode::OP_RETURN:
                 return !hadError_;
 

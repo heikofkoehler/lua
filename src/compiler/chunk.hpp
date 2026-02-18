@@ -22,6 +22,7 @@ public:
 
     // Access bytecode
     const std::vector<uint8_t>& code() const { return code_; }
+    std::vector<uint8_t>& code() { return code_; }  // Non-const for patching jumps
     uint8_t at(size_t offset) const { return code_.at(offset); }
     size_t size() const { return code_.size(); }
 
@@ -44,6 +45,7 @@ private:
     // Helper for disassembly
     size_t simpleInstruction(const char* name, size_t offset) const;
     size_t constantInstruction(const char* name, size_t offset) const;
+    size_t jumpInstruction(const char* name, int sign, size_t offset) const;
 };
 
 #endif // LUA_CHUNK_HPP
