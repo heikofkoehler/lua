@@ -279,6 +279,29 @@ private:
     std::vector<std::unique_ptr<StmtNode>> body_;
 };
 
+// Generic for loop: for var in iterator do body end
+// Simplified version - single variable, single iterator
+class ForInStmtNode : public StmtNode {
+public:
+    ForInStmtNode(const std::string& varName,
+                  std::unique_ptr<ExprNode> iterator,
+                  std::vector<std::unique_ptr<StmtNode>> body,
+                  int line)
+        : StmtNode(line), varName_(varName), iterator_(std::move(iterator)),
+          body_(std::move(body)) {}
+
+    void accept(ASTVisitor& visitor) override;
+
+    const std::string& varName() const { return varName_; }
+    ExprNode* iterator() const { return iterator_.get(); }
+    const std::vector<std::unique_ptr<StmtNode>>& body() const { return body_; }
+
+private:
+    std::string varName_;
+    std::unique_ptr<ExprNode> iterator_;
+    std::vector<std::unique_ptr<StmtNode>> body_;
+};
+
 // Function declaration: function name(params) body end
 class FunctionDeclNode : public StmtNode {
 public:
@@ -360,6 +383,7 @@ public:
     virtual void visitWhileStmt(WhileStmtNode* node) = 0;
     virtual void visitRepeatStmt(RepeatStmtNode* node) = 0;
     virtual void visitForStmt(ForStmtNode* node) = 0;
+    virtual void visitForInStmt(ForInStmtNode* node) = 0;
     virtual void visitFunctionDecl(FunctionDeclNode* node) = 0;
     virtual void visitReturn(ReturnStmtNode* node) = 0;
     virtual void visitBreak(BreakStmtNode* node) = 0;
@@ -417,6 +441,10 @@ inline void RepeatStmtNode::accept(ASTVisitor& visitor) {
 
 inline void ForStmtNode::accept(ASTVisitor& visitor) {
     visitor.visitForStmt(this);
+}
+
+inline void ForInStmtNode::accept(ASTVisitor& visitor) {
+    visitor.visitForInStmt(this);
 }
 
 inline void FunctionDeclNode::accept(ASTVisitor& visitor) {

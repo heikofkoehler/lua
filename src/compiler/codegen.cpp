@@ -510,6 +510,76 @@ void CodeGenerator::visitForStmt(ForStmtNode* node) {
     endScope();
 }
 
+void CodeGenerator::visitForInStmt(ForInStmtNode* node) {
+    setLine(node->line());
+
+    // Begin scope for iterator and loop variable
+    beginScope();
+
+    beginLoop();  // Start loop context for break statements
+
+    // Evaluate iterator expression and store in hidden local
+    node->iterator()->accept(*this);
+    addLocal("(for iterator)");
+    int iteratorSlot = resolveLocal("(for iterator)");
+
+    // Initialize loop variable to nil
+    emitOpCode(OpCode::OP_NIL);
+    addLocal(node->varName());
+    int varSlot = resolveLocal(node->varName());
+
+    size_t loopStart = currentChunk()->size();
+
+    // Call iterator with current loop variable value
+    // Get iterator function
+    emitOpCode(OpCode::OP_GET_LOCAL);
+    emitByte(static_cast<uint8_t>(iteratorSlot));
+
+    // Get current loop variable value as argument
+    emitOpCode(OpCode::OP_GET_LOCAL);
+    emitByte(static_cast<uint8_t>(varSlot));
+
+    // Call iterator(loopVar)
+    emitOpCode(OpCode::OP_CALL);
+    emitByte(1);  // 1 argument
+
+    // Store result back to loop variable
+    emitOpCode(OpCode::OP_SET_LOCAL);
+    emitByte(static_cast<uint8_t>(varSlot));
+    // Result is left on stack after SET_LOCAL
+
+    // Check if result is nil
+    emitOpCode(OpCode::OP_NIL);
+    emitOpCode(OpCode::OP_EQUAL);
+
+    // If result is nil, exit loop
+    size_t exitJump = emitJump(OpCode::OP_JUMP_IF_FALSE);
+    emitOpCode(OpCode::OP_POP);  // Pop comparison result
+
+    // Break out of loop (jump to end)
+    size_t breakJump = emitJump(OpCode::OP_JUMP);
+
+    // Not nil, continue with loop body
+    patchJump(exitJump);
+    emitOpCode(OpCode::OP_POP);  // Pop comparison result
+
+    // Compile body
+    for (const auto& stmt : node->body()) {
+        stmt->accept(*this);
+    }
+
+    // Loop back
+    emitLoop(loopStart);
+
+    // Exit point (when iterator returns nil)
+    patchJump(breakJump);
+
+    endLoop();  // End loop context and patch all break jumps
+
+    // End scope (cleans up iterator and loop variable)
+    endScope();
+}
+
 void CodeGenerator::visitCall(CallExprNode* node) {
     setLine(node->line());
 

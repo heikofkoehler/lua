@@ -30,6 +30,7 @@ public:
     void visitWhileStmt(WhileStmtNode* node) override;
     void visitRepeatStmt(RepeatStmtNode* node) override;
     void visitForStmt(ForStmtNode* node) override;
+    void visitForInStmt(ForInStmtNode* node) override;
     void visitFunctionDecl(FunctionDeclNode* node) override;
     void visitReturn(ReturnStmtNode* node) override;
     void visitBreak(BreakStmtNode* node) override;

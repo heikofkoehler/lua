@@ -307,37 +307,61 @@ std::unique_ptr<StmtNode> Parser::forStatement() {
     std::string varName = current_.lexeme;
     advance();
 
-    // Expect '='
-    consume(TokenType::EQUAL, "Expected '=' after for variable");
+    // Check if it's numeric (=) or generic (in) for loop
+    if (match(TokenType::EQUAL)) {
+        // Numeric for loop: for var = start, end, step do ... end
 
-    // Parse start expression
-    auto start = expression();
+        // Parse start expression
+        auto start = expression();
 
-    // Expect ','
-    consume(TokenType::COMMA, "Expected ',' after for start value");
+        // Expect ','
+        consume(TokenType::COMMA, "Expected ',' after for start value");
 
-    // Parse end expression
-    auto end = expression();
+        // Parse end expression
+        auto end = expression();
 
-    // Parse optional step (defaults to 1)
-    std::unique_ptr<ExprNode> step = nullptr;
-    if (match(TokenType::COMMA)) {
-        step = expression();
+        // Parse optional step (defaults to 1)
+        std::unique_ptr<ExprNode> step = nullptr;
+        if (match(TokenType::COMMA)) {
+            step = expression();
+        }
+
+        // Expect 'do'
+        consume(TokenType::DO, "Expected 'do' after for clauses");
+
+        // Parse body
+        std::vector<std::unique_ptr<StmtNode>> body;
+        while (!check(TokenType::END) && !isAtEnd()) {
+            body.push_back(statement());
+        }
+
+        consume(TokenType::END, "Expected 'end' after for body");
+
+        return std::make_unique<ForStmtNode>(varName, std::move(start), std::move(end),
+                                             std::move(step), std::move(body), line);
+    } else if (match(TokenType::IN)) {
+        // Generic for loop: for var in iterator do ... end
+
+        // Parse iterator expression
+        auto iterator = expression();
+
+        // Expect 'do'
+        consume(TokenType::DO, "Expected 'do' after iterator expression");
+
+        // Parse body
+        std::vector<std::unique_ptr<StmtNode>> body;
+        while (!check(TokenType::END) && !isAtEnd()) {
+            body.push_back(statement());
+        }
+
+        consume(TokenType::END, "Expected 'end' after for body");
+
+        return std::make_unique<ForInStmtNode>(varName, std::move(iterator),
+                                               std::move(body), line);
+    } else {
+        errorAtCurrent("Expected '=' or 'in' after for variable");
+        return nullptr;
     }
-
-    // Expect 'do'
-    consume(TokenType::DO, "Expected 'do' after for clauses");
-
-    // Parse body
-    std::vector<std::unique_ptr<StmtNode>> body;
-    while (!check(TokenType::END) && !isAtEnd()) {
-        body.push_back(statement());
-    }
-
-    consume(TokenType::END, "Expected 'end' after for body");
-
-    return std::make_unique<ForStmtNode>(varName, std::move(start), std::move(end),
-                                         std::move(step), std::move(body), line);
 }
 
 std::unique_ptr<StmtNode> Parser::functionDeclaration() {
