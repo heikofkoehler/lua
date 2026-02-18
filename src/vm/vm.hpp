@@ -3,10 +3,19 @@
 
 #include "common/common.hpp"
 #include "value/value.hpp"
+#include "value/function.hpp"
 #include "compiler/chunk.hpp"
 #include <vector>
 #include <unordered_map>
 #include <string>
+
+// Call frame for function calls
+struct CallFrame {
+    FunctionObject* function;   // Function being executed
+    const Chunk* callerChunk;   // Chunk to return to
+    size_t ip;                  // Instruction pointer to return to
+    size_t stackBase;           // Where this frame's locals start on value stack
+};
 
 // Virtual Machine: Stack-based bytecode interpreter
 // Executes compiled Lua bytecode
@@ -56,10 +65,16 @@ private:
     size_t ip_;                   // Instruction pointer
     std::vector<Value> stack_;    // Value stack
     std::unordered_map<std::string, Value> globals_;  // Global variables
+    std::vector<CallFrame> frames_;  // Call stack
     bool hadError_;               // Error flag
 
-    // Stack size limit
+    // Stack size limits
     static constexpr size_t STACK_MAX = 256;
+    static constexpr size_t FRAMES_MAX = 64;
+
+    // Get current call frame
+    CallFrame& currentFrame();
+    const CallFrame& currentFrame() const;
 
     // Helper to read next byte
     uint8_t readByte();

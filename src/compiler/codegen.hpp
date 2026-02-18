@@ -21,6 +21,7 @@ public:
     void visitUnary(UnaryNode* node) override;
     void visitBinary(BinaryNode* node) override;
     void visitVariable(VariableExprNode* node) override;
+    void visitCall(CallExprNode* node) override;
     void visitPrintStmt(PrintStmtNode* node) override;
     void visitExprStmt(ExprStmtNode* node) override;
     void visitAssignmentStmt(AssignmentStmtNode* node) override;
@@ -29,6 +30,8 @@ public:
     void visitWhileStmt(WhileStmtNode* node) override;
     void visitRepeatStmt(RepeatStmtNode* node) override;
     void visitForStmt(ForStmtNode* node) override;
+    void visitFunctionDecl(FunctionDeclNode* node) override;
+    void visitReturn(ReturnStmtNode* node) override;
     void visitProgram(ProgramNode* node) override;
 
 private:
@@ -39,11 +42,20 @@ private:
         int slot;
     };
 
+    // Compiler state for nested function compilation
+    struct CompilerState {
+        std::unique_ptr<Chunk> chunk;
+        std::vector<Local> locals;
+        int scopeDepth;
+        int localCount;
+    };
+
     std::unique_ptr<Chunk> chunk_;
     int currentLine_;
     std::vector<Local> locals_;
     int scopeDepth_;
     int localCount_;
+    std::vector<CompilerState> compilerStack_;
 
     // Bytecode emission
     void emitByte(uint8_t byte);
@@ -62,6 +74,10 @@ private:
     int resolveLocal(const std::string& name);
     void beginScope();
     void endScope();
+
+    // Compiler state management
+    void pushCompilerState();
+    void popCompilerState();
 
     // Get current chunk
     Chunk* currentChunk() { return chunk_.get(); }

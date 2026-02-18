@@ -94,6 +94,24 @@ private:
     std::string name_;
 };
 
+// Function call: func(args)
+class CallExprNode : public ExprNode {
+public:
+    CallExprNode(const std::string& name,
+                 std::vector<std::unique_ptr<ExprNode>> args,
+                 int line)
+        : ExprNode(line), name_(name), args_(std::move(args)) {}
+
+    void accept(ASTVisitor& visitor) override;
+
+    const std::string& name() const { return name_; }
+    const std::vector<std::unique_ptr<ExprNode>>& args() const { return args_; }
+
+private:
+    std::string name_;
+    std::vector<std::unique_ptr<ExprNode>> args_;
+};
+
 // Statement Nodes
 class StmtNode : public ASTNode {
 protected:
@@ -261,6 +279,42 @@ private:
     std::vector<std::unique_ptr<StmtNode>> body_;
 };
 
+// Function declaration: function name(params) body end
+class FunctionDeclNode : public StmtNode {
+public:
+    FunctionDeclNode(const std::string& name,
+                     std::vector<std::string> params,
+                     std::vector<std::unique_ptr<StmtNode>> body,
+                     int line)
+        : StmtNode(line), name_(name), params_(std::move(params)),
+          body_(std::move(body)) {}
+
+    void accept(ASTVisitor& visitor) override;
+
+    const std::string& name() const { return name_; }
+    const std::vector<std::string>& params() const { return params_; }
+    const std::vector<std::unique_ptr<StmtNode>>& body() const { return body_; }
+
+private:
+    std::string name_;
+    std::vector<std::string> params_;
+    std::vector<std::unique_ptr<StmtNode>> body_;
+};
+
+// Return statement: return expr
+class ReturnStmtNode : public StmtNode {
+public:
+    ReturnStmtNode(std::unique_ptr<ExprNode> value, int line)
+        : StmtNode(line), value_(std::move(value)) {}
+
+    void accept(ASTVisitor& visitor) override;
+
+    ExprNode* value() const { return value_.get(); }
+
+private:
+    std::unique_ptr<ExprNode> value_;  // Can be nullptr for 'return' with no value
+};
+
 // Program: list of statements
 class ProgramNode : public ASTNode {
 public:
@@ -289,6 +343,7 @@ public:
     virtual void visitUnary(UnaryNode* node) = 0;
     virtual void visitBinary(BinaryNode* node) = 0;
     virtual void visitVariable(VariableExprNode* node) = 0;
+    virtual void visitCall(CallExprNode* node) = 0;
     virtual void visitPrintStmt(PrintStmtNode* node) = 0;
     virtual void visitExprStmt(ExprStmtNode* node) = 0;
     virtual void visitAssignmentStmt(AssignmentStmtNode* node) = 0;
@@ -297,6 +352,8 @@ public:
     virtual void visitWhileStmt(WhileStmtNode* node) = 0;
     virtual void visitRepeatStmt(RepeatStmtNode* node) = 0;
     virtual void visitForStmt(ForStmtNode* node) = 0;
+    virtual void visitFunctionDecl(FunctionDeclNode* node) = 0;
+    virtual void visitReturn(ReturnStmtNode* node) = 0;
     virtual void visitProgram(ProgramNode* node) = 0;
 };
 
@@ -315,6 +372,10 @@ inline void BinaryNode::accept(ASTVisitor& visitor) {
 
 inline void VariableExprNode::accept(ASTVisitor& visitor) {
     visitor.visitVariable(this);
+}
+
+inline void CallExprNode::accept(ASTVisitor& visitor) {
+    visitor.visitCall(this);
 }
 
 inline void PrintStmtNode::accept(ASTVisitor& visitor) {
@@ -347,6 +408,14 @@ inline void RepeatStmtNode::accept(ASTVisitor& visitor) {
 
 inline void ForStmtNode::accept(ASTVisitor& visitor) {
     visitor.visitForStmt(this);
+}
+
+inline void FunctionDeclNode::accept(ASTVisitor& visitor) {
+    visitor.visitFunctionDecl(this);
+}
+
+inline void ReturnStmtNode::accept(ASTVisitor& visitor) {
+    visitor.visitReturn(this);
 }
 
 inline void ProgramNode::accept(ASTVisitor& visitor) {

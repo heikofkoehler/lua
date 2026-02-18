@@ -128,6 +128,12 @@ std::unique_ptr<StmtNode> Parser::statement() {
     if (match(TokenType::FOR)) {
         return forStatement();
     }
+    if (match(TokenType::FUNCTION)) {
+        return functionDeclaration();
+    }
+    if (match(TokenType::RETURN)) {
+        return returnStatement();
+    }
 
     // Check for assignment (simple lookahead for IDENTIFIER = )
     if (current_.type == TokenType::IDENTIFIER) {
@@ -163,6 +169,19 @@ std::unique_ptr<StmtNode> Parser::assignmentOrExpression() {
         // It's an assignment
         auto value = expression();
         return std::make_unique<AssignmentStmtNode>(varName, std::move(value), line);
+    } else if (match(TokenType::LEFT_PAREN)) {
+        // It's a function call
+        std::vector<std::unique_ptr<ExprNode>> args;
+
+        if (!check(TokenType::RIGHT_PAREN)) {
+            do {
+                args.push_back(expression());
+            } while (match(TokenType::COMMA));
+        }
+
+        consume(TokenType::RIGHT_PAREN, "Expected ')' after arguments");
+        auto callExpr = std::make_unique<CallExprNode>(varName, std::move(args), line);
+        return std::make_unique<ExprStmtNode>(std::move(callExpr), line);
     } else {
         // It's an expression starting with a variable
         // Create a variable expression node for the identifier we already consumed
@@ -318,6 +337,61 @@ std::unique_ptr<StmtNode> Parser::forStatement() {
                                          std::move(step), std::move(body), line);
 }
 
+std::unique_ptr<StmtNode> Parser::functionDeclaration() {
+    int line = previous_.line;
+
+    // Parse function name
+    if (!check(TokenType::IDENTIFIER)) {
+        errorAtCurrent("Expected function name");
+        return nullptr;
+    }
+    std::string name = current_.lexeme;
+    advance();
+
+    // Parse parameter list
+    consume(TokenType::LEFT_PAREN, "Expected '(' after function name");
+
+    std::vector<std::string> params;
+    if (!check(TokenType::RIGHT_PAREN)) {
+        do {
+            if (!check(TokenType::IDENTIFIER)) {
+                errorAtCurrent("Expected parameter name");
+                return nullptr;
+            }
+            params.push_back(current_.lexeme);
+            advance();
+        } while (match(TokenType::COMMA));
+    }
+
+    consume(TokenType::RIGHT_PAREN, "Expected ')' after parameters");
+
+    // Parse body
+    std::vector<std::unique_ptr<StmtNode>> body;
+    while (!check(TokenType::END) && !isAtEnd()) {
+        body.push_back(statement());
+    }
+
+    consume(TokenType::END, "Expected 'end' after function body");
+
+    return std::make_unique<FunctionDeclNode>(name, std::move(params), std::move(body), line);
+}
+
+std::unique_ptr<StmtNode> Parser::returnStatement() {
+    int line = previous_.line;
+
+    // Parse optional return value
+    std::unique_ptr<ExprNode> value = nullptr;
+
+    // Check if there's an expression to return
+    // Return with no value if we see: end, else, elseif, until, or end of file
+    if (!check(TokenType::END) && !check(TokenType::ELSE) &&
+        !check(TokenType::ELSEIF) && !check(TokenType::UNTIL) && !isAtEnd()) {
+        value = expression();
+    }
+
+    return std::make_unique<ReturnStmtNode>(std::move(value), line);
+}
+
 std::unique_ptr<ExprNode> Parser::expression() {
     return logicalOr();
 }
@@ -447,9 +521,27 @@ std::unique_ptr<ExprNode> Parser::primary() {
         return std::make_unique<LiteralNode>(Value::number(value), line);
     }
 
-    // Variable reference
+    // Variable reference or function call
     if (match(TokenType::IDENTIFIER)) {
-        return std::make_unique<VariableExprNode>(previous_.lexeme, line);
+        std::string name = previous_.lexeme;
+
+        // Check for function call
+        if (match(TokenType::LEFT_PAREN)) {
+            // Parse arguments
+            std::vector<std::unique_ptr<ExprNode>> args;
+
+            if (!check(TokenType::RIGHT_PAREN)) {
+                do {
+                    args.push_back(expression());
+                } while (match(TokenType::COMMA));
+            }
+
+            consume(TokenType::RIGHT_PAREN, "Expected ')' after arguments");
+            return std::make_unique<CallExprNode>(name, std::move(args), line);
+        }
+
+        // Just a variable reference
+        return std::make_unique<VariableExprNode>(name, line);
     }
 
     // Grouping

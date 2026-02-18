@@ -46,6 +46,12 @@ enum class OpCode : uint8_t {
     OP_JUMP,        // Unconditional jump [offset: uint16_t]
     OP_JUMP_IF_FALSE, // Jump if top of stack is falsey [offset: uint16_t]
     OP_LOOP,        // Jump backward [offset: uint16_t]
+
+    // Functions
+    OP_CLOSURE,     // Load function constant [index: uint8_t]
+    OP_CALL,        // Call function [arg_count: uint8_t]
+    OP_RETURN_VALUE, // Return with value from function
+
     OP_RETURN,      // Return from current chunk
 };
 
@@ -78,6 +84,9 @@ inline const char* opcodeName(OpCode op) {
         case OpCode::OP_JUMP:          return "OP_JUMP";
         case OpCode::OP_JUMP_IF_FALSE: return "OP_JUMP_IF_FALSE";
         case OpCode::OP_LOOP:          return "OP_LOOP";
+        case OpCode::OP_CLOSURE:       return "OP_CLOSURE";
+        case OpCode::OP_CALL:          return "OP_CALL";
+        case OpCode::OP_RETURN_VALUE:  return "OP_RETURN_VALUE";
         case OpCode::OP_RETURN:        return "OP_RETURN";
         default:                     return "UNKNOWN";
     }

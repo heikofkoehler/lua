@@ -1,4 +1,5 @@
 #include "compiler/codegen.hpp"
+#include "value/function.hpp"
 
 CodeGenerator::CodeGenerator()
     : chunk_(nullptr), currentLine_(1), scopeDepth_(0), localCount_(0) {}
@@ -497,6 +498,100 @@ void CodeGenerator::visitForStmt(ForStmtNode* node) {
     endScope();
 }
 
+void CodeGenerator::visitCall(CallExprNode* node) {
+    setLine(node->line());
+
+    // Load function onto stack
+    size_t nameIndex = currentChunk()->addIdentifier(node->name());
+    if (nameIndex > UINT8_MAX) {
+        throw CompileError("Too many identifiers in one chunk", currentLine_);
+    }
+    emitOpCode(OpCode::OP_GET_GLOBAL);
+    emitByte(static_cast<uint8_t>(nameIndex));
+
+    // Compile arguments and push onto stack
+    for (const auto& arg : node->args()) {
+        arg->accept(*this);
+    }
+
+    // Emit call instruction with argument count
+    size_t argCount = node->args().size();
+    if (argCount > UINT8_MAX) {
+        throw CompileError("Too many arguments in function call", currentLine_);
+    }
+    emitOpCode(OpCode::OP_CALL);
+    emitByte(static_cast<uint8_t>(argCount));
+}
+
+void CodeGenerator::visitFunctionDecl(FunctionDeclNode* node) {
+    setLine(node->line());
+
+    // Save current compiler state and start new function compilation
+    pushCompilerState();
+
+    // Begin scope for function body
+    beginScope();
+
+    // Add parameters as locals (they occupy slots 0, 1, 2, ...)
+    for (const auto& param : node->params()) {
+        addLocal(param);
+    }
+
+    // Compile function body
+    for (const auto& stmt : node->body()) {
+        stmt->accept(*this);
+    }
+
+    // Emit implicit return nil at end (if no explicit return)
+    emitOpCode(OpCode::OP_NIL);
+    emitOpCode(OpCode::OP_RETURN_VALUE);
+
+    // Get compiled function chunk (don't call endScope - cleanup is handled by OP_RETURN_VALUE)
+    auto functionChunk = std::move(chunk_);
+
+    // Restore outer compiler state
+    popCompilerState();
+
+    // Create FunctionObject
+    auto func = new FunctionObject(node->name(), node->params().size(), std::move(functionChunk));
+
+    // Store function in constant pool as a Value
+    Value funcValue = Value::function(func);
+    size_t constantIndex = currentChunk()->addConstant(funcValue);
+    if (constantIndex > UINT8_MAX) {
+        throw CompileError("Too many constants in one chunk", currentLine_);
+    }
+
+    // Emit code to load function and store as global
+    emitOpCode(OpCode::OP_CLOSURE);
+    emitByte(static_cast<uint8_t>(constantIndex));
+
+    // Store in global variable
+    size_t nameIndex = currentChunk()->addIdentifier(node->name());
+    if (nameIndex > UINT8_MAX) {
+        throw CompileError("Too many identifiers in one chunk", currentLine_);
+    }
+    emitOpCode(OpCode::OP_SET_GLOBAL);
+    emitByte(static_cast<uint8_t>(nameIndex));
+
+    // Pop the function value (SET_GLOBAL leaves it on stack)
+    emitOpCode(OpCode::OP_POP);
+}
+
+void CodeGenerator::visitReturn(ReturnStmtNode* node) {
+    setLine(node->line());
+
+    // Compile return value (or nil if none)
+    if (node->value()) {
+        node->value()->accept(*this);
+    } else {
+        emitOpCode(OpCode::OP_NIL);
+    }
+
+    // Emit return instruction
+    emitOpCode(OpCode::OP_RETURN_VALUE);
+}
+
 
 void CodeGenerator::addLocal(const std::string& name) {
     if (localCount_ >= 256) {
@@ -533,4 +628,36 @@ void CodeGenerator::endScope() {
         locals_.pop_back();
         localCount_--;
     }
+}
+
+void CodeGenerator::pushCompilerState() {
+    // Save current compiler state
+    CompilerState state;
+    state.chunk = std::move(chunk_);
+    state.locals = std::move(locals_);
+    state.scopeDepth = scopeDepth_;
+    state.localCount = localCount_;
+
+    compilerStack_.push_back(std::move(state));
+
+    // Reset for new function
+    chunk_ = std::make_unique<Chunk>();
+    locals_.clear();
+    scopeDepth_ = 0;
+    localCount_ = 0;
+}
+
+void CodeGenerator::popCompilerState() {
+    // Restore previous compiler state
+    if (compilerStack_.empty()) {
+        throw CompileError("Compiler stack underflow", currentLine_);
+    }
+
+    CompilerState state = std::move(compilerStack_.back());
+    compilerStack_.pop_back();
+
+    chunk_ = std::move(state.chunk);
+    locals_ = std::move(state.locals);
+    scopeDepth_ = state.scopeDepth;
+    localCount_ = state.localCount;
 }
