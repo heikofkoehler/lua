@@ -340,6 +340,8 @@ void CodeGenerator::visitIfStmt(IfStmtNode* node) {
 void CodeGenerator::visitWhileStmt(WhileStmtNode* node) {
     setLine(node->line());
 
+    beginLoop();  // Start loop context for break statements
+
     size_t loopStart = currentChunk()->size();
 
     // Compile condition
@@ -360,10 +362,14 @@ void CodeGenerator::visitWhileStmt(WhileStmtNode* node) {
     // Patch exit jump
     patchJump(exitJump);
     emitOpCode(OpCode::OP_POP);  // Pop condition
+
+    endLoop();  // End loop context and patch all break jumps
 }
 
 void CodeGenerator::visitRepeatStmt(RepeatStmtNode* node) {
     setLine(node->line());
+
+    beginLoop();  // Start loop context for break statements
 
     size_t loopStart = currentChunk()->size();
 
@@ -389,6 +395,8 @@ void CodeGenerator::visitRepeatStmt(RepeatStmtNode* node) {
     // Exit point
     patchJump(exitJump);
     emitOpCode(OpCode::OP_POP);  // Pop condition
+
+    endLoop();  // End loop context and patch all break jumps
 }
 
 void CodeGenerator::visitForStmt(ForStmtNode* node) {
@@ -396,6 +404,8 @@ void CodeGenerator::visitForStmt(ForStmtNode* node) {
 
     // Begin scope for loop variables (loop var + hidden limit/step locals)
     beginScope();
+
+    beginLoop();  // Start loop context for break statements
 
     // Evaluate start expression and create loop variable
     node->start()->accept(*this);
@@ -493,6 +503,8 @@ void CodeGenerator::visitForStmt(ForStmtNode* node) {
     // Exit point
     patchJump(exitJump);
     emitOpCode(OpCode::OP_POP);  // Pop condition
+
+    endLoop();  // End loop context and patch all break jumps
 
     // End scope (cleans up loop variable and hidden locals)
     endScope();
@@ -595,6 +607,42 @@ void CodeGenerator::visitReturn(ReturnStmtNode* node) {
     emitOpCode(OpCode::OP_RETURN_VALUE);
 }
 
+void CodeGenerator::visitBreak(BreakStmtNode* node) {
+    setLine(node->line());
+
+    // Check if we're inside a loop
+    if (breakJumps_.empty()) {
+        throw CompileError("'break' outside of loop", currentLine_);
+    }
+
+    // Emit jump and add to list of jumps to patch
+    size_t jump = emitJump(OpCode::OP_JUMP);
+    addBreakJump(jump);
+}
+
+void CodeGenerator::beginLoop() {
+    breakJumps_.push_back(std::vector<size_t>());
+}
+
+void CodeGenerator::endLoop() {
+    if (breakJumps_.empty()) {
+        throw CompileError("endLoop() called without matching beginLoop()", currentLine_);
+    }
+
+    // Patch all break jumps to jump to current position
+    for (size_t jump : breakJumps_.back()) {
+        patchJump(jump);
+    }
+
+    breakJumps_.pop_back();
+}
+
+void CodeGenerator::addBreakJump(size_t jump) {
+    if (breakJumps_.empty()) {
+        throw CompileError("addBreakJump() called outside of loop", currentLine_);
+    }
+    breakJumps_.back().push_back(jump);
+}
 
 void CodeGenerator::addLocal(const std::string& name) {
     if (localCount_ >= 256) {

@@ -315,6 +315,14 @@ private:
     std::unique_ptr<ExprNode> value_;  // Can be nullptr for 'return' with no value
 };
 
+// Break statement: break
+class BreakStmtNode : public StmtNode {
+public:
+    BreakStmtNode(int line) : StmtNode(line) {}
+
+    void accept(ASTVisitor& visitor) override;
+};
+
 // Program: list of statements
 class ProgramNode : public ASTNode {
 public:
@@ -354,6 +362,7 @@ public:
     virtual void visitForStmt(ForStmtNode* node) = 0;
     virtual void visitFunctionDecl(FunctionDeclNode* node) = 0;
     virtual void visitReturn(ReturnStmtNode* node) = 0;
+    virtual void visitBreak(BreakStmtNode* node) = 0;
     virtual void visitProgram(ProgramNode* node) = 0;
 };
 
@@ -416,6 +425,10 @@ inline void FunctionDeclNode::accept(ASTVisitor& visitor) {
 
 inline void ReturnStmtNode::accept(ASTVisitor& visitor) {
     visitor.visitReturn(this);
+}
+
+inline void BreakStmtNode::accept(ASTVisitor& visitor) {
+    visitor.visitBreak(this);
 }
 
 inline void ProgramNode::accept(ASTVisitor& visitor) {
