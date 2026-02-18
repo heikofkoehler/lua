@@ -92,6 +92,7 @@ void CodeGenerator::visitBinary(BinaryNode* node) {
             break;
 
         case TokenType::BANG_EQUAL:
+        case TokenType::TILDE_EQUAL:
             emitOpCode(OpCode::OP_EQUAL);
             emitOpCode(OpCode::OP_NOT);
             break;

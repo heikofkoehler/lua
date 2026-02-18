@@ -79,6 +79,9 @@ Token Lexer::scanToken() {
         case '>':
             return makeToken(match('=') ? TokenType::GREATER_EQUAL : TokenType::GREATER);
 
+        case '~':
+            return makeToken(match('=') ? TokenType::TILDE_EQUAL : TokenType::TILDE);
+
         case '.':
             if (match('.')) {
                 return makeToken(TokenType::DOT_DOT);

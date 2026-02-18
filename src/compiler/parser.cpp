@@ -165,7 +165,7 @@ std::unique_ptr<ExprNode> Parser::logicalAnd() {
 std::unique_ptr<ExprNode> Parser::equality() {
     auto expr = comparison();
 
-    while (match(TokenType::EQUAL_EQUAL) || match(TokenType::BANG_EQUAL)) {
+    while (match(TokenType::EQUAL_EQUAL) || match(TokenType::BANG_EQUAL) || match(TokenType::TILDE_EQUAL)) {
         TokenType op = previous_.type;
         int line = previous_.line;
         auto right = comparison();
