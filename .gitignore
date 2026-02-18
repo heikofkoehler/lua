@@ -1,0 +1,30 @@
+# Build artifacts
+build/
+*.o
+*.a
+*.so
+*.dylib
+
+# CMake files
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+Makefile
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Executables
+lua
+*.exe
+
+# Test scripts
+test_repl.sh
