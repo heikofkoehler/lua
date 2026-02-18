@@ -1,6 +1,7 @@
 #include "compiler/codegen.hpp"
 
-CodeGenerator::CodeGenerator() : chunk_(nullptr), currentLine_(1) {}
+CodeGenerator::CodeGenerator()
+    : chunk_(nullptr), currentLine_(1), scopeDepth_(0), localCount_(0) {}
 
 std::unique_ptr<Chunk> CodeGenerator::generate(ProgramNode* program) {
     chunk_ = std::make_unique<Chunk>();
@@ -129,6 +130,26 @@ void CodeGenerator::visitBinary(BinaryNode* node) {
     }
 }
 
+void CodeGenerator::visitVariable(VariableExprNode* node) {
+    setLine(node->line());
+
+    // Try to resolve as local variable first
+    int slot = resolveLocal(node->name());
+    if (slot != -1) {
+        // It's a local variable
+        emitOpCode(OpCode::OP_GET_LOCAL);
+        emitByte(static_cast<uint8_t>(slot));
+    } else {
+        // It's a global variable
+        size_t nameIndex = currentChunk()->addIdentifier(node->name());
+        if (nameIndex > UINT8_MAX) {
+            throw CompileError("Too many identifiers in one chunk", currentLine_);
+        }
+        emitOpCode(OpCode::OP_GET_GLOBAL);
+        emitByte(static_cast<uint8_t>(nameIndex));
+    }
+}
+
 void CodeGenerator::visitPrintStmt(PrintStmtNode* node) {
     setLine(node->line());
 
@@ -147,6 +168,43 @@ void CodeGenerator::visitExprStmt(ExprStmtNode* node) {
 
     // Pop the result (expression statements discard their value)
     emitOpCode(OpCode::OP_POP);
+}
+
+void CodeGenerator::visitAssignmentStmt(AssignmentStmtNode* node) {
+    setLine(node->line());
+
+    // Compile the value
+    node->value()->accept(*this);
+
+    // Try to resolve as local variable first
+    int slot = resolveLocal(node->name());
+    if (slot != -1) {
+        // It's a local variable
+        emitOpCode(OpCode::OP_SET_LOCAL);
+        emitByte(static_cast<uint8_t>(slot));
+    } else {
+        // It's a global variable
+        size_t nameIndex = currentChunk()->addIdentifier(node->name());
+        if (nameIndex > UINT8_MAX) {
+            throw CompileError("Too many identifiers in one chunk", currentLine_);
+        }
+        emitOpCode(OpCode::OP_SET_GLOBAL);
+        emitByte(static_cast<uint8_t>(nameIndex));
+    }
+}
+
+void CodeGenerator::visitLocalDeclStmt(LocalDeclStmtNode* node) {
+    setLine(node->line());
+
+    // Compile initializer
+    if (node->initializer()) {
+        node->initializer()->accept(*this);
+    } else {
+        emitOpCode(OpCode::OP_NIL);
+    }
+
+    // Add local variable (value is already on stack)
+    addLocal(node->name());
 }
 
 void CodeGenerator::visitProgram(ProgramNode* node) {
@@ -327,4 +385,42 @@ void CodeGenerator::visitRepeatStmt(RepeatStmtNode* node) {
     // Exit point
     patchJump(exitJump);
     emitOpCode(OpCode::OP_POP);  // Pop condition
+}
+
+
+void CodeGenerator::addLocal(const std::string& name) {
+    if (localCount_ >= 256) {
+        throw CompileError("Too many local variables in scope", currentLine_);
+    }
+
+    Local local;
+    local.name = name;
+    local.depth = scopeDepth_;
+    local.slot = localCount_++;
+    locals_.push_back(local);
+}
+
+int CodeGenerator::resolveLocal(const std::string& name) {
+    // Search backwards to find most recent declaration
+    for (int i = static_cast<int>(locals_.size()) - 1; i >= 0; i--) {
+        if (locals_[i].name == name) {
+            return locals_[i].slot;
+        }
+    }
+    return -1;  // Not found, must be global
+}
+
+void CodeGenerator::beginScope() {
+    scopeDepth_++;
+}
+
+void CodeGenerator::endScope() {
+    scopeDepth_--;
+
+    // Pop locals from this scope
+    while (!locals_.empty() && locals_.back().depth > scopeDepth_) {
+        emitOpCode(OpCode::OP_POP);
+        locals_.pop_back();
+        localCount_--;
+    }
 }

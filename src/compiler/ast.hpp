@@ -80,6 +80,20 @@ private:
     std::unique_ptr<ExprNode> right_;
 };
 
+// Variable reference: reading a variable
+class VariableExprNode : public ExprNode {
+public:
+    VariableExprNode(const std::string& name, int line)
+        : ExprNode(line), name_(name) {}
+
+    void accept(ASTVisitor& visitor) override;
+
+    const std::string& name() const { return name_; }
+
+private:
+    std::string name_;
+};
+
 // Statement Nodes
 class StmtNode : public ASTNode {
 protected:
@@ -112,6 +126,38 @@ public:
 
 private:
     std::unique_ptr<ExprNode> expr_;
+};
+
+// Assignment statement: variable = expression
+class AssignmentStmtNode : public StmtNode {
+public:
+    AssignmentStmtNode(const std::string& name, std::unique_ptr<ExprNode> value, int line)
+        : StmtNode(line), name_(name), value_(std::move(value)) {}
+
+    void accept(ASTVisitor& visitor) override;
+
+    const std::string& name() const { return name_; }
+    ExprNode* value() const { return value_.get(); }
+
+private:
+    std::string name_;
+    std::unique_ptr<ExprNode> value_;
+};
+
+// Local variable declaration: local variable = expression
+class LocalDeclStmtNode : public StmtNode {
+public:
+    LocalDeclStmtNode(const std::string& name, std::unique_ptr<ExprNode> initializer, int line)
+        : StmtNode(line), name_(name), initializer_(std::move(initializer)) {}
+
+    void accept(ASTVisitor& visitor) override;
+
+    const std::string& name() const { return name_; }
+    ExprNode* initializer() const { return initializer_.get(); }
+
+private:
+    std::string name_;
+    std::unique_ptr<ExprNode> initializer_;
 };
 
 // If statement: if-then-elseif-else-end
@@ -214,8 +260,11 @@ public:
     virtual void visitLiteral(LiteralNode* node) = 0;
     virtual void visitUnary(UnaryNode* node) = 0;
     virtual void visitBinary(BinaryNode* node) = 0;
+    virtual void visitVariable(VariableExprNode* node) = 0;
     virtual void visitPrintStmt(PrintStmtNode* node) = 0;
     virtual void visitExprStmt(ExprStmtNode* node) = 0;
+    virtual void visitAssignmentStmt(AssignmentStmtNode* node) = 0;
+    virtual void visitLocalDeclStmt(LocalDeclStmtNode* node) = 0;
     virtual void visitIfStmt(IfStmtNode* node) = 0;
     virtual void visitWhileStmt(WhileStmtNode* node) = 0;
     virtual void visitRepeatStmt(RepeatStmtNode* node) = 0;
@@ -235,12 +284,24 @@ inline void BinaryNode::accept(ASTVisitor& visitor) {
     visitor.visitBinary(this);
 }
 
+inline void VariableExprNode::accept(ASTVisitor& visitor) {
+    visitor.visitVariable(this);
+}
+
 inline void PrintStmtNode::accept(ASTVisitor& visitor) {
     visitor.visitPrintStmt(this);
 }
 
 inline void ExprStmtNode::accept(ASTVisitor& visitor) {
     visitor.visitExprStmt(this);
+}
+
+inline void AssignmentStmtNode::accept(ASTVisitor& visitor) {
+    visitor.visitAssignmentStmt(this);
+}
+
+inline void LocalDeclStmtNode::accept(ASTVisitor& visitor) {
+    visitor.visitLocalDeclStmt(this);
 }
 
 inline void IfStmtNode::accept(ASTVisitor& visitor) {
