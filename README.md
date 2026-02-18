@@ -1,12 +1,21 @@
-# Lua VM Implementation (MVP)
+# Lua VM Implementation
 
-A minimal Lua implementation in C++ featuring a stack-based bytecode virtual machine.
+A Lua implementation in C++ featuring a stack-based bytecode virtual machine with functions, variables, and control flow.
 
 ## Features
 
 ### Implemented
 - **Stack-based Virtual Machine**: Bytecode interpreter with efficient execution
-- **NaN-boxing Values**: 64-bit value representation supporting nil, boolean, and number types
+- **NaN-boxing Values**: 64-bit value representation supporting nil, boolean, number, and function types
+- **Variables**:
+  - **Local Variables**: Block-scoped with proper shadowing
+  - **Global Variables**: Module-level scope
+  - **Assignment**: Full assignment support for both local and global variables
+- **Functions**:
+  - **Function Declarations**: Named functions with parameters
+  - **Function Calls**: Full call stack with proper argument passing
+  - **Return Statements**: Single return value support
+  - **Recursion**: Full recursive function support
 - **Arithmetic Operations**: +, -, *, /, % (modulo), ^ (power)
 - **Comparison Operations**: ==, ~=, <, <=, >, >= (Lua-compliant ~= operator)
 - **Unary Operations**: - (negation), not
@@ -14,6 +23,7 @@ A minimal Lua implementation in C++ featuring a stack-based bytecode virtual mac
   - **If-Then-Elseif-Else-End**: Conditional branching with multiple elseif branches
   - **While-Do-End**: Conditional loops
   - **Repeat-Until**: Post-test loops
+  - **For Loops**: Numeric for loops with step support
 - **Print Statement**: Built-in print() function
 - **REPL**: Interactive read-eval-print loop
 - **File Execution**: Run Lua scripts from files
@@ -177,7 +187,94 @@ repeat
 until true
 
 -- Loops until condition becomes true
--- (Note: Full functionality requires variables)
+```
+
+### Variables
+
+#### Local Variables
+
+```lua
+local x = 10
+local y = 20
+print(x + y)  -- 30
+
+-- Block scoping
+local a = 1
+if true then
+    local a = 2  -- Shadows outer 'a'
+    print(a)     -- 2
+end
+print(a)         -- 1
+```
+
+#### Global Variables
+
+```lua
+x = 100
+y = 200
+print(x + y)  -- 300
+```
+
+#### For Loops
+
+```lua
+-- Numeric for loop
+for i = 1, 5 do
+    print(i)
+end
+-- Output: 1 2 3 4 5
+
+-- With step
+for i = 0, 10, 2 do
+    print(i)
+end
+-- Output: 0 2 4 6 8 10
+```
+
+### Functions
+
+#### Basic Functions
+
+```lua
+function greet()
+    print(42)
+end
+
+greet()  -- 42
+```
+
+#### Functions with Parameters
+
+```lua
+function add(a, b)
+    return a + b
+end
+
+print(add(10, 32))  -- 42
+```
+
+#### Functions with Return Values
+
+```lua
+function double(x)
+    return x * 2
+end
+
+local result = double(21)
+print(result)  -- 42
+```
+
+#### Recursive Functions
+
+```lua
+function fib(n)
+    if n < 2 then
+        return n
+    end
+    return fib(n - 1) + fib(n - 2)
+end
+
+print(fib(6))  -- 8
 ```
 
 ## Project Structure
@@ -191,7 +288,8 @@ lua/
 │   │   └── common.cpp
 │   ├── value/                  # Value representation
 │   │   ├── value.hpp
-│   │   └── value.cpp
+│   │   ├── value.cpp
+│   │   └── function.hpp        # Function objects
 │   ├── compiler/               # Compilation pipeline
 │   │   ├── token.hpp
 │   │   ├── lexer.hpp
@@ -222,7 +320,11 @@ Uses **NaN-boxing** technique:
 - All values stored in 64-bit words
 - Numbers: IEEE 754 double-precision floats
 - Other types: Special NaN patterns with type tags
+  - Nil: TAG_NIL
+  - Boolean: TAG_BOOL
+  - Function: TAG_FUNCTION (stores function index)
 - Fast type checking via bit operations
+- Functions stored as indices into chunk's function pool for safe pointer management
 
 ### Bytecode Instructions
 
@@ -234,9 +336,14 @@ Uses **NaN-boxing** technique:
 | OP_MOD, OP_POW | Modulo, power |
 | OP_NEG, OP_NOT | Unary operations |
 | OP_EQUAL, OP_LESS, OP_GREATER, etc. | Comparisons |
+| OP_GET_GLOBAL, OP_SET_GLOBAL | Global variable access |
+| OP_GET_LOCAL, OP_SET_LOCAL | Local variable access |
 | OP_JUMP | Unconditional jump |
 | OP_JUMP_IF_FALSE | Conditional jump |
 | OP_LOOP | Jump backward (for loops) |
+| OP_CLOSURE | Load function constant |
+| OP_CALL | Call function with arguments |
+| OP_RETURN_VALUE | Return from function with value |
 | OP_PRINT | Print value |
 | OP_POP | Discard stack top |
 | OP_RETURN | End execution |
@@ -256,20 +363,24 @@ Recursive descent with proper operator precedence:
 
 ## Future Enhancements
 
-### Phase 2: Variables & Control Flow (Partially Complete)
+### Phase 2: Variables & Control Flow ✅ COMPLETE
 - ✅ If/then/elseif/else statements
 - ✅ While loops
 - ✅ Repeat-until loops
-- ⏳ Local and global variables
-- ⏳ For loops (numeric and generic)
-- ⏳ Variable scoping
+- ✅ Local and global variables
+- ✅ For loops (numeric)
+- ✅ Variable scoping
 - ⏳ Break statement
+- ⏳ Generic for loops (ipairs, pairs)
 
-### Phase 3: Functions
-- Function declarations
-- Function calls
-- Return statements
-- Call frames
+### Phase 3: Functions ✅ COMPLETE
+- ✅ Function declarations
+- ✅ Function calls
+- ✅ Return statements
+- ✅ Call frames and recursion
+- ⏳ Closures and upvalues
+- ⏳ Multiple return values
+- ⏳ Variadic functions (...)
 
 ### Phase 4: Objects & Memory
 - String objects with interning
@@ -312,14 +423,22 @@ false
 nil
 ```
 
-## Success Criteria (MVP)
+## Success Criteria
 
+### MVP ✅ COMPLETE
 - ✅ Parse and execute arithmetic expressions
 - ✅ Print function works correctly
 - ✅ Operator precedence is correct
 - ✅ Error messages include line numbers
 - ✅ REPL works interactively
 - ✅ Can run example scripts from files
+
+### Beyond MVP ✅ COMPLETE
+- ✅ Local and global variables with proper scoping
+- ✅ Functions with parameters and return values
+- ✅ Recursive function calls
+- ✅ For loops with numeric ranges
+- ✅ Complex control flow with variables
 
 ## License
 
