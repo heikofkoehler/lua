@@ -1,5 +1,6 @@
 #include "compiler/chunk.hpp"
 #include "value/function.hpp"
+#include "value/string.hpp"
 #include <iostream>
 #include <iomanip>
 
@@ -7,6 +8,10 @@ Chunk::~Chunk() {
     // Clean up owned function objects
     for (auto* func : functions_) {
         delete func;
+    }
+    // Clean up owned string objects
+    for (auto* str : strings_) {
+        delete str;
     }
 }
 
@@ -39,6 +44,28 @@ FunctionObject* Chunk::getFunction(size_t index) const {
         return nullptr;
     }
     return functions_[index];
+}
+
+size_t Chunk::addString(const std::string& str) {
+    // Check if string already exists (interning)
+    auto it = stringIndices_.find(str);
+    if (it != stringIndices_.end()) {
+        return it->second;
+    }
+
+    // String doesn't exist, create and intern it
+    StringObject* strObj = new StringObject(str);
+    size_t index = strings_.size();
+    strings_.push_back(strObj);
+    stringIndices_[str] = index;
+    return index;
+}
+
+StringObject* Chunk::getString(size_t index) const {
+    if (index >= strings_.size()) {
+        return nullptr;
+    }
+    return strings_[index];
 }
 
 int Chunk::getLine(size_t offset) const {

@@ -18,6 +18,7 @@ public:
 
     // Visitor methods
     void visitLiteral(LiteralNode* node) override;
+    void visitStringLiteral(StringLiteralNode* node) override;
     void visitUnary(UnaryNode* node) override;
     void visitBinary(BinaryNode* node) override;
     void visitVariable(VariableExprNode* node) override;

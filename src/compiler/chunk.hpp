@@ -5,9 +5,11 @@
 #include "value/value.hpp"
 #include "vm/opcode.hpp"
 #include <vector>
+#include <unordered_map>
 
-// Forward declaration
+// Forward declarations
 class FunctionObject;
+class StringObject;
 
 // Chunk: A sequence of bytecode instructions with associated metadata
 // Represents a compiled unit of Lua code (function, script, etc.)
@@ -34,6 +36,11 @@ public:
     size_t addFunction(FunctionObject* func);
     FunctionObject* getFunction(size_t index) const;
 
+    // Add a string to the string pool (with interning)
+    // Returns the index of the string
+    size_t addString(const std::string& str);
+    StringObject* getString(size_t index) const;
+
     // Access bytecode
     const std::vector<uint8_t>& code() const { return code_; }
     std::vector<uint8_t>& code() { return code_; }  // Non-const for patching jumps
@@ -56,6 +63,8 @@ private:
     std::vector<Value> constants_;     // Constant pool
     std::vector<std::string> identifiers_;  // Identifier pool (variable names)
     std::vector<FunctionObject*> functions_;  // Function pool (owned)
+    std::vector<StringObject*> strings_;  // String pool (owned, interned)
+    std::unordered_map<std::string, size_t> stringIndices_;  // For interning
     std::vector<int> lines_;           // Line numbers (parallel to code_)
 
     // Helper for disassembly

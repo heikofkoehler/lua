@@ -35,5 +35,11 @@ void Value::print(std::ostream& os) const {
             os << "<function:" << funcIndex << ">";
             break;
         }
+
+        case Type::STRING: {
+            size_t stringIndex = asStringIndex();
+            os << "<string:" << stringIndex << ">";
+            break;
+        }
     }
 }

@@ -33,6 +33,19 @@ void CodeGenerator::visitLiteral(LiteralNode* node) {
     }
 }
 
+void CodeGenerator::visitStringLiteral(StringLiteralNode* node) {
+    setLine(node->line());
+
+    // Intern the string in the chunk's string pool
+    size_t stringIndex = currentChunk()->addString(node->content());
+
+    // Create a value with the string index
+    Value stringValue = Value::string(stringIndex);
+
+    // Emit as constant
+    emitConstant(stringValue);
+}
+
 void CodeGenerator::visitUnary(UnaryNode* node) {
     setLine(node->line());
 

@@ -27,7 +27,8 @@ public:
         NIL,
         BOOL,
         NUMBER,
-        FUNCTION
+        FUNCTION,
+        STRING
     };
 
     // Constructors (private, use factory methods)
@@ -59,6 +60,12 @@ public:
         return Value(QNAN | TAG_FUNCTION | (funcIndex << 3));
     }
 
+    static Value string(size_t stringIndex) {
+        // Encode string index (not pointer!)
+        // Index fits easily in lower 48 bits
+        return Value(QNAN | TAG_STRING | (stringIndex << 3));
+    }
+
     // Type checking
     bool isNil() const {
         return (bits_ & (QNAN | TAG_MASK)) == (QNAN | TAG_NIL);
@@ -76,10 +83,15 @@ public:
         return (bits_ & (QNAN | TAG_MASK)) == (QNAN | TAG_FUNCTION);
     }
 
+    bool isString() const {
+        return (bits_ & (QNAN | TAG_MASK)) == (QNAN | TAG_STRING);
+    }
+
     Type type() const {
         if (isNumber()) return Type::NUMBER;
         if (isBool()) return Type::BOOL;
         if (isFunctionObject()) return Type::FUNCTION;
+        if (isString()) return Type::STRING;
         return Type::NIL;
     }
 
@@ -105,6 +117,15 @@ public:
             throw RuntimeError("Value is not a function");
         }
         // Extract function index (shift right by 3 to undo the encoding)
+        uint64_t index = (bits_ & 0x0000FFFFFFFFFFFFULL) >> 3;
+        return static_cast<size_t>(index);
+    }
+
+    size_t asStringIndex() const {
+        if (!isString()) {
+            throw RuntimeError("Value is not a string");
+        }
+        // Extract string index (shift right by 3 to undo the encoding)
         uint64_t index = (bits_ & 0x0000FFFFFFFFFFFFULL) >> 3;
         return static_cast<size_t>(index);
     }
@@ -149,6 +170,7 @@ private:
     static constexpr uint64_t TAG_NIL = 1;
     static constexpr uint64_t TAG_BOOL = 2;
     static constexpr uint64_t TAG_FUNCTION = 3;
+    static constexpr uint64_t TAG_STRING = 4;
     static constexpr uint64_t TAG_MASK = 7;
 };
 
