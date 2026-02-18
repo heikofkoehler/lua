@@ -23,7 +23,7 @@ A Lua implementation in C++ featuring a stack-based bytecode virtual machine wit
   - **If-Then-Elseif-Else-End**: Conditional branching with multiple elseif branches
   - **While-Do-End**: Conditional loops
   - **Repeat-Until**: Post-test loops
-  - **For Loops**: Numeric for loops with step support
+  - **For Loops**: Numeric for loops with step support, and generic for-in loops with iterators
   - **Break Statement**: Exit loops early
 - **Print Statement**: Built-in print() function
 - **REPL**: Interactive read-eval-print loop
@@ -254,6 +254,22 @@ for i = 0, 10, 2 do
     print(i)
 end
 -- Output: 0 2 4 6 8 10
+
+-- Generic for loop with iterator
+function countdown(n)
+    if n == nil then
+        return 5
+    elseif n > 1 then
+        return n - 1
+    else
+        return nil  -- Stop iteration
+    end
+end
+
+for i in countdown do
+    print(i)
+end
+-- Output: 5 4 3 2 1
 ```
 
 ### Functions
@@ -396,7 +412,7 @@ Recursive descent with proper operator precedence:
 - ✅ For loops (numeric)
 - ✅ Variable scoping
 - ✅ Break statement
-- ⏳ Generic for loops (ipairs, pairs)
+- ✅ Generic for loops (iterator-based)
 
 ### Phase 3: Functions ✅ COMPLETE
 - ✅ Function declarations
