@@ -4,6 +4,7 @@
 #include "common/common.hpp"
 #include "value/value.hpp"
 #include "value/function.hpp"
+#include "value/string.hpp"
 #include "compiler/chunk.hpp"
 #include <vector>
 #include <unordered_map>
@@ -37,6 +38,11 @@ public:
     // Function table operations
     size_t registerFunction(FunctionObject* func);
     FunctionObject* getFunction(size_t index);
+
+    // String interning operations
+    size_t internString(const char* chars, size_t length);
+    size_t internString(const std::string& str);
+    StringObject* getString(size_t index);
 
 private:
     // Stack operations
@@ -72,6 +78,8 @@ private:
     std::unordered_map<std::string, Value> globals_;  // Global variables
     std::vector<CallFrame> frames_;  // Call stack
     std::vector<FunctionObject*> functions_;  // Function table (owns function objects)
+    std::vector<StringObject*> strings_;  // String pool (owns string objects, interned)
+    std::unordered_map<uint32_t, size_t> stringIndices_;  // Hash to index mapping for interning
     bool hadError_;               // Error flag
 
     // Stack size limits

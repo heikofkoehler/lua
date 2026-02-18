@@ -553,6 +553,11 @@ std::unique_ptr<ExprNode> Parser::primary() {
         return std::make_unique<LiteralNode>(Value::number(value), line);
     }
 
+    if (match(TokenType::STRING)) {
+        // String content (lexer already stripped quotes)
+        return std::make_unique<StringLiteralNode>(previous_.lexeme, line);
+    }
+
     // Variable reference or function call
     if (match(TokenType::IDENTIFIER)) {
         std::string name = previous_.lexeme;

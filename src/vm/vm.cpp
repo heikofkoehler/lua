@@ -12,6 +12,12 @@ void VM::reset() {
     frames_.clear();
     // Note: functions_ not cleaned up here since Chunk owns function objects
     functions_.clear();
+    // Clean up strings (VM owns them)
+    for (auto* str : strings_) {
+        delete str;
+    }
+    strings_.clear();
+    stringIndices_.clear();
     ip_ = 0;
     hadError_ = false;
     chunk_ = nullptr;
@@ -30,6 +36,41 @@ FunctionObject* VM::getFunction(size_t index) {
         return nullptr;
     }
     return functions_[index];
+}
+
+size_t VM::internString(const char* chars, size_t length) {
+    // Create temporary string to compute hash
+    StringObject temp(chars, length);
+    uint32_t hash = temp.hash();
+
+    // Check if string already exists
+    auto it = stringIndices_.find(hash);
+    if (it != stringIndices_.end()) {
+        size_t index = it->second;
+        // Verify it's actually the same string (handle hash collisions)
+        if (strings_[index]->equals(chars, length)) {
+            return index;
+        }
+    }
+
+    // String doesn't exist, create and intern it
+    StringObject* str = new StringObject(chars, length);
+    size_t index = strings_.size();
+    strings_.push_back(str);
+    stringIndices_[hash] = index;
+    return index;
+}
+
+size_t VM::internString(const std::string& str) {
+    return internString(str.c_str(), str.length());
+}
+
+StringObject* VM::getString(size_t index) {
+    if (index >= strings_.size()) {
+        runtimeError("Invalid string index");
+        return nullptr;
+    }
+    return strings_[index];
 }
 
 CallFrame& VM::currentFrame() {
@@ -211,7 +252,18 @@ bool VM::run(const Chunk& chunk) {
 
             case OpCode::OP_PRINT: {
                 Value value = pop();
-                std::cout << value << std::endl;
+                // Special handling for strings
+                if (value.isString()) {
+                    size_t index = value.asStringIndex();
+                    StringObject* str = rootChunk_->getString(index);
+                    if (str) {
+                        std::cout << str->chars() << std::endl;
+                    } else {
+                        std::cout << "<invalid string>" << std::endl;
+                    }
+                } else {
+                    std::cout << value << std::endl;
+                }
                 break;
             }
 

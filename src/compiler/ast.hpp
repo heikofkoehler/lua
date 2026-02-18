@@ -45,6 +45,20 @@ private:
     Value value_;
 };
 
+// String literal (interned during codegen)
+class StringLiteralNode : public ExprNode {
+public:
+    StringLiteralNode(const std::string& content, int line)
+        : ExprNode(line), content_(content) {}
+
+    void accept(ASTVisitor& visitor) override;
+
+    const std::string& content() const { return content_; }
+
+private:
+    std::string content_;
+};
+
 // Unary operation: -x, not x
 class UnaryNode : public ExprNode {
 public:
@@ -371,6 +385,7 @@ public:
     virtual ~ASTVisitor() = default;
 
     virtual void visitLiteral(LiteralNode* node) = 0;
+    virtual void visitStringLiteral(StringLiteralNode* node) = 0;
     virtual void visitUnary(UnaryNode* node) = 0;
     virtual void visitBinary(BinaryNode* node) = 0;
     virtual void visitVariable(VariableExprNode* node) = 0;
@@ -393,6 +408,10 @@ public:
 // Accept implementations
 inline void LiteralNode::accept(ASTVisitor& visitor) {
     visitor.visitLiteral(this);
+}
+
+inline void StringLiteralNode::accept(ASTVisitor& visitor) {
+    visitor.visitStringLiteral(this);
 }
 
 inline void UnaryNode::accept(ASTVisitor& visitor) {
