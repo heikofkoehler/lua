@@ -34,6 +34,10 @@ public:
     // Stack operations (for debugging/testing)
     const std::vector<Value>& stack() const { return stack_; }
 
+    // Function table operations
+    size_t registerFunction(FunctionObject* func);
+    FunctionObject* getFunction(size_t index);
+
 private:
     // Stack operations
     void push(const Value& value);
@@ -62,10 +66,12 @@ private:
 
     // Execution state
     const Chunk* chunk_;          // Current chunk being executed
+    const Chunk* rootChunk_;      // Root chunk (for function lookups)
     size_t ip_;                   // Instruction pointer
     std::vector<Value> stack_;    // Value stack
     std::unordered_map<std::string, Value> globals_;  // Global variables
     std::vector<CallFrame> frames_;  // Call stack
+    std::vector<FunctionObject*> functions_;  // Function table (owns function objects)
     bool hadError_;               // Error flag
 
     // Stack size limits
