@@ -24,6 +24,7 @@ A Lua implementation in C++ featuring a stack-based bytecode virtual machine wit
   - **While-Do-End**: Conditional loops
   - **Repeat-Until**: Post-test loops
   - **For Loops**: Numeric for loops with step support
+  - **Break Statement**: Exit loops early
 - **Print Statement**: Built-in print() function
 - **REPL**: Interactive read-eval-print loop
 - **File Execution**: Run Lua scripts from files
@@ -187,6 +188,30 @@ repeat
 until true
 
 -- Loops until condition becomes true
+```
+
+#### Break Statement
+
+```lua
+-- Break out of loop early
+for i = 1, 10 do
+    print(i)
+    if i >= 5 then
+        break  -- Exit loop when i reaches 5
+    end
+end
+-- Output: 1 2 3 4 5
+
+-- Break in while loop
+local i = 1
+while true do
+    print(i)
+    if i >= 3 then
+        break
+    end
+    i = i + 1
+end
+-- Output: 1 2 3
 ```
 
 ### Variables
@@ -370,7 +395,7 @@ Recursive descent with proper operator precedence:
 - ✅ Local and global variables
 - ✅ For loops (numeric)
 - ✅ Variable scoping
-- ⏳ Break statement
+- ✅ Break statement
 - ⏳ Generic for loops (ipairs, pairs)
 
 ### Phase 3: Functions ✅ COMPLETE
