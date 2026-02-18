@@ -18,6 +18,7 @@ enum class TokenType {
     EQUAL, EQUAL_EQUAL,
     GREATER, GREATER_EQUAL,
     LESS, LESS_EQUAL,
+    TILDE, TILDE_EQUAL,  // ~ and ~= (Lua's not-equal operator)
     DOT_DOT,
 
     // Literals
@@ -74,6 +75,8 @@ inline const char* tokenTypeName(TokenType type) {
         case TokenType::GREATER_EQUAL: return "GREATER_EQUAL";
         case TokenType::LESS: return "LESS";
         case TokenType::LESS_EQUAL: return "LESS_EQUAL";
+        case TokenType::TILDE: return "TILDE";
+        case TokenType::TILDE_EQUAL: return "TILDE_EQUAL";
         case TokenType::DOT_DOT: return "DOT_DOT";
         case TokenType::IDENTIFIER: return "IDENTIFIER";
         case TokenType::STRING: return "STRING";
