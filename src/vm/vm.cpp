@@ -18,6 +18,11 @@ void VM::reset() {
     }
     strings_.clear();
     stringIndices_.clear();
+    // Clean up tables (VM owns them)
+    for (auto* table : tables_) {
+        delete table;
+    }
+    tables_.clear();
     ip_ = 0;
     hadError_ = false;
     chunk_ = nullptr;
@@ -71,6 +76,21 @@ StringObject* VM::getString(size_t index) {
         return nullptr;
     }
     return strings_[index];
+}
+
+size_t VM::createTable() {
+    TableObject* table = new TableObject();
+    size_t index = tables_.size();
+    tables_.push_back(table);
+    return index;
+}
+
+TableObject* VM::getTable(size_t index) {
+    if (index >= tables_.size()) {
+        runtimeError("Invalid table index");
+        return nullptr;
+    }
+    return tables_[index];
 }
 
 CallFrame& VM::currentFrame() {
@@ -367,6 +387,52 @@ bool VM::run(const Chunk& chunk) {
 
                 // Push return value (replaces where function was)
                 push(result);
+                break;
+            }
+
+            case OpCode::OP_NEW_TABLE: {
+                size_t tableIndex = createTable();
+                push(Value::table(tableIndex));
+                break;
+            }
+
+            case OpCode::OP_GET_TABLE: {
+                Value key = pop();
+                Value tableValue = pop();
+
+                if (!tableValue.isTable()) {
+                    runtimeError("Attempt to index a non-table value");
+                    push(Value::nil());
+                    break;
+                }
+
+                size_t tableIndex = tableValue.asTableIndex();
+                TableObject* table = getTable(tableIndex);
+                if (table) {
+                    Value value = table->get(key);
+                    push(value);
+                } else {
+                    push(Value::nil());
+                }
+                break;
+            }
+
+            case OpCode::OP_SET_TABLE: {
+                Value value = pop();
+                Value key = pop();
+                Value tableValue = pop();
+
+                if (!tableValue.isTable()) {
+                    runtimeError("Attempt to index a non-table value");
+                    break;
+                }
+
+                size_t tableIndex = tableValue.asTableIndex();
+                TableObject* table = getTable(tableIndex);
+                if (table) {
+                    table->set(key, value);
+                }
+                // Note: SET_TABLE doesn't leave anything on stack
                 break;
             }
 

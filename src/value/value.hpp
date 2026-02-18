@@ -28,7 +28,8 @@ public:
         BOOL,
         NUMBER,
         FUNCTION,
-        STRING
+        STRING,
+        TABLE
     };
 
     // Constructors (private, use factory methods)
@@ -66,6 +67,12 @@ public:
         return Value(QNAN | TAG_STRING | (stringIndex << 3));
     }
 
+    static Value table(size_t tableIndex) {
+        // Encode table index (not pointer!)
+        // Index fits easily in lower 48 bits
+        return Value(QNAN | TAG_TABLE | (tableIndex << 3));
+    }
+
     // Type checking
     bool isNil() const {
         return (bits_ & (QNAN | TAG_MASK)) == (QNAN | TAG_NIL);
@@ -87,11 +94,16 @@ public:
         return (bits_ & (QNAN | TAG_MASK)) == (QNAN | TAG_STRING);
     }
 
+    bool isTable() const {
+        return (bits_ & (QNAN | TAG_MASK)) == (QNAN | TAG_TABLE);
+    }
+
     Type type() const {
         if (isNumber()) return Type::NUMBER;
         if (isBool()) return Type::BOOL;
         if (isFunctionObject()) return Type::FUNCTION;
         if (isString()) return Type::STRING;
+        if (isTable()) return Type::TABLE;
         return Type::NIL;
     }
 
@@ -126,6 +138,15 @@ public:
             throw RuntimeError("Value is not a string");
         }
         // Extract string index (shift right by 3 to undo the encoding)
+        uint64_t index = (bits_ & 0x0000FFFFFFFFFFFFULL) >> 3;
+        return static_cast<size_t>(index);
+    }
+
+    size_t asTableIndex() const {
+        if (!isTable()) {
+            throw RuntimeError("Value is not a table");
+        }
+        // Extract table index (shift right by 3 to undo the encoding)
         uint64_t index = (bits_ & 0x0000FFFFFFFFFFFFULL) >> 3;
         return static_cast<size_t>(index);
     }
@@ -171,6 +192,7 @@ private:
     static constexpr uint64_t TAG_BOOL = 2;
     static constexpr uint64_t TAG_FUNCTION = 3;
     static constexpr uint64_t TAG_STRING = 4;
+    static constexpr uint64_t TAG_TABLE = 5;
     static constexpr uint64_t TAG_MASK = 7;
 };
 

@@ -5,6 +5,7 @@
 #include "value/value.hpp"
 #include "value/function.hpp"
 #include "value/string.hpp"
+#include "value/table.hpp"
 #include "compiler/chunk.hpp"
 #include <vector>
 #include <unordered_map>
@@ -44,6 +45,10 @@ public:
     size_t internString(const std::string& str);
     StringObject* getString(size_t index);
 
+    // Table operations
+    size_t createTable();
+    TableObject* getTable(size_t index);
+
 private:
     // Stack operations
     void push(const Value& value);
@@ -80,6 +85,7 @@ private:
     std::vector<FunctionObject*> functions_;  // Function table (owns function objects)
     std::vector<StringObject*> strings_;  // String pool (owns string objects, interned)
     std::unordered_map<uint32_t, size_t> stringIndices_;  // Hash to index mapping for interning
+    std::vector<TableObject*> tables_;  // Table pool (owns table objects)
     bool hadError_;               // Error flag
 
     // Stack size limits

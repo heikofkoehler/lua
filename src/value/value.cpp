@@ -41,5 +41,11 @@ void Value::print(std::ostream& os) const {
             os << "<string:" << stringIndex << ">";
             break;
         }
+
+        case Type::TABLE: {
+            size_t tableIndex = asTableIndex();
+            os << "<table:" << tableIndex << ">";
+            break;
+        }
     }
 }
