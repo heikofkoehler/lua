@@ -6,7 +6,11 @@ A Lua implementation in C++ featuring a stack-based bytecode virtual machine wit
 
 ### Implemented
 - **Stack-based Virtual Machine**: Bytecode interpreter with efficient execution
-- **NaN-boxing Values**: 64-bit value representation supporting nil, boolean, number, and function types
+- **NaN-boxing Values**: 64-bit value representation supporting nil, boolean, number, function, and string types
+- **Strings**:
+  - **String Literals**: Double and single quoted strings
+  - **String Interning**: Automatic deduplication for memory efficiency
+  - **Multi-line Support**: Strings can span multiple lines
 - **Variables**:
   - **Local Variables**: Block-scoped with proper shadowing
   - **Global Variables**: Module-level scope
