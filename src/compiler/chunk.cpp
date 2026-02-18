@@ -12,6 +12,15 @@ size_t Chunk::addConstant(const Value& value) {
     return constants_.size() - 1;
 }
 
+size_t Chunk::addIdentifier(const std::string& name) {
+    identifiers_.push_back(name);
+    return identifiers_.size() - 1;
+}
+
+const std::string& Chunk::getIdentifier(size_t index) const {
+    return identifiers_.at(index);
+}
+
 int Chunk::getLine(size_t offset) const {
     if (offset >= lines_.size()) {
         return -1;
@@ -50,6 +59,15 @@ size_t Chunk::disassembleInstruction(size_t offset) const {
             return simpleInstruction("OP_TRUE", offset);
         case OpCode::OP_FALSE:
             return simpleInstruction("OP_FALSE", offset);
+
+        case OpCode::OP_GET_GLOBAL:
+            return byteInstruction("OP_GET_GLOBAL", offset);
+        case OpCode::OP_SET_GLOBAL:
+            return byteInstruction("OP_SET_GLOBAL", offset);
+        case OpCode::OP_GET_LOCAL:
+            return byteInstruction("OP_GET_LOCAL", offset);
+        case OpCode::OP_SET_LOCAL:
+            return byteInstruction("OP_SET_LOCAL", offset);
 
         case OpCode::OP_ADD:
             return simpleInstruction("OP_ADD", offset);
@@ -120,4 +138,18 @@ size_t Chunk::jumpInstruction(const char* name, int sign, size_t offset) const {
               << std::right << std::setw(4) << offset
               << " -> " << (offset + 3 + sign * jump) << std::endl;
     return offset + 3;
+}
+
+size_t Chunk::byteInstruction(const char* name, size_t offset) const {
+    uint8_t slot = code_[offset + 1];
+    std::cout << std::left << std::setw(16) << name
+              << std::right << std::setw(4) << static_cast<int>(slot);
+
+    // If it's a global variable instruction, show the name
+    if (std::string(name).find("GLOBAL") != std::string::npos && slot < identifiers_.size()) {
+        std::cout << " '" << identifiers_[slot] << "'";
+    }
+
+    std::cout << std::endl;
+    return offset + 2;
 }

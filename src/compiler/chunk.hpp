@@ -20,6 +20,11 @@ public:
     // Returns the index of the constant in the pool
     size_t addConstant(const Value& value);
 
+    // Add an identifier (variable name) to the identifier pool
+    // Returns the index of the identifier
+    size_t addIdentifier(const std::string& name);
+    const std::string& getIdentifier(size_t index) const;
+
     // Access bytecode
     const std::vector<uint8_t>& code() const { return code_; }
     std::vector<uint8_t>& code() { return code_; }  // Non-const for patching jumps
@@ -40,12 +45,14 @@ public:
 private:
     std::vector<uint8_t> code_;        // Bytecode instructions
     std::vector<Value> constants_;     // Constant pool
+    std::vector<std::string> identifiers_;  // Identifier pool (variable names)
     std::vector<int> lines_;           // Line numbers (parallel to code_)
 
     // Helper for disassembly
     size_t simpleInstruction(const char* name, size_t offset) const;
     size_t constantInstruction(const char* name, size_t offset) const;
     size_t jumpInstruction(const char* name, int sign, size_t offset) const;
+    size_t byteInstruction(const char* name, size_t offset) const;
 };
 
 #endif // LUA_CHUNK_HPP

@@ -13,6 +13,12 @@ enum class OpCode : uint8_t {
     OP_TRUE,        // Push true
     OP_FALSE,       // Push false
 
+    // Variables
+    OP_GET_GLOBAL,  // Get global variable [name_index: uint8_t]
+    OP_SET_GLOBAL,  // Set global variable [name_index: uint8_t]
+    OP_GET_LOCAL,   // Get local variable [slot: uint8_t]
+    OP_SET_LOCAL,   // Set local variable [slot: uint8_t]
+
     // Arithmetic operations (binary)
     OP_ADD,         // Addition: pop b, pop a, push a + b
     OP_SUB,         // Subtraction: pop b, pop a, push a - b
@@ -50,6 +56,10 @@ inline const char* opcodeName(OpCode op) {
         case OpCode::OP_NIL:         return "OP_NIL";
         case OpCode::OP_TRUE:        return "OP_TRUE";
         case OpCode::OP_FALSE:       return "OP_FALSE";
+        case OpCode::OP_GET_GLOBAL:  return "OP_GET_GLOBAL";
+        case OpCode::OP_SET_GLOBAL:  return "OP_SET_GLOBAL";
+        case OpCode::OP_GET_LOCAL:   return "OP_GET_LOCAL";
+        case OpCode::OP_SET_LOCAL:   return "OP_SET_LOCAL";
         case OpCode::OP_ADD:         return "OP_ADD";
         case OpCode::OP_SUB:         return "OP_SUB";
         case OpCode::OP_MUL:         return "OP_MUL";

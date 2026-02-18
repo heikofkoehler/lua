@@ -31,6 +31,9 @@ private:
     explicit Value(uint64_t bits) : bits_(bits) {}
 
 public:
+    // Default constructor (creates nil value)
+    Value() : bits_(QNAN | TAG_NIL) {}
+
     // Factory methods
     static Value nil() {
         return Value(QNAN | TAG_NIL);

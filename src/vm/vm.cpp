@@ -50,6 +50,38 @@ bool VM::run(const Chunk& chunk) {
                 push(Value::boolean(false));
                 break;
 
+            case OpCode::OP_GET_GLOBAL: {
+                uint8_t nameIndex = readByte();
+                const std::string& varName = chunk_->getIdentifier(nameIndex);
+                auto it = globals_.find(varName);
+                if (it == globals_.end()) {
+                    runtimeError("Undefined variable '" + varName + "'");
+                    push(Value::nil());
+                } else {
+                    push(it->second);
+                }
+                break;
+            }
+
+            case OpCode::OP_SET_GLOBAL: {
+                uint8_t nameIndex = readByte();
+                const std::string& varName = chunk_->getIdentifier(nameIndex);
+                globals_[varName] = peek(0);
+                break;
+            }
+
+            case OpCode::OP_GET_LOCAL: {
+                uint8_t slot = readByte();
+                push(stack_[slot]);
+                break;
+            }
+
+            case OpCode::OP_SET_LOCAL: {
+                uint8_t slot = readByte();
+                stack_[slot] = peek(0);
+                break;
+            }
+
             case OpCode::OP_ADD: {
                 Value b = pop();
                 Value a = pop();

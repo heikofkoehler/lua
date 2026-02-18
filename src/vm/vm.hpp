@@ -5,6 +5,8 @@
 #include "value/value.hpp"
 #include "compiler/chunk.hpp"
 #include <vector>
+#include <unordered_map>
+#include <string>
 
 // Virtual Machine: Stack-based bytecode interpreter
 // Executes compiled Lua bytecode
@@ -53,6 +55,7 @@ private:
     const Chunk* chunk_;          // Current chunk being executed
     size_t ip_;                   // Instruction pointer
     std::vector<Value> stack_;    // Value stack
+    std::unordered_map<std::string, Value> globals_;  // Global variables
     bool hadError_;               // Error flag
 
     // Stack size limit
