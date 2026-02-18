@@ -53,10 +53,10 @@ public:
         return v;
     }
 
-    static Value function(FunctionObject* func) {
-        // Encode pointer in lower 48 bits with function tag
-        uint64_t ptr = reinterpret_cast<uint64_t>(func);
-        return Value(QNAN | TAG_FUNCTION | (ptr & 0x0000FFFFFFFFFFFFULL));
+    static Value function(size_t funcIndex) {
+        // Encode function index (not pointer!)
+        // Index fits easily in lower 48 bits
+        return Value(QNAN | TAG_FUNCTION | (funcIndex << 3));
     }
 
     // Type checking
@@ -100,13 +100,13 @@ public:
         return result;
     }
 
-    FunctionObject* asFunctionObject() const {
+    size_t asFunctionIndex() const {
         if (!isFunctionObject()) {
             throw RuntimeError("Value is not a function");
         }
-        // Extract pointer (remove QNAN and TAG bits)
-        uint64_t ptr = bits_ & ~(QNAN | TAG_MASK);
-        return reinterpret_cast<FunctionObject*>(ptr);
+        // Extract function index (shift right by 3 to undo the encoding)
+        uint64_t index = (bits_ & 0x0000FFFFFFFFFFFFULL) >> 3;
+        return static_cast<size_t>(index);
     }
 
     // Equality

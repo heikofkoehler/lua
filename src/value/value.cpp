@@ -31,8 +31,8 @@ void Value::print(std::ostream& os) const {
         }
 
         case Type::FUNCTION: {
-            FunctionObject* func = asFunctionObject();
-            os << "<function " << func->name() << ">";
+            size_t funcIndex = asFunctionIndex();
+            os << "<function:" << funcIndex << ">";
             break;
         }
     }

@@ -6,12 +6,16 @@
 #include "vm/opcode.hpp"
 #include <vector>
 
+// Forward declaration
+class FunctionObject;
+
 // Chunk: A sequence of bytecode instructions with associated metadata
 // Represents a compiled unit of Lua code (function, script, etc.)
 
 class Chunk {
 public:
     Chunk() = default;
+    ~Chunk();  // Destructor to clean up function objects
 
     // Write a byte to the chunk
     void write(uint8_t byte, int line);
@@ -24,6 +28,11 @@ public:
     // Returns the index of the identifier
     size_t addIdentifier(const std::string& name);
     const std::string& getIdentifier(size_t index) const;
+
+    // Add a function to the function pool
+    // Returns the index of the function
+    size_t addFunction(FunctionObject* func);
+    FunctionObject* getFunction(size_t index) const;
 
     // Access bytecode
     const std::vector<uint8_t>& code() const { return code_; }
@@ -46,6 +55,7 @@ private:
     std::vector<uint8_t> code_;        // Bytecode instructions
     std::vector<Value> constants_;     // Constant pool
     std::vector<std::string> identifiers_;  // Identifier pool (variable names)
+    std::vector<FunctionObject*> functions_;  // Function pool (owned)
     std::vector<int> lines_;           // Line numbers (parallel to code_)
 
     // Helper for disassembly

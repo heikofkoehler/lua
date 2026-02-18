@@ -555,8 +555,11 @@ void CodeGenerator::visitFunctionDecl(FunctionDeclNode* node) {
     // Create FunctionObject
     auto func = new FunctionObject(node->name(), node->params().size(), std::move(functionChunk));
 
-    // Store function in constant pool as a Value
-    Value funcValue = Value::function(func);
+    // Add function to chunk's function pool and get its index
+    size_t funcIndex = currentChunk()->addFunction(func);
+
+    // Store function index in constant pool as a Value
+    Value funcValue = Value::function(funcIndex);
     size_t constantIndex = currentChunk()->addConstant(funcValue);
     if (constantIndex > UINT8_MAX) {
         throw CompileError("Too many constants in one chunk", currentLine_);

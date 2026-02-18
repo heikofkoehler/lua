@@ -2,7 +2,7 @@
 #include <iostream>
 #include <cmath>
 
-VM::VM() : chunk_(nullptr), ip_(0), hadError_(false) {
+VM::VM() : chunk_(nullptr), rootChunk_(nullptr), ip_(0), hadError_(false) {
     stack_.reserve(STACK_MAX);
     frames_.reserve(FRAMES_MAX);
 }
@@ -10,9 +10,26 @@ VM::VM() : chunk_(nullptr), ip_(0), hadError_(false) {
 void VM::reset() {
     stack_.clear();
     frames_.clear();
+    // Note: functions_ not cleaned up here since Chunk owns function objects
+    functions_.clear();
     ip_ = 0;
     hadError_ = false;
     chunk_ = nullptr;
+    rootChunk_ = nullptr;
+}
+
+size_t VM::registerFunction(FunctionObject* func) {
+    size_t index = functions_.size();
+    functions_.push_back(func);
+    return index;
+}
+
+FunctionObject* VM::getFunction(size_t index) {
+    if (index >= functions_.size()) {
+        runtimeError("Invalid function index");
+        return nullptr;
+    }
+    return functions_[index];
 }
 
 CallFrame& VM::currentFrame() {
@@ -31,6 +48,7 @@ const CallFrame& VM::currentFrame() const {
 
 bool VM::run(const Chunk& chunk) {
     chunk_ = &chunk;
+    rootChunk_ = &chunk;  // Save root chunk for function lookups
     ip_ = 0;
     hadError_ = false;
 
@@ -237,7 +255,9 @@ bool VM::run(const Chunk& chunk) {
                     break;
                 }
 
-                FunctionObject* function = callee.asFunctionObject();
+                // Get function index from the value, then retrieve function from root chunk
+                size_t funcIndex = callee.asFunctionIndex();
+                FunctionObject* function = rootChunk_->getFunction(funcIndex);
 
                 if (argCount != function->arity()) {
                     runtimeError("Expected " + std::to_string(function->arity()) +

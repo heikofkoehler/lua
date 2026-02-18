@@ -1,6 +1,14 @@
 #include "compiler/chunk.hpp"
+#include "value/function.hpp"
 #include <iostream>
 #include <iomanip>
+
+Chunk::~Chunk() {
+    // Clean up owned function objects
+    for (auto* func : functions_) {
+        delete func;
+    }
+}
 
 void Chunk::write(uint8_t byte, int line) {
     code_.push_back(byte);
@@ -19,6 +27,18 @@ size_t Chunk::addIdentifier(const std::string& name) {
 
 const std::string& Chunk::getIdentifier(size_t index) const {
     return identifiers_.at(index);
+}
+
+size_t Chunk::addFunction(FunctionObject* func) {
+    functions_.push_back(func);
+    return functions_.size() - 1;
+}
+
+FunctionObject* Chunk::getFunction(size_t index) const {
+    if (index >= functions_.size()) {
+        return nullptr;
+    }
+    return functions_[index];
 }
 
 int Chunk::getLine(size_t offset) const {
