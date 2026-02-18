@@ -1,0 +1,70 @@
+#ifndef LUA_OPCODE_HPP
+#define LUA_OPCODE_HPP
+
+#include "common/common.hpp"
+
+// Bytecode instruction set for stack-based VM
+// Each instruction is a single byte (opcode) possibly followed by operands
+
+enum class OpCode : uint8_t {
+    // Constants
+    OP_CONSTANT,    // Load constant from constant pool [index: uint8_t]
+    OP_NIL,         // Push nil
+    OP_TRUE,        // Push true
+    OP_FALSE,       // Push false
+
+    // Arithmetic operations (binary)
+    OP_ADD,         // Addition: pop b, pop a, push a + b
+    OP_SUB,         // Subtraction: pop b, pop a, push a - b
+    OP_MUL,         // Multiplication: pop b, pop a, push a * b
+    OP_DIV,         // Division: pop b, pop a, push a / b
+    OP_MOD,         // Modulo: pop b, pop a, push a % b
+    OP_POW,         // Power: pop b, pop a, push a ^ b
+
+    // Unary operations
+    OP_NEG,         // Negation: pop a, push -a
+    OP_NOT,         // Logical not: pop a, push !a
+
+    // Comparison operations
+    OP_EQUAL,       // Equality: pop b, pop a, push a == b
+    OP_LESS,        // Less than: pop b, pop a, push a < b
+    OP_LESS_EQUAL,  // Less or equal: pop b, pop a, push a <= b
+    OP_GREATER,     // Greater than: pop b, pop a, push a > b
+    OP_GREATER_EQUAL, // Greater or equal: pop b, pop a, push a >= b
+
+    // I/O operations (MVP)
+    OP_PRINT,       // Print top of stack (doesn't pop)
+
+    // Control flow
+    OP_POP,         // Pop and discard top of stack
+    OP_RETURN,      // Return from current chunk
+};
+
+// Get human-readable name for opcode
+inline const char* opcodeName(OpCode op) {
+    switch (op) {
+        case OpCode::OP_CONSTANT:    return "OP_CONSTANT";
+        case OpCode::OP_NIL:         return "OP_NIL";
+        case OpCode::OP_TRUE:        return "OP_TRUE";
+        case OpCode::OP_FALSE:       return "OP_FALSE";
+        case OpCode::OP_ADD:         return "OP_ADD";
+        case OpCode::OP_SUB:         return "OP_SUB";
+        case OpCode::OP_MUL:         return "OP_MUL";
+        case OpCode::OP_DIV:         return "OP_DIV";
+        case OpCode::OP_MOD:         return "OP_MOD";
+        case OpCode::OP_POW:         return "OP_POW";
+        case OpCode::OP_NEG:         return "OP_NEG";
+        case OpCode::OP_NOT:         return "OP_NOT";
+        case OpCode::OP_EQUAL:         return "OP_EQUAL";
+        case OpCode::OP_LESS:          return "OP_LESS";
+        case OpCode::OP_LESS_EQUAL:    return "OP_LESS_EQUAL";
+        case OpCode::OP_GREATER:       return "OP_GREATER";
+        case OpCode::OP_GREATER_EQUAL: return "OP_GREATER_EQUAL";
+        case OpCode::OP_PRINT:         return "OP_PRINT";
+        case OpCode::OP_POP:         return "OP_POP";
+        case OpCode::OP_RETURN:      return "OP_RETURN";
+        default:                     return "UNKNOWN";
+    }
+}
+
+#endif // LUA_OPCODE_HPP
