@@ -4,13 +4,29 @@
 
 VM::VM() : chunk_(nullptr), ip_(0), hadError_(false) {
     stack_.reserve(STACK_MAX);
+    frames_.reserve(FRAMES_MAX);
 }
 
 void VM::reset() {
     stack_.clear();
+    frames_.clear();
     ip_ = 0;
     hadError_ = false;
     chunk_ = nullptr;
+}
+
+CallFrame& VM::currentFrame() {
+    if (frames_.empty()) {
+        throw RuntimeError("No active call frame");
+    }
+    return frames_.back();
+}
+
+const CallFrame& VM::currentFrame() const {
+    if (frames_.empty()) {
+        throw RuntimeError("No active call frame");
+    }
+    return frames_.back();
 }
 
 bool VM::run(const Chunk& chunk) {
@@ -72,13 +88,17 @@ bool VM::run(const Chunk& chunk) {
 
             case OpCode::OP_GET_LOCAL: {
                 uint8_t slot = readByte();
-                push(stack_[slot]);
+                // Add stackBase offset if inside a function
+                size_t actualSlot = frames_.empty() ? slot : (currentFrame().stackBase + slot);
+                push(stack_[actualSlot]);
                 break;
             }
 
             case OpCode::OP_SET_LOCAL: {
                 uint8_t slot = readByte();
-                stack_[slot] = peek(0);
+                // Add stackBase offset if inside a function
+                size_t actualSlot = frames_.empty() ? slot : (currentFrame().stackBase + slot);
+                stack_[actualSlot] = peek(0);
                 break;
             }
 
@@ -198,6 +218,83 @@ bool VM::run(const Chunk& chunk) {
             case OpCode::OP_LOOP: {
                 uint16_t offset = readByte() | (readByte() << 8);
                 ip_ -= offset;
+                break;
+            }
+
+            case OpCode::OP_CLOSURE: {
+                uint8_t constantIndex = readByte();
+                Value funcValue = chunk_->constants()[constantIndex];
+                push(funcValue);
+                break;
+            }
+
+            case OpCode::OP_CALL: {
+                uint8_t argCount = readByte();
+                Value callee = peek(argCount);
+
+                if (!callee.isFunctionObject()) {
+                    runtimeError("Can only call functions");
+                    break;
+                }
+
+                FunctionObject* function = callee.asFunctionObject();
+
+                if (argCount != function->arity()) {
+                    runtimeError("Expected " + std::to_string(function->arity()) +
+                                 " arguments but got " + std::to_string(argCount));
+                    break;
+                }
+
+                if (frames_.size() >= FRAMES_MAX) {
+                    runtimeError("Stack overflow");
+                    break;
+                }
+
+                // Create new call frame
+                CallFrame frame;
+                frame.function = function;
+                frame.callerChunk = chunk_;  // Save current chunk
+                frame.ip = ip_;  // Save current IP
+                frame.stackBase = stack_.size() - argCount;
+                frames_.push_back(frame);
+
+                // Switch to function's chunk
+                chunk_ = function->chunk();
+                ip_ = 0;
+                break;
+            }
+
+            case OpCode::OP_RETURN_VALUE: {
+                Value result = pop();
+
+                if (frames_.empty()) {
+                    // Returning from main script - shouldn't happen normally
+                    push(result);
+                    return !hadError_;
+                }
+
+                // Pop all locals and arguments (down to stackBase)
+                size_t stackBase = currentFrame().stackBase;
+                while (stack_.size() > stackBase) {
+                    pop();
+                }
+
+                // Also pop the function object itself (it's at stackBase - 1)
+                pop();
+
+                // Get return state before popping frame
+                const Chunk* returnChunk = currentFrame().callerChunk;
+                size_t returnIP = currentFrame().ip;
+
+                // Pop call frame
+                frames_.pop_back();
+
+                // Restore execution state
+                chunk_ = returnChunk;
+                ip_ = returnIP;
+
+                // Push return value (replaces where function was)
+                push(result);
                 break;
             }
 

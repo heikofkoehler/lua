@@ -47,6 +47,8 @@ private:
     std::unique_ptr<StmtNode> whileStatement();
     std::unique_ptr<StmtNode> repeatStatement();
     std::unique_ptr<StmtNode> forStatement();
+    std::unique_ptr<StmtNode> functionDeclaration();
+    std::unique_ptr<StmtNode> returnStatement();
 
     std::unique_ptr<ExprNode> expression();
     std::unique_ptr<ExprNode> logicalOr();

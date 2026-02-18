@@ -1,4 +1,5 @@
 #include "value/value.hpp"
+#include "value/function.hpp"
 #include <sstream>
 #include <iomanip>
 
@@ -26,6 +27,12 @@ void Value::print(std::ostream& os) const {
             } else {
                 os << std::setprecision(14) << num;
             }
+            break;
+        }
+
+        case Type::FUNCTION: {
+            FunctionObject* func = asFunctionObject();
+            os << "<function " << func->name() << ">";
             break;
         }
     }

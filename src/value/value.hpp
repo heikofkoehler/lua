@@ -5,6 +5,9 @@
 #include <cstring>
 #include <cmath>
 
+// Forward declaration
+class FunctionObject;
+
 // NaN-boxing implementation
 // Uses 64-bit representation to store all value types efficiently
 //
@@ -23,7 +26,8 @@ public:
     enum class Type {
         NIL,
         BOOL,
-        NUMBER
+        NUMBER,
+        FUNCTION
     };
 
     // Constructors (private, use factory methods)
@@ -49,6 +53,12 @@ public:
         return v;
     }
 
+    static Value function(FunctionObject* func) {
+        // Encode pointer in lower 48 bits with function tag
+        uint64_t ptr = reinterpret_cast<uint64_t>(func);
+        return Value(QNAN | TAG_FUNCTION | (ptr & 0x0000FFFFFFFFFFFFULL));
+    }
+
     // Type checking
     bool isNil() const {
         return (bits_ & (QNAN | TAG_MASK)) == (QNAN | TAG_NIL);
@@ -62,9 +72,14 @@ public:
         return (bits_ & QNAN) != QNAN;
     }
 
+    bool isFunctionObject() const {
+        return (bits_ & (QNAN | TAG_MASK)) == (QNAN | TAG_FUNCTION);
+    }
+
     Type type() const {
         if (isNumber()) return Type::NUMBER;
         if (isBool()) return Type::BOOL;
+        if (isFunctionObject()) return Type::FUNCTION;
         return Type::NIL;
     }
 
@@ -83,6 +98,15 @@ public:
         double result;
         std::memcpy(&result, &bits_, sizeof(double));
         return result;
+    }
+
+    FunctionObject* asFunctionObject() const {
+        if (!isFunctionObject()) {
+            throw RuntimeError("Value is not a function");
+        }
+        // Extract pointer (remove QNAN and TAG bits)
+        uint64_t ptr = bits_ & ~(QNAN | TAG_MASK);
+        return reinterpret_cast<FunctionObject*>(ptr);
     }
 
     // Equality
@@ -124,6 +148,7 @@ private:
     static constexpr uint64_t QNAN = 0x7FFC000000000000ULL;
     static constexpr uint64_t TAG_NIL = 1;
     static constexpr uint64_t TAG_BOOL = 2;
+    static constexpr uint64_t TAG_FUNCTION = 3;
     static constexpr uint64_t TAG_MASK = 7;
 };
 
