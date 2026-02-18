@@ -125,6 +125,9 @@ std::unique_ptr<StmtNode> Parser::statement() {
     if (match(TokenType::REPEAT)) {
         return repeatStatement();
     }
+    if (match(TokenType::FOR)) {
+        return forStatement();
+    }
 
     // Check for assignment (simple lookahead for IDENTIFIER = )
     if (current_.type == TokenType::IDENTIFIER) {
@@ -269,6 +272,50 @@ std::unique_ptr<StmtNode> Parser::repeatStatement() {
     auto condition = expression();
 
     return std::make_unique<RepeatStmtNode>(std::move(body), std::move(condition), line);
+}
+
+std::unique_ptr<StmtNode> Parser::forStatement() {
+    int line = previous_.line;
+
+    // Parse loop variable name
+    if (!check(TokenType::IDENTIFIER)) {
+        errorAtCurrent("Expected variable name after 'for'");
+        return nullptr;
+    }
+    std::string varName = current_.lexeme;
+    advance();
+
+    // Expect '='
+    consume(TokenType::EQUAL, "Expected '=' after for variable");
+
+    // Parse start expression
+    auto start = expression();
+
+    // Expect ','
+    consume(TokenType::COMMA, "Expected ',' after for start value");
+
+    // Parse end expression
+    auto end = expression();
+
+    // Parse optional step (defaults to 1)
+    std::unique_ptr<ExprNode> step = nullptr;
+    if (match(TokenType::COMMA)) {
+        step = expression();
+    }
+
+    // Expect 'do'
+    consume(TokenType::DO, "Expected 'do' after for clauses");
+
+    // Parse body
+    std::vector<std::unique_ptr<StmtNode>> body;
+    while (!check(TokenType::END) && !isAtEnd()) {
+        body.push_back(statement());
+    }
+
+    consume(TokenType::END, "Expected 'end' after for body");
+
+    return std::make_unique<ForStmtNode>(varName, std::move(start), std::move(end),
+                                         std::move(step), std::move(body), line);
 }
 
 std::unique_ptr<ExprNode> Parser::expression() {

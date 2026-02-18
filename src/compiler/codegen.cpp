@@ -191,6 +191,9 @@ void CodeGenerator::visitAssignmentStmt(AssignmentStmtNode* node) {
         emitOpCode(OpCode::OP_SET_GLOBAL);
         emitByte(static_cast<uint8_t>(nameIndex));
     }
+
+    // Pop the assigned value (assignment is a statement, not an expression)
+    emitOpCode(OpCode::OP_POP);
 }
 
 void CodeGenerator::visitLocalDeclStmt(LocalDeclStmtNode* node) {
@@ -385,6 +388,113 @@ void CodeGenerator::visitRepeatStmt(RepeatStmtNode* node) {
     // Exit point
     patchJump(exitJump);
     emitOpCode(OpCode::OP_POP);  // Pop condition
+}
+
+void CodeGenerator::visitForStmt(ForStmtNode* node) {
+    setLine(node->line());
+
+    // Begin scope for loop variables (loop var + hidden limit/step locals)
+    beginScope();
+
+    // Evaluate start expression and create loop variable
+    node->start()->accept(*this);
+    addLocal(node->varName());
+
+    // Evaluate end expression and store in hidden local
+    node->end()->accept(*this);
+    addLocal("(for limit)");
+
+    // Evaluate step expression (or default to 1) and store in hidden local
+    if (node->step()) {
+        node->step()->accept(*this);
+    } else {
+        emitConstant(Value::number(1.0));
+    }
+    addLocal("(for step)");
+
+    size_t loopStart = currentChunk()->size();
+
+    // Determine which comparison to use based on step sign
+    // For positive step: var <= end
+    // For negative step: var >= end
+
+    int varSlot = resolveLocal(node->varName());
+    int endSlot = resolveLocal("(for limit)");
+    int stepSlot = resolveLocal("(for step)");
+
+    // Get step
+    emitOpCode(OpCode::OP_GET_LOCAL);
+    emitByte(static_cast<uint8_t>(stepSlot));
+
+    // Push 0
+    emitConstant(Value::number(0.0));
+
+    // Check step >= 0
+    emitOpCode(OpCode::OP_GREATER_EQUAL);
+
+    // If step >= 0 (true), jump to positive comparison
+    // If step < 0 (false), fall through to negative comparison
+    size_t positiveJump = emitJump(OpCode::OP_JUMP_IF_FALSE);
+    emitOpCode(OpCode::OP_POP);  // Pop step >= 0 result
+
+    // Positive step path: check var <= end
+    emitOpCode(OpCode::OP_GET_LOCAL);
+    emitByte(static_cast<uint8_t>(varSlot));
+    emitOpCode(OpCode::OP_GET_LOCAL);
+    emitByte(static_cast<uint8_t>(endSlot));
+    emitOpCode(OpCode::OP_LESS_EQUAL);
+
+    // Jump over negative path
+    size_t skipNegative = emitJump(OpCode::OP_JUMP);
+
+    // Negative step path: check var >= end
+    patchJump(positiveJump);
+    emitOpCode(OpCode::OP_POP);  // Pop step >= 0 result
+
+    emitOpCode(OpCode::OP_GET_LOCAL);
+    emitByte(static_cast<uint8_t>(varSlot));
+    emitOpCode(OpCode::OP_GET_LOCAL);
+    emitByte(static_cast<uint8_t>(endSlot));
+    emitOpCode(OpCode::OP_GREATER_EQUAL);
+
+    // Both paths converge here with condition result on stack
+    patchJump(skipNegative);
+
+    // Exit loop if condition is false
+    size_t exitJump = emitJump(OpCode::OP_JUMP_IF_FALSE);
+    emitOpCode(OpCode::OP_POP);  // Pop condition
+
+    // Compile body
+    for (const auto& stmt : node->body()) {
+        stmt->accept(*this);
+    }
+
+    // Increment loop variable: var = var + step
+    // Get var
+    emitOpCode(OpCode::OP_GET_LOCAL);
+    emitByte(static_cast<uint8_t>(varSlot));
+
+    // Get step
+    emitOpCode(OpCode::OP_GET_LOCAL);
+    emitByte(static_cast<uint8_t>(stepSlot));
+
+    // Add
+    emitOpCode(OpCode::OP_ADD);
+
+    // Store back to var
+    emitOpCode(OpCode::OP_SET_LOCAL);
+    emitByte(static_cast<uint8_t>(varSlot));
+    emitOpCode(OpCode::OP_POP);  // Pop result of assignment
+
+    // Loop back
+    emitLoop(loopStart);
+
+    // Exit point
+    patchJump(exitJump);
+    emitOpCode(OpCode::OP_POP);  // Pop condition
+
+    // End scope (cleans up loop variable and hidden locals)
+    endScope();
 }
 
 

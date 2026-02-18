@@ -28,6 +28,7 @@ public:
     void visitIfStmt(IfStmtNode* node) override;
     void visitWhileStmt(WhileStmtNode* node) override;
     void visitRepeatStmt(RepeatStmtNode* node) override;
+    void visitForStmt(ForStmtNode* node) override;
     void visitProgram(ProgramNode* node) override;
 
 private:
