@@ -6,11 +6,16 @@ A Lua implementation in C++ featuring a stack-based bytecode virtual machine wit
 
 ### Implemented
 - **Stack-based Virtual Machine**: Bytecode interpreter with efficient execution
-- **NaN-boxing Values**: 64-bit value representation supporting nil, boolean, number, function, and string types
+- **NaN-boxing Values**: 64-bit value representation supporting nil, boolean, number, function, string, and table types
 - **Strings**:
   - **String Literals**: Double and single quoted strings
   - **String Interning**: Automatic deduplication for memory efficiency
   - **Multi-line Support**: Strings can span multiple lines
+- **Tables (Hash Maps)**:
+  - **Associative Arrays**: Key-value storage with any value type as key (except nil)
+  - **Dynamic Creation**: Tables created at runtime
+  - **Indexing Operations**: Get and set values with `table[key]` syntax
+  - **Lua Semantics**: Nil keys rejected, setting to nil removes key
 - **Variables**:
   - **Local Variables**: Block-scoped with proper shadowing
   - **Global Variables**: Module-level scope
@@ -334,7 +339,9 @@ lua/
 │   ├── value/                  # Value representation
 │   │   ├── value.hpp
 │   │   ├── value.cpp
-│   │   └── function.hpp        # Function objects
+│   │   ├── function.hpp        # Function objects
+│   │   ├── string.hpp          # String objects with interning
+│   │   └── table.hpp           # Table objects (hash maps)
 │   ├── compiler/               # Compilation pipeline
 │   │   ├── token.hpp
 │   │   ├── lexer.hpp
@@ -365,11 +372,14 @@ Uses **NaN-boxing** technique:
 - All values stored in 64-bit words
 - Numbers: IEEE 754 double-precision floats
 - Other types: Special NaN patterns with type tags
-  - Nil: TAG_NIL
-  - Boolean: TAG_BOOL
-  - Function: TAG_FUNCTION (stores function index)
+  - Nil: TAG_NIL (1)
+  - Boolean: TAG_BOOL (2)
+  - Function: TAG_FUNCTION (3) - stores function index
+  - String: TAG_STRING (4) - stores string index
+  - Table: TAG_TABLE (5) - stores table index
 - Fast type checking via bit operations
-- Functions stored as indices into chunk's function pool for safe pointer management
+- Objects stored as indices into pools for safe pointer management
+- No raw pointers in values (prevents corruption)
 
 ### Bytecode Instructions
 
@@ -389,6 +399,9 @@ Uses **NaN-boxing** technique:
 | OP_CLOSURE | Load function constant |
 | OP_CALL | Call function with arguments |
 | OP_RETURN_VALUE | Return from function with value |
+| OP_NEW_TABLE | Create new empty table |
+| OP_GET_TABLE | Get value from table (table[key]) |
+| OP_SET_TABLE | Set value in table (table[key] = value) |
 | OP_PRINT | Print value |
 | OP_POP | Discard stack top |
 | OP_RETURN | End execution |
@@ -427,10 +440,11 @@ Recursive descent with proper operator precedence:
 - ⏳ Multiple return values
 - ⏳ Variadic functions (...)
 
-### Phase 4: Objects & Memory
-- String objects with interning
-- Table objects (hash maps)
-- Garbage collection (mark-and-sweep)
+### Phase 4: Objects & Memory (IN PROGRESS)
+- ✅ String objects with interning
+- ⏳ Table objects (hash maps) - Core infrastructure complete, parser support pending
+- ⏳ Table constructor syntax `{key = value}`
+- ⏳ Garbage collection (mark-and-sweep)
 
 ### Phase 5: Advanced Features
 - Closures and upvalues
