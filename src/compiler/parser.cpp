@@ -113,6 +113,9 @@ std::unique_ptr<StmtNode> Parser::statement() {
     if (match(TokenType::PRINT)) {
         return printStatement();
     }
+    if (match(TokenType::LOCAL)) {
+        return localDeclaration();
+    }
     if (match(TokenType::IF)) {
         return ifStatement();
     }
@@ -121,6 +124,13 @@ std::unique_ptr<StmtNode> Parser::statement() {
     }
     if (match(TokenType::REPEAT)) {
         return repeatStatement();
+    }
+
+    // Check for assignment (simple lookahead for IDENTIFIER = )
+    if (current_.type == TokenType::IDENTIFIER) {
+        // We need to peek ahead to see if this is an assignment
+        // For now, let's handle this in a helper
+        return assignmentOrExpression();
     }
 
     return expressionStatement();
@@ -139,6 +149,49 @@ std::unique_ptr<StmtNode> Parser::expressionStatement() {
     int line = current_.line;
     auto expr = expression();
     return std::make_unique<ExprStmtNode>(std::move(expr), line);
+}
+
+std::unique_ptr<StmtNode> Parser::assignmentOrExpression() {
+    int line = current_.line;
+    std::string varName = current_.lexeme;
+    advance();  // Consume identifier
+
+    if (match(TokenType::EQUAL)) {
+        // It's an assignment
+        auto value = expression();
+        return std::make_unique<AssignmentStmtNode>(varName, std::move(value), line);
+    } else {
+        // It's an expression starting with a variable
+        // Create a variable expression node for the identifier we already consumed
+        auto varExpr = std::make_unique<VariableExprNode>(varName, line);
+
+        // Continue parsing the rest of the expression (if any)
+        // For now, just return it as an expression statement
+        // TODO: Handle cases like x + 1, x.method(), etc.
+        return std::make_unique<ExprStmtNode>(std::move(varExpr), line);
+    }
+}
+
+std::unique_ptr<StmtNode> Parser::localDeclaration() {
+    int line = previous_.line;
+
+    if (!check(TokenType::IDENTIFIER)) {
+        errorAtCurrent("Expected variable name after 'local'");
+        return nullptr;
+    }
+
+    std::string varName = current_.lexeme;
+    advance();
+
+    std::unique_ptr<ExprNode> initializer = nullptr;
+    if (match(TokenType::EQUAL)) {
+        initializer = expression();
+    } else {
+        // No initializer, defaults to nil
+        initializer = std::make_unique<LiteralNode>(Value::nil(), line);
+    }
+
+    return std::make_unique<LocalDeclStmtNode>(varName, std::move(initializer), line);
 }
 
 std::unique_ptr<StmtNode> Parser::ifStatement() {
@@ -345,6 +398,11 @@ std::unique_ptr<ExprNode> Parser::primary() {
     if (match(TokenType::NUMBER)) {
         double value = std::stod(previous_.lexeme);
         return std::make_unique<LiteralNode>(Value::number(value), line);
+    }
+
+    // Variable reference
+    if (match(TokenType::IDENTIFIER)) {
+        return std::make_unique<VariableExprNode>(previous_.lexeme, line);
     }
 
     // Grouping

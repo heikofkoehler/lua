@@ -20,16 +20,29 @@ public:
     void visitLiteral(LiteralNode* node) override;
     void visitUnary(UnaryNode* node) override;
     void visitBinary(BinaryNode* node) override;
+    void visitVariable(VariableExprNode* node) override;
     void visitPrintStmt(PrintStmtNode* node) override;
     void visitExprStmt(ExprStmtNode* node) override;
+    void visitAssignmentStmt(AssignmentStmtNode* node) override;
+    void visitLocalDeclStmt(LocalDeclStmtNode* node) override;
     void visitIfStmt(IfStmtNode* node) override;
     void visitWhileStmt(WhileStmtNode* node) override;
     void visitRepeatStmt(RepeatStmtNode* node) override;
     void visitProgram(ProgramNode* node) override;
 
 private:
+    // Local variable tracking
+    struct Local {
+        std::string name;
+        int depth;
+        int slot;
+    };
+
     std::unique_ptr<Chunk> chunk_;
     int currentLine_;
+    std::vector<Local> locals_;
+    int scopeDepth_;
+    int localCount_;
 
     // Bytecode emission
     void emitByte(uint8_t byte);
@@ -42,6 +55,12 @@ private:
     size_t emitJump(OpCode op);
     void patchJump(size_t offset);
     void emitLoop(size_t loopStart);
+
+    // Variable handling
+    void addLocal(const std::string& name);
+    int resolveLocal(const std::string& name);
+    void beginScope();
+    void endScope();
 
     // Get current chunk
     Chunk* currentChunk() { return chunk_.get(); }
