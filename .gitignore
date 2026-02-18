@@ -1,3 +1,6 @@
+# Claude Code metadata
+.claude/
+
 # Build artifacts
 build/
 *.o
