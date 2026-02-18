@@ -233,6 +233,34 @@ private:
     std::unique_ptr<ExprNode> condition_;
 };
 
+// Numeric for loop: for var = start, end, step do body end
+class ForStmtNode : public StmtNode {
+public:
+    ForStmtNode(const std::string& varName,
+                std::unique_ptr<ExprNode> start,
+                std::unique_ptr<ExprNode> end,
+                std::unique_ptr<ExprNode> step,
+                std::vector<std::unique_ptr<StmtNode>> body,
+                int line)
+        : StmtNode(line), varName_(varName), start_(std::move(start)),
+          end_(std::move(end)), step_(std::move(step)), body_(std::move(body)) {}
+
+    void accept(ASTVisitor& visitor) override;
+
+    const std::string& varName() const { return varName_; }
+    ExprNode* start() const { return start_.get(); }
+    ExprNode* end() const { return end_.get(); }
+    ExprNode* step() const { return step_.get(); }
+    const std::vector<std::unique_ptr<StmtNode>>& body() const { return body_; }
+
+private:
+    std::string varName_;
+    std::unique_ptr<ExprNode> start_;
+    std::unique_ptr<ExprNode> end_;
+    std::unique_ptr<ExprNode> step_;  // Can be nullptr (defaults to 1)
+    std::vector<std::unique_ptr<StmtNode>> body_;
+};
+
 // Program: list of statements
 class ProgramNode : public ASTNode {
 public:
@@ -268,6 +296,7 @@ public:
     virtual void visitIfStmt(IfStmtNode* node) = 0;
     virtual void visitWhileStmt(WhileStmtNode* node) = 0;
     virtual void visitRepeatStmt(RepeatStmtNode* node) = 0;
+    virtual void visitForStmt(ForStmtNode* node) = 0;
     virtual void visitProgram(ProgramNode* node) = 0;
 };
 
@@ -314,6 +343,10 @@ inline void WhileStmtNode::accept(ASTVisitor& visitor) {
 
 inline void RepeatStmtNode::accept(ASTVisitor& visitor) {
     visitor.visitRepeatStmt(this);
+}
+
+inline void ForStmtNode::accept(ASTVisitor& visitor) {
+    visitor.visitForStmt(this);
 }
 
 inline void ProgramNode::accept(ASTVisitor& visitor) {
