@@ -184,3 +184,147 @@ void CodeGenerator::emitConstant(const Value& value) {
 void CodeGenerator::emitReturn() {
     emitOpCode(OpCode::OP_RETURN);
 }
+
+size_t CodeGenerator::emitJump(OpCode op) {
+    emitOpCode(op);
+    emitByte(0xff);  // Placeholder for jump offset
+    emitByte(0xff);
+    return currentChunk()->size() - 2;
+}
+
+void CodeGenerator::patchJump(size_t offset) {
+    // Calculate jump distance (-2 for the jump offset itself)
+    size_t jump = currentChunk()->size() - offset - 2;
+
+    if (jump > UINT16_MAX) {
+        throw CompileError("Too much code to jump over", currentLine_);
+    }
+
+    // Patch the jump offset
+    currentChunk()->code()[offset] = (jump) & 0xff;
+    currentChunk()->code()[offset + 1] = (jump >> 8) & 0xff;
+}
+
+void CodeGenerator::emitLoop(size_t loopStart) {
+    emitOpCode(OpCode::OP_LOOP);
+
+    size_t offset = currentChunk()->size() - loopStart + 2;
+    if (offset > UINT16_MAX) {
+        throw CompileError("Loop body too large", currentLine_);
+    }
+
+    emitByte(offset & 0xff);
+    emitByte((offset >> 8) & 0xff);
+}
+
+void CodeGenerator::visitIfStmt(IfStmtNode* node) {
+    setLine(node->line());
+
+    // Compile condition
+    node->condition()->accept(*this);
+
+    // Jump to else/end if condition is false
+    size_t thenJump = emitJump(OpCode::OP_JUMP_IF_FALSE);
+    emitOpCode(OpCode::OP_POP);  // Pop condition
+
+    // Compile then branch
+    for (const auto& stmt : node->thenBranch()) {
+        stmt->accept(*this);
+    }
+
+    // Jump over else branch
+    size_t elseJump = emitJump(OpCode::OP_JUMP);
+
+    // Patch then jump to here (else/end)
+    patchJump(thenJump);
+    emitOpCode(OpCode::OP_POP);  // Pop condition
+
+    // Compile elseif branches
+    std::vector<size_t> endJumps;
+    for (const auto& elseIfBranch : node->elseIfBranches()) {
+        // Compile elseif condition
+        elseIfBranch.condition->accept(*this);
+
+        size_t elseIfJump = emitJump(OpCode::OP_JUMP_IF_FALSE);
+        emitOpCode(OpCode::OP_POP);  // Pop condition
+
+        // Compile elseif body
+        for (const auto& stmt : elseIfBranch.body) {
+            stmt->accept(*this);
+        }
+
+        // Jump to end
+        endJumps.push_back(emitJump(OpCode::OP_JUMP));
+
+        // Patch elseif jump
+        patchJump(elseIfJump);
+        emitOpCode(OpCode::OP_POP);  // Pop condition
+    }
+
+    // Compile else branch
+    for (const auto& stmt : node->elseBranch()) {
+        stmt->accept(*this);
+    }
+
+    // Patch else jump
+    patchJump(elseJump);
+
+    // Patch all end jumps
+    for (size_t jump : endJumps) {
+        patchJump(jump);
+    }
+}
+
+void CodeGenerator::visitWhileStmt(WhileStmtNode* node) {
+    setLine(node->line());
+
+    size_t loopStart = currentChunk()->size();
+
+    // Compile condition
+    node->condition()->accept(*this);
+
+    // Jump out of loop if condition is false
+    size_t exitJump = emitJump(OpCode::OP_JUMP_IF_FALSE);
+    emitOpCode(OpCode::OP_POP);  // Pop condition
+
+    // Compile body
+    for (const auto& stmt : node->body()) {
+        stmt->accept(*this);
+    }
+
+    // Loop back to condition
+    emitLoop(loopStart);
+
+    // Patch exit jump
+    patchJump(exitJump);
+    emitOpCode(OpCode::OP_POP);  // Pop condition
+}
+
+void CodeGenerator::visitRepeatStmt(RepeatStmtNode* node) {
+    setLine(node->line());
+
+    size_t loopStart = currentChunk()->size();
+
+    // Compile body
+    for (const auto& stmt : node->body()) {
+        stmt->accept(*this);
+    }
+
+    // Compile condition
+    node->condition()->accept(*this);
+
+    // Emit OP_NOT to invert condition (repeat UNTIL becomes repeat WHILE NOT)
+    emitOpCode(OpCode::OP_NOT);
+
+    // If inverted condition is false (original was true), exit
+    // If inverted condition is true (original was false), loop back
+    size_t exitJump = emitJump(OpCode::OP_JUMP_IF_FALSE);
+    emitOpCode(OpCode::OP_POP);  // Pop condition
+
+    // Loop back to start
+    emitLoop(loopStart);
+
+    // Exit point
+    patchJump(exitJump);
+    emitOpCode(OpCode::OP_POP);  // Pop condition
+}

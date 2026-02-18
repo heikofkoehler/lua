@@ -22,6 +22,9 @@ public:
     void visitBinary(BinaryNode* node) override;
     void visitPrintStmt(PrintStmtNode* node) override;
     void visitExprStmt(ExprStmtNode* node) override;
+    void visitIfStmt(IfStmtNode* node) override;
+    void visitWhileStmt(WhileStmtNode* node) override;
+    void visitRepeatStmt(RepeatStmtNode* node) override;
     void visitProgram(ProgramNode* node) override;
 
 private:
@@ -34,6 +37,11 @@ private:
     void emitOpCode(OpCode op);
     void emitConstant(const Value& value);
     void emitReturn();
+
+    // Jump handling
+    size_t emitJump(OpCode op);
+    void patchJump(size_t offset);
+    void emitLoop(size_t loopStart);
 
     // Get current chunk
     Chunk* currentChunk() { return chunk_.get(); }

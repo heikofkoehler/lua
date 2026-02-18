@@ -113,6 +113,15 @@ std::unique_ptr<StmtNode> Parser::statement() {
     if (match(TokenType::PRINT)) {
         return printStatement();
     }
+    if (match(TokenType::IF)) {
+        return ifStatement();
+    }
+    if (match(TokenType::WHILE)) {
+        return whileStatement();
+    }
+    if (match(TokenType::REPEAT)) {
+        return repeatStatement();
+    }
 
     return expressionStatement();
 }
@@ -130,6 +139,83 @@ std::unique_ptr<StmtNode> Parser::expressionStatement() {
     int line = current_.line;
     auto expr = expression();
     return std::make_unique<ExprStmtNode>(std::move(expr), line);
+}
+
+std::unique_ptr<StmtNode> Parser::ifStatement() {
+    int line = previous_.line;
+
+    // Parse condition
+    auto condition = expression();
+    consume(TokenType::THEN, "Expected 'then' after if condition");
+
+    // Parse then branch
+    std::vector<std::unique_ptr<StmtNode>> thenBranch;
+    while (!check(TokenType::ELSEIF) && !check(TokenType::ELSE) &&
+           !check(TokenType::END) && !isAtEnd()) {
+        thenBranch.push_back(statement());
+    }
+
+    auto ifNode = std::make_unique<IfStmtNode>(std::move(condition), std::move(thenBranch), line);
+
+    // Parse elseif branches
+    while (match(TokenType::ELSEIF)) {
+        auto elseIfCondition = expression();
+        consume(TokenType::THEN, "Expected 'then' after elseif condition");
+
+        std::vector<std::unique_ptr<StmtNode>> elseIfBody;
+        while (!check(TokenType::ELSEIF) && !check(TokenType::ELSE) &&
+               !check(TokenType::END) && !isAtEnd()) {
+            elseIfBody.push_back(statement());
+        }
+
+        ifNode->addElseIfBranch(std::move(elseIfCondition), std::move(elseIfBody));
+    }
+
+    // Parse else branch
+    if (match(TokenType::ELSE)) {
+        std::vector<std::unique_ptr<StmtNode>> elseBranch;
+        while (!check(TokenType::END) && !isAtEnd()) {
+            elseBranch.push_back(statement());
+        }
+        ifNode->setElseBranch(std::move(elseBranch));
+    }
+
+    consume(TokenType::END, "Expected 'end' after if statement");
+    return ifNode;
+}
+
+std::unique_ptr<StmtNode> Parser::whileStatement() {
+    int line = previous_.line;
+
+    // Parse condition
+    auto condition = expression();
+    consume(TokenType::DO, "Expected 'do' after while condition");
+
+    // Parse body
+    std::vector<std::unique_ptr<StmtNode>> body;
+    while (!check(TokenType::END) && !isAtEnd()) {
+        body.push_back(statement());
+    }
+
+    consume(TokenType::END, "Expected 'end' after while body");
+    return std::make_unique<WhileStmtNode>(std::move(condition), std::move(body), line);
+}
+
+std::unique_ptr<StmtNode> Parser::repeatStatement() {
+    int line = previous_.line;
+
+    // Parse body
+    std::vector<std::unique_ptr<StmtNode>> body;
+    while (!check(TokenType::UNTIL) && !isAtEnd()) {
+        body.push_back(statement());
+    }
+
+    consume(TokenType::UNTIL, "Expected 'until' after repeat body");
+
+    // Parse condition
+    auto condition = expression();
+
+    return std::make_unique<RepeatStmtNode>(std::move(body), std::move(condition), line);
 }
 
 std::unique_ptr<ExprNode> Parser::expression() {

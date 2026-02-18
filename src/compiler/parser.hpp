@@ -41,6 +41,9 @@ private:
     std::unique_ptr<StmtNode> statement();
     std::unique_ptr<StmtNode> printStatement();
     std::unique_ptr<StmtNode> expressionStatement();
+    std::unique_ptr<StmtNode> ifStatement();
+    std::unique_ptr<StmtNode> whileStatement();
+    std::unique_ptr<StmtNode> repeatStatement();
 
     std::unique_ptr<ExprNode> expression();
     std::unique_ptr<ExprNode> logicalOr();

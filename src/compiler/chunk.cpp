@@ -84,6 +84,12 @@ size_t Chunk::disassembleInstruction(size_t offset) const {
             return simpleInstruction("OP_PRINT", offset);
         case OpCode::OP_POP:
             return simpleInstruction("OP_POP", offset);
+        case OpCode::OP_JUMP:
+            return jumpInstruction("OP_JUMP", 1, offset);
+        case OpCode::OP_JUMP_IF_FALSE:
+            return jumpInstruction("OP_JUMP_IF_FALSE", 1, offset);
+        case OpCode::OP_LOOP:
+            return jumpInstruction("OP_LOOP", -1, offset);
         case OpCode::OP_RETURN:
             return simpleInstruction("OP_RETURN", offset);
 
@@ -106,4 +112,12 @@ size_t Chunk::constantInstruction(const char* name, size_t offset) const {
     constants_[constantIndex].print(std::cout);
     std::cout << "'" << std::endl;
     return offset + 2;
+}
+
+size_t Chunk::jumpInstruction(const char* name, int sign, size_t offset) const {
+    uint16_t jump = static_cast<uint16_t>(code_[offset + 1] | (code_[offset + 2] << 8));
+    std::cout << std::left << std::setw(16) << name
+              << std::right << std::setw(4) << offset
+              << " -> " << (offset + 3 + sign * jump) << std::endl;
+    return offset + 3;
 }
