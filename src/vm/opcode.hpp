@@ -52,6 +52,11 @@ enum class OpCode : uint8_t {
     OP_CALL,        // Call function [arg_count: uint8_t]
     OP_RETURN_VALUE, // Return with value from function
 
+    // Tables
+    OP_NEW_TABLE,   // Create new table, push onto stack
+    OP_GET_TABLE,   // Get table[key]: pop key, pop table, push value
+    OP_SET_TABLE,   // Set table[key] = value: pop value, pop key, pop table
+
     OP_RETURN,      // Return from current chunk
 };
 
@@ -87,6 +92,9 @@ inline const char* opcodeName(OpCode op) {
         case OpCode::OP_CLOSURE:       return "OP_CLOSURE";
         case OpCode::OP_CALL:          return "OP_CALL";
         case OpCode::OP_RETURN_VALUE:  return "OP_RETURN_VALUE";
+        case OpCode::OP_NEW_TABLE:     return "OP_NEW_TABLE";
+        case OpCode::OP_GET_TABLE:     return "OP_GET_TABLE";
+        case OpCode::OP_SET_TABLE:     return "OP_SET_TABLE";
         case OpCode::OP_RETURN:        return "OP_RETURN";
         default:                     return "UNKNOWN";
     }

@@ -126,6 +126,32 @@ private:
     std::vector<std::unique_ptr<ExprNode>> args_;
 };
 
+// Table constructor: {}
+class TableConstructorNode : public ExprNode {
+public:
+    TableConstructorNode(int line) : ExprNode(line) {}
+
+    void accept(ASTVisitor& visitor) override;
+};
+
+// Index expression: table[key]
+class IndexExprNode : public ExprNode {
+public:
+    IndexExprNode(std::unique_ptr<ExprNode> table,
+                  std::unique_ptr<ExprNode> key,
+                  int line)
+        : ExprNode(line), table_(std::move(table)), key_(std::move(key)) {}
+
+    void accept(ASTVisitor& visitor) override;
+
+    ExprNode* table() const { return table_.get(); }
+    ExprNode* key() const { return key_.get(); }
+
+private:
+    std::unique_ptr<ExprNode> table_;
+    std::unique_ptr<ExprNode> key_;
+};
+
 // Statement Nodes
 class StmtNode : public ASTNode {
 protected:
@@ -173,6 +199,28 @@ public:
 
 private:
     std::string name_;
+    std::unique_ptr<ExprNode> value_;
+};
+
+// Index assignment statement: table[key] = value
+class IndexAssignmentStmtNode : public StmtNode {
+public:
+    IndexAssignmentStmtNode(std::unique_ptr<ExprNode> table,
+                           std::unique_ptr<ExprNode> key,
+                           std::unique_ptr<ExprNode> value,
+                           int line)
+        : StmtNode(line), table_(std::move(table)), key_(std::move(key)),
+          value_(std::move(value)) {}
+
+    void accept(ASTVisitor& visitor) override;
+
+    ExprNode* table() const { return table_.get(); }
+    ExprNode* key() const { return key_.get(); }
+    ExprNode* value() const { return value_.get(); }
+
+private:
+    std::unique_ptr<ExprNode> table_;
+    std::unique_ptr<ExprNode> key_;
     std::unique_ptr<ExprNode> value_;
 };
 
@@ -390,9 +438,12 @@ public:
     virtual void visitBinary(BinaryNode* node) = 0;
     virtual void visitVariable(VariableExprNode* node) = 0;
     virtual void visitCall(CallExprNode* node) = 0;
+    virtual void visitTableConstructor(TableConstructorNode* node) = 0;
+    virtual void visitIndexExpr(IndexExprNode* node) = 0;
     virtual void visitPrintStmt(PrintStmtNode* node) = 0;
     virtual void visitExprStmt(ExprStmtNode* node) = 0;
     virtual void visitAssignmentStmt(AssignmentStmtNode* node) = 0;
+    virtual void visitIndexAssignmentStmt(IndexAssignmentStmtNode* node) = 0;
     virtual void visitLocalDeclStmt(LocalDeclStmtNode* node) = 0;
     virtual void visitIfStmt(IfStmtNode* node) = 0;
     virtual void visitWhileStmt(WhileStmtNode* node) = 0;
@@ -430,6 +481,14 @@ inline void CallExprNode::accept(ASTVisitor& visitor) {
     visitor.visitCall(this);
 }
 
+inline void TableConstructorNode::accept(ASTVisitor& visitor) {
+    visitor.visitTableConstructor(this);
+}
+
+inline void IndexExprNode::accept(ASTVisitor& visitor) {
+    visitor.visitIndexExpr(this);
+}
+
 inline void PrintStmtNode::accept(ASTVisitor& visitor) {
     visitor.visitPrintStmt(this);
 }
@@ -440,6 +499,10 @@ inline void ExprStmtNode::accept(ASTVisitor& visitor) {
 
 inline void AssignmentStmtNode::accept(ASTVisitor& visitor) {
     visitor.visitAssignmentStmt(this);
+}
+
+inline void IndexAssignmentStmtNode::accept(ASTVisitor& visitor) {
+    visitor.visitIndexAssignmentStmt(this);
 }
 
 inline void LocalDeclStmtNode::accept(ASTVisitor& visitor) {

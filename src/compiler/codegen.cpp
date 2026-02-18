@@ -618,6 +618,42 @@ void CodeGenerator::visitCall(CallExprNode* node) {
     emitByte(static_cast<uint8_t>(argCount));
 }
 
+void CodeGenerator::visitTableConstructor(TableConstructorNode* node) {
+    setLine(node->line());
+
+    // Emit OP_NEW_TABLE to create a new empty table
+    emitOpCode(OpCode::OP_NEW_TABLE);
+}
+
+void CodeGenerator::visitIndexExpr(IndexExprNode* node) {
+    setLine(node->line());
+
+    // Compile table expression
+    node->table()->accept(*this);
+
+    // Compile key expression
+    node->key()->accept(*this);
+
+    // Emit OP_GET_TABLE: pops key and table, pushes value
+    emitOpCode(OpCode::OP_GET_TABLE);
+}
+
+void CodeGenerator::visitIndexAssignmentStmt(IndexAssignmentStmtNode* node) {
+    setLine(node->line());
+
+    // Compile table expression
+    node->table()->accept(*this);
+
+    // Compile key expression
+    node->key()->accept(*this);
+
+    // Compile value expression
+    node->value()->accept(*this);
+
+    // Emit OP_SET_TABLE: pops value, key, and table
+    emitOpCode(OpCode::OP_SET_TABLE);
+}
+
 void CodeGenerator::visitFunctionDecl(FunctionDeclNode* node) {
     setLine(node->line());
 
