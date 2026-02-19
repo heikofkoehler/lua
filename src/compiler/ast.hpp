@@ -390,18 +390,18 @@ private:
     std::vector<std::unique_ptr<StmtNode>> body_;
 };
 
-// Return statement: return expr
+// Return statement: return expr1, expr2, ...
 class ReturnStmtNode : public StmtNode {
 public:
-    ReturnStmtNode(std::unique_ptr<ExprNode> value, int line)
-        : StmtNode(line), value_(std::move(value)) {}
+    ReturnStmtNode(std::vector<std::unique_ptr<ExprNode>> values, int line)
+        : StmtNode(line), values_(std::move(values)) {}
 
     void accept(ASTVisitor& visitor) override;
 
-    ExprNode* value() const { return value_.get(); }
+    const std::vector<std::unique_ptr<ExprNode>>& values() const { return values_; }
 
 private:
-    std::unique_ptr<ExprNode> value_;  // Can be nullptr for 'return' with no value
+    std::vector<std::unique_ptr<ExprNode>> values_;  // Can be empty for 'return' with no values
 };
 
 // Break statement: break

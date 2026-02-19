@@ -409,17 +409,23 @@ std::unique_ptr<StmtNode> Parser::functionDeclaration() {
 std::unique_ptr<StmtNode> Parser::returnStatement() {
     int line = previous_.line;
 
-    // Parse optional return value
-    std::unique_ptr<ExprNode> value = nullptr;
+    // Parse optional return values (comma-separated)
+    std::vector<std::unique_ptr<ExprNode>> values;
 
     // Check if there's an expression to return
-    // Return with no value if we see: end, else, elseif, until, or end of file
+    // Return with no values if we see: end, else, elseif, until, or end of file
     if (!check(TokenType::END) && !check(TokenType::ELSE) &&
         !check(TokenType::ELSEIF) && !check(TokenType::UNTIL) && !isAtEnd()) {
-        value = expression();
+        // Parse first expression
+        values.push_back(expression());
+
+        // Parse additional comma-separated expressions
+        while (match(TokenType::COMMA)) {
+            values.push_back(expression());
+        }
     }
 
-    return std::make_unique<ReturnStmtNode>(std::move(value), line);
+    return std::make_unique<ReturnStmtNode>(std::move(values), line);
 }
 
 std::unique_ptr<StmtNode> Parser::breakStatement() {

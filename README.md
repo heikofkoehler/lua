@@ -23,8 +23,10 @@ A Lua implementation in C++ featuring a stack-based bytecode virtual machine wit
 - **Functions**:
   - **Function Declarations**: Named functions with parameters
   - **Function Calls**: Full call stack with proper argument passing
-  - **Return Statements**: Single return value support
+  - **Return Statements**: Multiple return value support
   - **Recursion**: Full recursive function support
+  - **Closures**: Functions can capture variables from enclosing scopes (upvalues)
+  - **Nested Functions**: Functions can be defined inside other functions
 - **Arithmetic Operations**: +, -, *, /, % (modulo), ^ (power)
 - **Comparison Operations**: ==, ~=, <, <=, >, >= (Lua-compliant ~= operator)
 - **Unary Operations**: - (negation), not
@@ -327,6 +329,61 @@ end
 print(fib(6))  -- 8
 ```
 
+#### Multiple Return Values
+
+```lua
+function getTwoNumbers()
+    return 10, 20
+end
+
+function getThreeNumbers()
+    return 100, 200, 300
+end
+
+-- Assignment captures only first value
+local a = getTwoNumbers()
+print(a)  -- 10
+
+local b = getThreeNumbers()
+print(b)  -- 100
+```
+
+#### Closures
+
+```lua
+-- Counter with enclosed state
+function makeCounter()
+    local count = 0
+    function increment()
+        count = count + 1
+        return count
+    end
+    return increment
+end
+
+local counter = makeCounter()
+print(counter())  -- 1
+print(counter())  -- 2
+print(counter())  -- 3
+
+-- Multiple closures sharing state
+function makeBox(initial)
+    local value = initial
+    function get()
+        return value
+    end
+    function set(v)
+        value = v
+    end
+    return get, set
+end
+
+local getter, setter = makeBox(42)
+print(getter())  -- 42
+setter(100)
+print(getter())  -- 100
+```
+
 ### Tables (Hash Maps)
 
 #### Creating Tables
@@ -419,6 +476,8 @@ lua/
 │   │   ├── value.hpp
 │   │   ├── value.cpp
 │   │   ├── function.hpp        # Function objects
+│   │   ├── closure.hpp         # Closure objects (function + upvalues)
+│   │   ├── upvalue.hpp         # Upvalue objects (captured variables)
 │   │   ├── string.hpp          # String objects with interning
 │   │   └── table.hpp           # Table objects (hash maps)
 │   ├── compiler/               # Compilation pipeline
@@ -456,6 +515,7 @@ Uses **NaN-boxing** technique:
   - Function: TAG_FUNCTION (3) - stores function index
   - String: TAG_STRING (4) - stores string index
   - Table: TAG_TABLE (5) - stores table index
+  - Closure: TAG_CLOSURE (6) - stores closure index (function + captured upvalues)
 - Fast type checking via bit operations
 - Objects stored as indices into pools for safe pointer management
 - No raw pointers in values (prevents corruption)
@@ -472,18 +532,49 @@ Uses **NaN-boxing** technique:
 | OP_EQUAL, OP_LESS, OP_GREATER, etc. | Comparisons |
 | OP_GET_GLOBAL, OP_SET_GLOBAL | Global variable access |
 | OP_GET_LOCAL, OP_SET_LOCAL | Local variable access |
+| OP_GET_UPVALUE, OP_SET_UPVALUE | Upvalue (closure) access |
+| OP_CLOSE_UPVALUE | Close upvalue when exiting scope |
 | OP_JUMP | Unconditional jump |
 | OP_JUMP_IF_FALSE | Conditional jump |
 | OP_LOOP | Jump backward (for loops) |
-| OP_CLOSURE | Load function constant |
-| OP_CALL | Call function with arguments |
-| OP_RETURN_VALUE | Return from function with value |
+| OP_CLOSURE | Create closure from function with upvalues |
+| OP_CALL | Call function with arguments and return count |
+| OP_RETURN_VALUE | Return from function with values (supports multiple) |
 | OP_NEW_TABLE | Create new empty table |
 | OP_GET_TABLE | Get value from table (table[key]) |
 | OP_SET_TABLE | Set value in table (table[key] = value) |
 | OP_PRINT | Print value |
 | OP_POP | Discard stack top |
 | OP_RETURN | End execution |
+
+### Closures and Upvalues
+
+Implements lexical scoping with closures:
+- **Three-level variable resolution**: local → upvalue → global
+- **Open upvalues**: Point to stack locations while parent function is active
+- **Closed upvalues**: Heap-allocated when parent function returns
+- **Upvalue deduplication**: Multiple closures capturing the same variable share the upvalue
+- **Nested closures**: Support for multiple levels of function nesting (2+ levels)
+
+Implementation details:
+- `ClosureObject`: Combines function with array of upvalue indices
+- `UpvalueObject`: Manages open/closed state with stack index or heap value
+- Compiler tracks captured variables with `isCaptured` flag
+- VM maintains sorted list of open upvalues for efficient closing
+- `OP_CLOSURE` instruction includes upvalue descriptors (isLocal + index pairs)
+
+### Multiple Return Values
+
+Functions can return multiple values:
+- **Return syntax**: `return expr1, expr2, expr3`
+- **Single-value context**: `local x = func()` takes only first value
+- **Return count tracking**: `OP_CALL` includes expected return count parameter
+- **Value adjustment**: Runtime pads with nil or truncates based on context
+
+Current implementation:
+- Function calls always request single value (retCount=1)
+- Extra return values are discarded at call site
+- Future: Multiple assignment, return value expansion in arguments
 
 ### Parser
 
@@ -513,10 +604,11 @@ Recursive descent with proper operator precedence:
 ### Phase 3: Functions ✅ COMPLETE
 - ✅ Function declarations
 - ✅ Function calls
-- ✅ Return statements
+- ✅ Return statements (with multiple return values)
 - ✅ Call frames and recursion
-- ⏳ Closures and upvalues
-- ⏳ Multiple return values
+- ✅ Closures and upvalues
+- ✅ Multiple return values (in single-value contexts)
+- ⏳ Multiple assignment (local a, b = func())
 - ⏳ Variadic functions (...)
 
 ### Phase 4: Objects & Memory (IN PROGRESS)
@@ -526,10 +618,10 @@ Recursive descent with proper operator precedence:
 - ⏳ Garbage collection (mark-and-sweep)
 
 ### Phase 5: Advanced Features
-- Closures and upvalues
-- For loops
-- Metatables
-- Standard library
+- Metatables and metamethods
+- Standard library (string, table, math, io)
+- Module system (require/module)
+- Coroutines
 
 ## Testing
 

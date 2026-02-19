@@ -462,6 +462,7 @@ bool VM::run(const Chunk& chunk) {
 
             case OpCode::OP_CALL: {
                 uint8_t argCount = readByte();
+                uint8_t retCount = readByte();  // Number of return values to keep (0 = all)
                 Value callee = peek(argCount);
 
                 if (!callee.isClosure()) {
@@ -497,6 +498,7 @@ bool VM::run(const Chunk& chunk) {
                 frame.callerChunk = chunk_;  // Save current chunk
                 frame.ip = ip_;  // Save current IP
                 frame.stackBase = stack_.size() - argCount;
+                frame.retCount = retCount;  // Store expected return count
                 frames_.push_back(frame);
 
                 // Switch to function's chunk
@@ -506,13 +508,40 @@ bool VM::run(const Chunk& chunk) {
             }
 
             case OpCode::OP_RETURN_VALUE: {
-                Value result = pop();
+                // Read the count of return values
+                uint8_t count = readByte();
+
+                // Pop all return values from the stack (in reverse order)
+                std::vector<Value> returnValues;
+                returnValues.reserve(count);
+                for (int i = 0; i < count; i++) {
+                    returnValues.push_back(pop());
+                }
+                // Reverse so they're in correct order
+                std::reverse(returnValues.begin(), returnValues.end());
 
                 if (frames_.empty()) {
                     // Returning from main script - shouldn't happen normally
-                    push(result);
+                    for (const auto& value : returnValues) {
+                        push(value);
+                    }
                     return !hadError_;
                 }
+
+                // Get the expected return count from the call frame
+                uint8_t expectedRetCount = currentFrame().retCount;
+
+                // Adjust return values based on what caller expects
+                if (expectedRetCount > 0 && returnValues.size() > expectedRetCount) {
+                    // Keep only the first expectedRetCount values
+                    returnValues.resize(expectedRetCount);
+                } else if (expectedRetCount > 0 && returnValues.size() < expectedRetCount) {
+                    // Pad with nils if we returned fewer than expected
+                    while (returnValues.size() < expectedRetCount) {
+                        returnValues.push_back(Value::nil());
+                    }
+                }
+                // If expectedRetCount == 0, keep all values (no adjustment)
 
                 // Close upvalues for locals that are going out of scope
                 size_t stackBase = currentFrame().stackBase;
@@ -537,8 +566,10 @@ bool VM::run(const Chunk& chunk) {
                 chunk_ = returnChunk;
                 ip_ = returnIP;
 
-                // Push return value (replaces where function was)
-                push(result);
+                // Push all return values (replaces where function was)
+                for (const auto& value : returnValues) {
+                    push(value);
+                }
                 break;
             }
 
