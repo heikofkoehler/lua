@@ -138,10 +138,10 @@ bool native_table_concat(VM* vm, int argCount) {
     TableObject* table = vm->getTable(tableVal.asTableIndex());
 
     StringObject* sepStr = nullptr;
-    if (sepVal.isString()) {
-        sepStr = vm->rootChunk()->getString(sepVal.asStringIndex());
-    } else if (sepVal.isRuntimeString()) {
+    if (sepVal.isRuntimeString()) {
         sepStr = vm->getString(sepVal.asStringIndex());
+    } else if (sepVal.isString()) {
+        sepStr = vm->rootChunk()->getString(sepVal.asStringIndex());
     }
 
     std::string result;
@@ -155,11 +155,11 @@ bool native_table_concat(VM* vm, int argCount) {
         }
 
         // Convert value to string
-        if (val.isString()) {
-            StringObject* str = vm->rootChunk()->getString(val.asStringIndex());
-            result.append(str->chars(), str->length());
-        } else if (val.isRuntimeString()) {
+        if (val.isRuntimeString()) {
             StringObject* str = vm->getString(val.asStringIndex());
+            result.append(str->chars(), str->length());
+        } else if (val.isString()) {
+            StringObject* str = vm->rootChunk()->getString(val.asStringIndex());
             result.append(str->chars(), str->length());
         } else if (val.isNumber()) {
             result.append(std::to_string(val.asNumber()));

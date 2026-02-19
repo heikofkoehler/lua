@@ -119,18 +119,18 @@ public:
 // Function call: func(args)
 class CallExprNode : public ExprNode {
 public:
-    CallExprNode(const std::string& name,
+    CallExprNode(std::unique_ptr<ExprNode> callee,
                  std::vector<std::unique_ptr<ExprNode>> args,
                  int line)
-        : ExprNode(line), name_(name), args_(std::move(args)) {}
+        : ExprNode(line), callee_(std::move(callee)), args_(std::move(args)) {}
 
     void accept(ASTVisitor& visitor) override;
 
-    const std::string& name() const { return name_; }
+    ExprNode* callee() const { return callee_.get(); }
     const std::vector<std::unique_ptr<ExprNode>>& args() const { return args_; }
 
 private:
-    std::string name_;
+    std::unique_ptr<ExprNode> callee_;
     std::vector<std::unique_ptr<ExprNode>> args_;
 };
 
