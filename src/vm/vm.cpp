@@ -23,6 +23,17 @@ void VM::reset() {
         delete table;
     }
     tables_.clear();
+    // Clean up closures (VM owns them)
+    for (auto* closure : closures_) {
+        delete closure;
+    }
+    closures_.clear();
+    // Clean up upvalues (VM owns them)
+    for (auto* upvalue : upvalues_) {
+        delete upvalue;
+    }
+    upvalues_.clear();
+    openUpvalues_.clear();
     ip_ = 0;
     hadError_ = false;
     chunk_ = nullptr;
@@ -91,6 +102,71 @@ TableObject* VM::getTable(size_t index) {
         return nullptr;
     }
     return tables_[index];
+}
+
+size_t VM::createClosure(FunctionObject* function) {
+    ClosureObject* closure = new ClosureObject(function, function->upvalueCount());
+    size_t index = closures_.size();
+    closures_.push_back(closure);
+    return index;
+}
+
+ClosureObject* VM::getClosure(size_t index) {
+    if (index >= closures_.size()) {
+        runtimeError("Invalid closure index");
+        return nullptr;
+    }
+    return closures_[index];
+}
+
+size_t VM::captureUpvalue(size_t stackIndex) {
+    // Check if upvalue already exists for this stack slot
+    for (UpvalueObject* openUpvalue : openUpvalues_) {
+        if (!openUpvalue->isClosed() && openUpvalue->stackIndex() == stackIndex) {
+            // Find and return index
+            for (size_t i = 0; i < upvalues_.size(); i++) {
+                if (upvalues_[i] == openUpvalue) {
+                    return i;
+                }
+            }
+        }
+    }
+
+    // Create new upvalue
+    UpvalueObject* upvalue = new UpvalueObject(stackIndex);
+    size_t index = upvalues_.size();
+    upvalues_.push_back(upvalue);
+
+    // Insert into openUpvalues_ (keep sorted by stack index for efficient closing)
+    auto it = openUpvalues_.begin();
+    while (it != openUpvalues_.end() && (*it)->stackIndex() < stackIndex) {
+        ++it;
+    }
+    openUpvalues_.insert(it, upvalue);
+
+    return index;
+}
+
+UpvalueObject* VM::getUpvalue(size_t index) {
+    if (index >= upvalues_.size()) {
+        runtimeError("Invalid upvalue index");
+        return nullptr;
+    }
+    return upvalues_[index];
+}
+
+void VM::closeUpvalues(size_t lastStackIndex) {
+    // Close all open upvalues at or above lastStackIndex
+    auto it = openUpvalues_.begin();
+    while (it != openUpvalues_.end()) {
+        UpvalueObject* upvalue = *it;
+        if (!upvalue->isClosed() && upvalue->stackIndex() >= lastStackIndex) {
+            upvalue->close(stack_);
+            it = openUpvalues_.erase(it);
+        } else {
+            ++it;
+        }
+    }
 }
 
 CallFrame& VM::currentFrame() {
@@ -178,6 +254,44 @@ bool VM::run(const Chunk& chunk) {
                 // Add stackBase offset if inside a function
                 size_t actualSlot = frames_.empty() ? slot : (currentFrame().stackBase + slot);
                 stack_[actualSlot] = peek(0);
+                break;
+            }
+
+            case OpCode::OP_GET_UPVALUE: {
+                uint8_t upvalueIndex = readByte();
+                if (!frames_.empty()) {
+                    size_t uvIndex = currentFrame().closure->getUpvalue(upvalueIndex);
+                    UpvalueObject* upvalue = getUpvalue(uvIndex);
+                    if (upvalue) {
+                        push(upvalue->get(stack_));
+                    } else {
+                        push(Value::nil());
+                    }
+                } else {
+                    runtimeError("Upvalue access outside of closure");
+                    push(Value::nil());
+                }
+                break;
+            }
+
+            case OpCode::OP_SET_UPVALUE: {
+                uint8_t upvalueIndex = readByte();
+                if (!frames_.empty()) {
+                    size_t uvIndex = currentFrame().closure->getUpvalue(upvalueIndex);
+                    UpvalueObject* upvalue = getUpvalue(uvIndex);
+                    if (upvalue) {
+                        upvalue->set(stack_, peek(0));
+                    }
+                } else {
+                    runtimeError("Upvalue access outside of closure");
+                }
+                break;
+            }
+
+            case OpCode::OP_CLOSE_UPVALUE: {
+                // Close upvalue at top of stack
+                closeUpvalues(stack_.size() - 1);
+                pop();
                 break;
             }
 
@@ -314,7 +428,34 @@ bool VM::run(const Chunk& chunk) {
             case OpCode::OP_CLOSURE: {
                 uint8_t constantIndex = readByte();
                 Value funcValue = chunk_->constants()[constantIndex];
-                push(funcValue);
+                size_t funcIndex = funcValue.asFunctionIndex();
+                FunctionObject* function = rootChunk_->getFunction(funcIndex);
+
+                // Create closure
+                size_t closureIndex = createClosure(function);
+                ClosureObject* closure = getClosure(closureIndex);
+
+                // Capture upvalues
+                for (int i = 0; i < function->upvalueCount(); i++) {
+                    uint8_t isLocal = readByte();
+                    uint8_t index = readByte();
+
+                    if (isLocal) {
+                        // Capture local variable from current frame
+                        size_t stackIndex = frames_.empty() ? index :
+                            (currentFrame().stackBase + index);
+                        size_t upvalueIndex = captureUpvalue(stackIndex);
+                        closure->setUpvalue(i, upvalueIndex);
+                    } else {
+                        // Capture upvalue from enclosing closure
+                        if (!frames_.empty()) {
+                            size_t upvalueIndex = currentFrame().closure->getUpvalue(index);
+                            closure->setUpvalue(i, upvalueIndex);
+                        }
+                    }
+                }
+
+                push(Value::closure(closureIndex));
                 break;
             }
 
@@ -322,14 +463,21 @@ bool VM::run(const Chunk& chunk) {
                 uint8_t argCount = readByte();
                 Value callee = peek(argCount);
 
-                if (!callee.isFunctionObject()) {
-                    runtimeError("Can only call functions");
+                if (!callee.isClosure()) {
+                    runtimeError("Can only call closures");
                     break;
                 }
 
-                // Get function index from the value, then retrieve function from root chunk
-                size_t funcIndex = callee.asFunctionIndex();
-                FunctionObject* function = rootChunk_->getFunction(funcIndex);
+                // Get closure index from the value, then retrieve closure
+                size_t closureIndex = callee.asClosureIndex();
+                ClosureObject* closure = getClosure(closureIndex);
+
+                if (!closure) {
+                    runtimeError("Invalid closure");
+                    break;
+                }
+
+                FunctionObject* function = closure->function();
 
                 if (argCount != function->arity()) {
                     runtimeError("Expected " + std::to_string(function->arity()) +
@@ -344,7 +492,7 @@ bool VM::run(const Chunk& chunk) {
 
                 // Create new call frame
                 CallFrame frame;
-                frame.function = function;
+                frame.closure = closure;
                 frame.callerChunk = chunk_;  // Save current chunk
                 frame.ip = ip_;  // Save current IP
                 frame.stackBase = stack_.size() - argCount;
@@ -365,13 +513,16 @@ bool VM::run(const Chunk& chunk) {
                     return !hadError_;
                 }
 
-                // Pop all locals and arguments (down to stackBase)
+                // Close upvalues for locals that are going out of scope
                 size_t stackBase = currentFrame().stackBase;
+                closeUpvalues(stackBase);
+
+                // Pop all locals and arguments (down to stackBase)
                 while (stack_.size() > stackBase) {
                     pop();
                 }
 
-                // Also pop the function object itself (it's at stackBase - 1)
+                // Also pop the closure object itself (it's at stackBase - 1)
                 pop();
 
                 // Get return state before popping frame
