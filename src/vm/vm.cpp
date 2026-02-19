@@ -2,9 +2,15 @@
 #include <iostream>
 #include <cmath>
 
-VM::VM() : chunk_(nullptr), rootChunk_(nullptr), ip_(0), hadError_(false) {
+// Forward declarations for stdlib registration
+void registerStringLibrary(VM* vm, TableObject* stringTable);
+void registerTableLibrary(VM* vm, TableObject* tableTable);
+void registerMathLibrary(VM* vm, TableObject* mathTable);
+
+VM::VM() : chunk_(nullptr), rootChunk_(nullptr), ip_(0), hadError_(false), stdlibInitialized_(false) {
     stack_.reserve(STACK_MAX);
     frames_.reserve(FRAMES_MAX);
+    // Standard library will be initialized on first run() call
 }
 
 void VM::reset() {
@@ -194,6 +200,48 @@ void VM::closeFile(size_t index) {
     }
 }
 
+size_t VM::registerNativeFunction(const std::string& /* name */, NativeFunction func) {
+    nativeFunctions_.push_back(func);
+    return nativeFunctions_.size() - 1;
+}
+
+NativeFunction VM::getNativeFunction(size_t index) {
+    if (index >= nativeFunctions_.size()) {
+        runtimeError("Invalid native function index");
+        return nullptr;
+    }
+    return nativeFunctions_[index];
+}
+
+void VM::addNativeToTable(TableObject* table, const char* name, NativeFunction func) {
+    size_t funcIndex = registerNativeFunction(name, func);
+    // Use chunk's string pool for keys so they match compile-time strings
+    // Note: We need to modify the chunk's string pool, so we cast away const
+    Chunk* mutableChunk = const_cast<Chunk*>(rootChunk_);
+    size_t nameIndex = mutableChunk->addString(name);
+    table->set(Value::string(nameIndex), Value::nativeFunction(funcIndex));
+}
+
+void VM::initStandardLibrary() {
+    // Create 'string' table
+    size_t stringTableIdx = createTable();
+    TableObject* stringTable = getTable(stringTableIdx);
+    registerStringLibrary(this, stringTable);
+    globals_["string"] = Value::table(stringTableIdx);
+
+    // Create 'table' table
+    size_t tableTableIdx = createTable();
+    TableObject* tableTable = getTable(tableTableIdx);
+    registerTableLibrary(this, tableTable);
+    globals_["table"] = Value::table(tableTableIdx);
+
+    // Create 'math' table
+    size_t mathTableIdx = createTable();
+    TableObject* mathTable = getTable(mathTableIdx);
+    registerMathLibrary(this, mathTable);
+    globals_["math"] = Value::table(mathTableIdx);
+}
+
 CallFrame& VM::currentFrame() {
     if (frames_.empty()) {
         throw RuntimeError("No active call frame");
@@ -213,6 +261,12 @@ bool VM::run(const Chunk& chunk) {
     rootChunk_ = &chunk;  // Save root chunk for function lookups
     ip_ = 0;
     hadError_ = false;
+
+    // Initialize standard library on first run (needs chunk for string pool)
+    if (!stdlibInitialized_) {
+        initStandardLibrary();
+        stdlibInitialized_ = true;
+    }
 
 #ifdef PRINT_CODE
     chunk.disassemble("script");
@@ -504,63 +558,101 @@ bool VM::run(const Chunk& chunk) {
                 uint8_t retCount = readByte();  // Number of return values to keep (0 = all)
                 Value callee = peek(argCount);
 
-                if (!callee.isClosure()) {
-                    runtimeError("Can only call closures");
-                    break;
+                if (callee.isNativeFunction()) {
+                    // Native function call
+                    size_t funcIndex = callee.asNativeFunctionIndex();
+                    NativeFunction func = getNativeFunction(funcIndex);
+
+                    if (!func) {
+                        runtimeError("Invalid native function");
+                        break;
+                    }
+
+                    // Track stack size before calling
+                    // Stack: [..., func, arg1, arg2, ...]
+                    // funcIndex is at position: stack_.size() - argCount - 1
+                    size_t funcPosition = stack_.size() - argCount - 1;
+
+                    // Native function will pop arguments and push results
+                    if (!func(this, argCount)) {
+                        // Native function reported error (via runtimeError)
+                        break;
+                    }
+
+                    // After native call, stack is: [..., func, result1, result2, ...]
+                    // We need to remove the func value by shifting results down
+                    size_t resultCount = stack_.size() - funcPosition - 1;
+
+                    // Save results temporarily
+                    std::vector<Value> results;
+                    results.reserve(resultCount);
+                    for (size_t i = 0; i < resultCount; i++) {
+                        results.push_back(pop());
+                    }
+
+                    // Pop the function value
+                    pop();
+
+                    // Push results back in correct order
+                    for (auto it = results.rbegin(); it != results.rend(); ++it) {
+                        push(*it);
+                    }
+                } else if (callee.isClosure()) {
+                    // Get closure index from the value, then retrieve closure
+                    size_t closureIndex = callee.asClosureIndex();
+                    ClosureObject* closure = getClosure(closureIndex);
+
+                    if (!closure) {
+                        runtimeError("Invalid closure");
+                        break;
+                    }
+
+                    FunctionObject* function = closure->function();
+
+                    // Check argument count
+                    int arity = function->arity();
+                    bool hasVarargs = function->hasVarargs();
+
+                    if (!hasVarargs && argCount != arity) {
+                        runtimeError("Expected " + std::to_string(arity) +
+                                     " arguments but got " + std::to_string(argCount));
+                        break;
+                    } else if (hasVarargs && argCount < arity) {
+                        runtimeError("Expected at least " + std::to_string(arity) +
+                                     " arguments but got " + std::to_string(argCount));
+                        break;
+                    }
+
+                    if (frames_.size() >= FRAMES_MAX) {
+                        runtimeError("Stack overflow");
+                        break;
+                    }
+
+                    // Calculate varargs if function accepts them
+                    uint8_t varargCount = 0;
+                    size_t varargBase = 0;
+                    if (hasVarargs && argCount > arity) {
+                        varargCount = argCount - arity;
+                        varargBase = stack_.size() - varargCount;
+                    }
+
+                    // Create new call frame
+                    CallFrame frame;
+                    frame.closure = closure;
+                    frame.callerChunk = chunk_;  // Save current chunk
+                    frame.ip = ip_;  // Save current IP
+                    frame.stackBase = stack_.size() - argCount;
+                    frame.retCount = retCount;  // Store expected return count
+                    frame.varargCount = varargCount;
+                    frame.varargBase = varargBase;
+                    frames_.push_back(frame);
+
+                    // Switch to function's chunk
+                    chunk_ = function->chunk();
+                    ip_ = 0;
+                } else {
+                    runtimeError("Can only call functions and closures");
                 }
-
-                // Get closure index from the value, then retrieve closure
-                size_t closureIndex = callee.asClosureIndex();
-                ClosureObject* closure = getClosure(closureIndex);
-
-                if (!closure) {
-                    runtimeError("Invalid closure");
-                    break;
-                }
-
-                FunctionObject* function = closure->function();
-
-                // Check argument count
-                int arity = function->arity();
-                bool hasVarargs = function->hasVarargs();
-
-                if (!hasVarargs && argCount != arity) {
-                    runtimeError("Expected " + std::to_string(arity) +
-                                 " arguments but got " + std::to_string(argCount));
-                    break;
-                } else if (hasVarargs && argCount < arity) {
-                    runtimeError("Expected at least " + std::to_string(arity) +
-                                 " arguments but got " + std::to_string(argCount));
-                    break;
-                }
-
-                if (frames_.size() >= FRAMES_MAX) {
-                    runtimeError("Stack overflow");
-                    break;
-                }
-
-                // Calculate varargs if function accepts them
-                uint8_t varargCount = 0;
-                size_t varargBase = 0;
-                if (hasVarargs && argCount > arity) {
-                    varargCount = argCount - arity;
-                    varargBase = stack_.size() - varargCount;
-                }
-
-                // Create new call frame
-                CallFrame frame;
-                frame.closure = closure;
-                frame.callerChunk = chunk_;  // Save current chunk
-                frame.ip = ip_;  // Save current IP
-                frame.stackBase = stack_.size() - argCount;
-                frame.retCount = retCount;  // Store expected return count
-                frame.varargCount = varargCount;
-                frame.varargBase = varargBase;
-                frames_.push_back(frame);
-
-                // Switch to function's chunk
-                chunk_ = function->chunk();
-                ip_ = 0;
                 break;
             }
 

@@ -36,6 +36,9 @@ set(SOURCES
     src/compiler/chunk.cpp
     src/compiler/codegen.cpp
     src/vm/vm.cpp
+    src/vm/stdlib_string.cpp
+    src/vm/stdlib_table.cpp
+    src/vm/stdlib_math.cpp
 )
 
 # Create executable
