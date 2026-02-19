@@ -129,9 +129,21 @@ private:
 // Table constructor: {}
 class TableConstructorNode : public ExprNode {
 public:
-    TableConstructorNode(int line) : ExprNode(line) {}
+    // Entry types in table constructor
+    struct Entry {
+        std::unique_ptr<ExprNode> key;    // nullptr for array-style entries
+        std::unique_ptr<ExprNode> value;
+    };
+
+    TableConstructorNode(std::vector<Entry> entries, int line)
+        : ExprNode(line), entries_(std::move(entries)) {}
 
     void accept(ASTVisitor& visitor) override;
+
+    const std::vector<Entry>& entries() const { return entries_; }
+
+private:
+    std::vector<Entry> entries_;
 };
 
 // Index expression: table[key]

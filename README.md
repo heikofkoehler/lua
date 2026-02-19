@@ -13,7 +13,10 @@ A Lua implementation in C++ featuring a stack-based bytecode virtual machine wit
   - **Multi-line Support**: Strings can span multiple lines
 - **Tables (Hash Maps)**:
   - **Associative Arrays**: Key-value storage with any value type as key (except nil)
-  - **Dynamic Creation**: Tables created at runtime
+  - **Table Constructors**: Create tables with initial values using `{}` syntax
+  - **Array-style**: `{1, 2, 3}` creates numeric-indexed table
+  - **Record-style**: `{x = 10, y = 20}` creates string-keyed table
+  - **Computed keys**: `{[expr] = value}` for dynamic key expressions
   - **Indexing Operations**: Get and set values with `table[key]` syntax
   - **Lua Semantics**: Nil keys rejected, setting to nil removes key
 - **Variables**:
@@ -389,7 +392,37 @@ print(getter())  -- 100
 #### Creating Tables
 
 ```lua
-local t = {}  -- Empty table
+-- Empty table
+local t = {}
+
+-- Array-style (implicit numeric keys 1, 2, 3, ...)
+local arr = {10, 20, 30}
+print(arr[1])  -- 10
+print(arr[2])  -- 20
+
+-- Record-style (string keys)
+local person = {name = "Alice", age = 30}
+print(person["name"])  -- Alice
+print(person["age"])   -- 30
+
+-- Mixed style
+local mixed = {100, 200, x = 10, y = 20}
+print(mixed[1])    -- 100 (array index)
+print(mixed["x"])  -- 10 (string key)
+
+-- Computed keys
+local key = "color"
+local obj = {[key] = "blue", [1+1] = "two"}
+print(obj["color"])  -- blue
+print(obj[2])        -- two
+
+-- Nested tables
+local nested = {
+    inner = {a = 1, b = 2},
+    values = {10, 20, 30}
+}
+print(nested["inner"]["a"])   -- 1
+print(nested["values"][1])    -- 10
 ```
 
 #### Table Assignment and Access
@@ -545,6 +578,7 @@ Uses **NaN-boxing** technique:
 | OP_SET_TABLE | Set value in table (table[key] = value) |
 | OP_PRINT | Print value |
 | OP_POP | Discard stack top |
+| OP_DUP | Duplicate stack top |
 | OP_RETURN | End execution |
 
 ### Closures and Upvalues
@@ -614,7 +648,7 @@ Recursive descent with proper operator precedence:
 ### Phase 4: Objects & Memory (IN PROGRESS)
 - ✅ String objects with interning
 - ✅ Table objects (hash maps) with constructor `{}`, indexing `t[key]`, and assignment `t[key] = value`
-- ⏳ Table constructor with initial values `{key = value, ...}`
+- ✅ Table constructor with initial values: `{1, 2, 3}`, `{x = 10}`, `{[expr] = val}`
 - ⏳ Garbage collection (mark-and-sweep)
 
 ### Phase 5: Advanced Features

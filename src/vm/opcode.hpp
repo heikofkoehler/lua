@@ -46,6 +46,7 @@ enum class OpCode : uint8_t {
 
     // Control flow
     OP_POP,         // Pop and discard top of stack
+    OP_DUP,         // Duplicate top of stack
     OP_JUMP,        // Unconditional jump [offset: uint16_t]
     OP_JUMP_IF_FALSE, // Jump if top of stack is falsey [offset: uint16_t]
     OP_LOOP,        // Jump backward [offset: uint16_t]
@@ -92,6 +93,7 @@ inline const char* opcodeName(OpCode op) {
         case OpCode::OP_GREATER_EQUAL: return "OP_GREATER_EQUAL";
         case OpCode::OP_PRINT:         return "OP_PRINT";
         case OpCode::OP_POP:           return "OP_POP";
+        case OpCode::OP_DUP:           return "OP_DUP";
         case OpCode::OP_JUMP:          return "OP_JUMP";
         case OpCode::OP_JUMP_IF_FALSE: return "OP_JUMP_IF_FALSE";
         case OpCode::OP_LOOP:          return "OP_LOOP";

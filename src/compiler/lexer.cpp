@@ -99,6 +99,23 @@ Token Lexer::scanToken() {
     return errorToken("Unexpected character");
 }
 
+Token Lexer::peekToken() {
+    // Save current lexer state
+    size_t savedStart = start_;
+    size_t savedCurrent = current_;
+    int savedLine = line_;
+
+    // Scan next token
+    Token nextToken = scanToken();
+
+    // Restore lexer state
+    start_ = savedStart;
+    current_ = savedCurrent;
+    line_ = savedLine;
+
+    return nextToken;
+}
+
 char Lexer::advance() {
     return source_[current_++];
 }

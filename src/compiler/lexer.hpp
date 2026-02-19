@@ -16,6 +16,9 @@ public:
     // Scan and return the next token
     Token scanToken();
 
+    // Peek at the next token without advancing lexer state
+    Token peekToken();
+
     // Check if at end of source
     bool isAtEnd() const { return current_ >= source_.length(); }
 
