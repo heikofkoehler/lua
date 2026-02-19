@@ -18,6 +18,9 @@ enum class OpCode : uint8_t {
     OP_SET_GLOBAL,  // Set global variable [name_index: uint8_t]
     OP_GET_LOCAL,   // Get local variable [slot: uint8_t]
     OP_SET_LOCAL,   // Set local variable [slot: uint8_t]
+    OP_GET_UPVALUE, // Get upvalue [index: uint8_t]
+    OP_SET_UPVALUE, // Set upvalue [index: uint8_t]
+    OP_CLOSE_UPVALUE, // Close upvalue at top of stack
 
     // Arithmetic operations (binary)
     OP_ADD,         // Addition: pop b, pop a, push a + b
@@ -69,9 +72,12 @@ inline const char* opcodeName(OpCode op) {
         case OpCode::OP_FALSE:       return "OP_FALSE";
         case OpCode::OP_GET_GLOBAL:  return "OP_GET_GLOBAL";
         case OpCode::OP_SET_GLOBAL:  return "OP_SET_GLOBAL";
-        case OpCode::OP_GET_LOCAL:   return "OP_GET_LOCAL";
-        case OpCode::OP_SET_LOCAL:   return "OP_SET_LOCAL";
-        case OpCode::OP_ADD:         return "OP_ADD";
+        case OpCode::OP_GET_LOCAL:     return "OP_GET_LOCAL";
+        case OpCode::OP_SET_LOCAL:     return "OP_SET_LOCAL";
+        case OpCode::OP_GET_UPVALUE:   return "OP_GET_UPVALUE";
+        case OpCode::OP_SET_UPVALUE:   return "OP_SET_UPVALUE";
+        case OpCode::OP_CLOSE_UPVALUE: return "OP_CLOSE_UPVALUE";
+        case OpCode::OP_ADD:           return "OP_ADD";
         case OpCode::OP_SUB:         return "OP_SUB";
         case OpCode::OP_MUL:         return "OP_MUL";
         case OpCode::OP_DIV:         return "OP_DIV";
