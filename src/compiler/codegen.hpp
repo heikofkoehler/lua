@@ -46,22 +46,34 @@ private:
         std::string name;
         int depth;
         int slot;
+        bool isCaptured;  // True if captured by a closure
+    };
+
+    // Upvalue tracking
+    struct Upvalue {
+        uint8_t index;      // Parent slot/upvalue index
+        bool isLocal;       // true = local, false = upvalue
+        std::string name;   // For debugging
     };
 
     // Compiler state for nested function compilation
     struct CompilerState {
         std::unique_ptr<Chunk> chunk;
         std::vector<Local> locals;
+        std::vector<Upvalue> upvalues;
         int scopeDepth;
         int localCount;
+        CompilerState* enclosing;  // Parent compiler (not owned)
     };
 
     std::unique_ptr<Chunk> chunk_;
     int currentLine_;
     std::vector<Local> locals_;
+    std::vector<Upvalue> upvalues_;
     int scopeDepth_;
     int localCount_;
     std::vector<CompilerState> compilerStack_;
+    CompilerState* enclosingCompiler_;  // Parent compiler for upvalue resolution
 
     // Loop context for break statements
     std::vector<std::vector<size_t>> breakJumps_;  // Stack of break jump lists
@@ -81,6 +93,8 @@ private:
     // Variable handling
     void addLocal(const std::string& name);
     int resolveLocal(const std::string& name);
+    int resolveUpvalue(const std::string& name);
+    int addUpvalue(uint8_t index, bool isLocal);
     void beginScope();
     void endScope();
 
