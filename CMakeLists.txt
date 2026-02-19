@@ -30,6 +30,7 @@ set(SOURCES
     src/main.cpp
     src/common/common.cpp
     src/value/value.cpp
+    src/value/file.cpp
     src/compiler/lexer.cpp
     src/compiler/parser.cpp
     src/compiler/chunk.cpp

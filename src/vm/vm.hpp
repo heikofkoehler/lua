@@ -8,6 +8,7 @@
 #include "value/upvalue.hpp"
 #include "value/string.hpp"
 #include "value/table.hpp"
+#include "value/file.hpp"
 #include "compiler/chunk.hpp"
 #include <vector>
 #include <unordered_map>
@@ -61,6 +62,11 @@ public:
     UpvalueObject* getUpvalue(size_t index);
     void closeUpvalues(size_t lastStackIndex);
 
+    // File operations
+    size_t openFile(const std::string& filename, const std::string& mode);
+    FileObject* getFile(size_t index);
+    void closeFile(size_t index);
+
 private:
     // Stack operations
     void push(const Value& value);
@@ -101,6 +107,7 @@ private:
     std::vector<ClosureObject*> closures_;  // Closure pool (owns closure objects)
     std::vector<UpvalueObject*> upvalues_;  // Upvalue pool (owns upvalue objects)
     std::vector<UpvalueObject*> openUpvalues_;  // Open upvalues (sorted by stack index)
+    std::vector<FileObject*> files_;  // File pool (owns file objects)
     bool hadError_;               // Error flag
 
     // Stack size limits

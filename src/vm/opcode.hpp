@@ -61,6 +61,12 @@ enum class OpCode : uint8_t {
     OP_GET_TABLE,   // Get table[key]: pop key, pop table, push value
     OP_SET_TABLE,   // Set table[key] = value: pop value, pop key, pop table
 
+    // File I/O
+    OP_IO_OPEN,     // Open file: pop mode, pop filename, push file handle (or nil)
+    OP_IO_WRITE,    // Write to file: pop data, pop file handle
+    OP_IO_READ,     // Read from file: pop file handle, push data
+    OP_IO_CLOSE,    // Close file: pop file handle
+
     OP_RETURN,      // Return from current chunk
 };
 
@@ -103,6 +109,10 @@ inline const char* opcodeName(OpCode op) {
         case OpCode::OP_NEW_TABLE:     return "OP_NEW_TABLE";
         case OpCode::OP_GET_TABLE:     return "OP_GET_TABLE";
         case OpCode::OP_SET_TABLE:     return "OP_SET_TABLE";
+        case OpCode::OP_IO_OPEN:       return "OP_IO_OPEN";
+        case OpCode::OP_IO_WRITE:      return "OP_IO_WRITE";
+        case OpCode::OP_IO_READ:       return "OP_IO_READ";
+        case OpCode::OP_IO_CLOSE:      return "OP_IO_CLOSE";
         case OpCode::OP_RETURN:        return "OP_RETURN";
         default:                     return "UNKNOWN";
     }

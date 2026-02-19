@@ -30,7 +30,8 @@ public:
         FUNCTION,
         STRING,
         TABLE,
-        CLOSURE
+        CLOSURE,
+        FILE
     };
 
     // Constructors (private, use factory methods)
@@ -59,25 +60,38 @@ public:
     static Value function(size_t funcIndex) {
         // Encode function index (not pointer!)
         // Index fits easily in lower 48 bits
-        return Value(QNAN | TAG_FUNCTION | (funcIndex << 3));
+        return Value(QNAN | TAG_FUNCTION | (funcIndex << 4));
     }
 
     static Value string(size_t stringIndex) {
         // Encode string index (not pointer!)
         // Index fits easily in lower 48 bits
-        return Value(QNAN | TAG_STRING | (stringIndex << 3));
+        // This is for compile-time strings from chunk
+        return Value(QNAN | TAG_STRING | (stringIndex << 4));
+    }
+
+    static Value runtimeString(size_t stringIndex) {
+        // Encode runtime string index (not pointer!)
+        // This is for runtime strings from VM pool (e.g., from IO)
+        return Value(QNAN | TAG_RUNTIME_STRING | (stringIndex << 4));
     }
 
     static Value table(size_t tableIndex) {
         // Encode table index (not pointer!)
         // Index fits easily in lower 48 bits
-        return Value(QNAN | TAG_TABLE | (tableIndex << 3));
+        return Value(QNAN | TAG_TABLE | (tableIndex << 4));
     }
 
     static Value closure(size_t closureIndex) {
         // Encode closure index (not pointer!)
         // Index fits easily in lower 48 bits
-        return Value(QNAN | TAG_CLOSURE | (closureIndex << 3));
+        return Value(QNAN | TAG_CLOSURE | (closureIndex << 4));
+    }
+
+    static Value file(size_t fileIndex) {
+        // Encode file index (not pointer!)
+        // Index fits easily in lower 48 bits
+        return Value(QNAN | TAG_FILE | (fileIndex << 4));
     }
 
     // Type checking
@@ -98,7 +112,12 @@ public:
     }
 
     bool isString() const {
-        return (bits_ & (QNAN | TAG_MASK)) == (QNAN | TAG_STRING);
+        uint64_t tag = bits_ & (QNAN | TAG_MASK);
+        return tag == (QNAN | TAG_STRING) || tag == (QNAN | TAG_RUNTIME_STRING);
+    }
+
+    bool isRuntimeString() const {
+        return (bits_ & (QNAN | TAG_MASK)) == (QNAN | TAG_RUNTIME_STRING);
     }
 
     bool isTable() const {
@@ -109,6 +128,10 @@ public:
         return (bits_ & (QNAN | TAG_MASK)) == (QNAN | TAG_CLOSURE);
     }
 
+    bool isFile() const {
+        return (bits_ & (QNAN | TAG_MASK)) == (QNAN | TAG_FILE);
+    }
+
     Type type() const {
         if (isNumber()) return Type::NUMBER;
         if (isBool()) return Type::BOOL;
@@ -116,6 +139,7 @@ public:
         if (isString()) return Type::STRING;
         if (isTable()) return Type::TABLE;
         if (isClosure()) return Type::CLOSURE;
+        if (isFile()) return Type::FILE;
         return Type::NIL;
     }
 
@@ -140,8 +164,8 @@ public:
         if (!isFunctionObject()) {
             throw RuntimeError("Value is not a function");
         }
-        // Extract function index (shift right by 3 to undo the encoding)
-        uint64_t index = (bits_ & 0x0000FFFFFFFFFFFFULL) >> 3;
+        // Extract function index (shift right by 4 to undo the encoding)
+        uint64_t index = (bits_ & 0x0000FFFFFFFFFFFFULL) >> 4;
         return static_cast<size_t>(index);
     }
 
@@ -149,8 +173,8 @@ public:
         if (!isString()) {
             throw RuntimeError("Value is not a string");
         }
-        // Extract string index (shift right by 3 to undo the encoding)
-        uint64_t index = (bits_ & 0x0000FFFFFFFFFFFFULL) >> 3;
+        // Extract string index (shift right by 4 to undo the encoding)
+        uint64_t index = (bits_ & 0x0000FFFFFFFFFFFFULL) >> 4;
         return static_cast<size_t>(index);
     }
 
@@ -158,8 +182,8 @@ public:
         if (!isTable()) {
             throw RuntimeError("Value is not a table");
         }
-        // Extract table index (shift right by 3 to undo the encoding)
-        uint64_t index = (bits_ & 0x0000FFFFFFFFFFFFULL) >> 3;
+        // Extract table index (shift right by 4 to undo the encoding)
+        uint64_t index = (bits_ & 0x0000FFFFFFFFFFFFULL) >> 4;
         return static_cast<size_t>(index);
     }
 
@@ -167,8 +191,17 @@ public:
         if (!isClosure()) {
             throw RuntimeError("Value is not a closure");
         }
-        // Extract closure index (shift right by 3 to undo the encoding)
-        uint64_t index = (bits_ & 0x0000FFFFFFFFFFFFULL) >> 3;
+        // Extract closure index (shift right by 4 to undo the encoding)
+        uint64_t index = (bits_ & 0x0000FFFFFFFFFFFFULL) >> 4;
+        return static_cast<size_t>(index);
+    }
+
+    size_t asFileIndex() const {
+        if (!isFile()) {
+            throw RuntimeError("Value is not a file");
+        }
+        // Extract file index (shift right by 4 to undo the encoding)
+        uint64_t index = (bits_ & 0x0000FFFFFFFFFFFFULL) >> 4;
         return static_cast<size_t>(index);
     }
 
@@ -212,10 +245,12 @@ private:
     static constexpr uint64_t TAG_NIL = 1;
     static constexpr uint64_t TAG_BOOL = 2;
     static constexpr uint64_t TAG_FUNCTION = 3;
-    static constexpr uint64_t TAG_STRING = 4;
+    static constexpr uint64_t TAG_STRING = 4;  // Compile-time string (from chunk)
     static constexpr uint64_t TAG_TABLE = 5;
     static constexpr uint64_t TAG_CLOSURE = 6;
-    static constexpr uint64_t TAG_MASK = 7;
+    static constexpr uint64_t TAG_FILE = 7;
+    static constexpr uint64_t TAG_RUNTIME_STRING = 8;  // Runtime string (from VM pool)
+    static constexpr uint64_t TAG_MASK = 15;  // Updated to 4 bits for more tags
 };
 
 // Stream operator
