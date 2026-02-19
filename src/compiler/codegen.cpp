@@ -616,6 +616,34 @@ void CodeGenerator::visitForInStmt(ForInStmtNode* node) {
 void CodeGenerator::visitCall(CallExprNode* node) {
     setLine(node->line());
 
+    // Check for built-in IO functions
+    if (node->name() == "io_open" && node->args().size() == 2) {
+        // Compile arguments (filename, mode)
+        node->args()[0]->accept(*this);  // filename
+        node->args()[1]->accept(*this);  // mode
+        emitOpCode(OpCode::OP_IO_OPEN);
+        return;
+    }
+    if (node->name() == "io_write" && node->args().size() == 2) {
+        // Compile arguments (file, data)
+        node->args()[0]->accept(*this);  // file handle
+        node->args()[1]->accept(*this);  // data
+        emitOpCode(OpCode::OP_IO_WRITE);
+        return;
+    }
+    if (node->name() == "io_read" && node->args().size() == 1) {
+        // Compile argument (file)
+        node->args()[0]->accept(*this);  // file handle
+        emitOpCode(OpCode::OP_IO_READ);
+        return;
+    }
+    if (node->name() == "io_close" && node->args().size() == 1) {
+        // Compile argument (file)
+        node->args()[0]->accept(*this);  // file handle
+        emitOpCode(OpCode::OP_IO_CLOSE);
+        return;
+    }
+
     // Load function onto stack using three-level resolution (local → upvalue → global)
 
     // 1. Try to resolve as local variable

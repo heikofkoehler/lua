@@ -53,5 +53,11 @@ void Value::print(std::ostream& os) const {
             os << "<closure:" << closureIndex << ">";
             break;
         }
+
+        case Type::FILE: {
+            size_t fileIndex = asFileIndex();
+            os << "<file:" << fileIndex << ">";
+            break;
+        }
     }
 }

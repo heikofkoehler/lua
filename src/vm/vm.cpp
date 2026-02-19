@@ -34,6 +34,11 @@ void VM::reset() {
     }
     upvalues_.clear();
     openUpvalues_.clear();
+    // Clean up files (VM owns them)
+    for (auto* file : files_) {
+        delete file;
+    }
+    files_.clear();
     ip_ = 0;
     hadError_ = false;
     chunk_ = nullptr;
@@ -166,6 +171,26 @@ void VM::closeUpvalues(size_t lastStackIndex) {
         } else {
             ++it;
         }
+    }
+}
+
+size_t VM::openFile(const std::string& filename, const std::string& mode) {
+    FileObject* file = new FileObject(filename, mode);
+    files_.push_back(file);
+    return files_.size() - 1;
+}
+
+FileObject* VM::getFile(size_t index) {
+    if (index >= files_.size()) {
+        return nullptr;
+    }
+    return files_[index];
+}
+
+void VM::closeFile(size_t index) {
+    FileObject* file = getFile(index);
+    if (file) {
+        file->close();
     }
 }
 
@@ -389,7 +414,17 @@ bool VM::run(const Chunk& chunk) {
                 // Special handling for strings
                 if (value.isString()) {
                     size_t index = value.asStringIndex();
-                    StringObject* str = rootChunk_->getString(index);
+                    StringObject* str = nullptr;
+
+                    // Check if it's a runtime string or compile-time string
+                    if (value.isRuntimeString()) {
+                        // Runtime string from VM pool
+                        str = getString(index);
+                    } else {
+                        // Compile-time string from chunk pool
+                        str = rootChunk_->getString(index);
+                    }
+
                     if (str) {
                         std::cout << str->chars() << std::endl;
                     } else {
@@ -620,6 +655,110 @@ bool VM::run(const Chunk& chunk) {
                     table->set(key, value);
                 }
                 // Note: SET_TABLE doesn't leave anything on stack
+                break;
+            }
+
+            case OpCode::OP_IO_OPEN: {
+                // Pop mode and filename strings
+                Value modeVal = pop();
+                Value filenameVal = pop();
+
+                if (!modeVal.isString() || !filenameVal.isString()) {
+                    runtimeError("io_open requires string arguments");
+                    push(Value::nil());
+                    break;
+                }
+
+                // Get actual strings from chunk's string pool
+                StringObject* filenameStr = rootChunk_->getString(filenameVal.asStringIndex());
+                StringObject* modeStr = rootChunk_->getString(modeVal.asStringIndex());
+
+                if (!filenameStr || !modeStr) {
+                    runtimeError("Invalid string in io_open");
+                    push(Value::nil());
+                    break;
+                }
+
+                // Open file
+                size_t fileIndex = openFile(filenameStr->chars(), modeStr->chars());
+                FileObject* file = getFile(fileIndex);
+
+                if (!file || !file->isOpen()) {
+                    push(Value::nil());
+                } else {
+                    push(Value::file(fileIndex));
+                }
+                break;
+            }
+
+            case OpCode::OP_IO_WRITE: {
+                // Pop data and file handle
+                Value dataVal = pop();
+                Value fileVal = pop();
+
+                if (!fileVal.isFile()) {
+                    runtimeError("io_write requires file handle");
+                    break;
+                }
+
+                if (!dataVal.isString()) {
+                    runtimeError("io_write requires string data");
+                    break;
+                }
+
+                FileObject* file = getFile(fileVal.asFileIndex());
+                StringObject* dataStr = rootChunk_->getString(dataVal.asStringIndex());
+
+                if (!file || !dataStr) {
+                    runtimeError("Invalid file or string in io_write");
+                    break;
+                }
+
+                if (!file->write(dataStr->chars())) {
+                    runtimeError("Failed to write to file");
+                    push(Value::boolean(false));
+                } else {
+                    push(Value::boolean(true));
+                }
+                break;
+            }
+
+            case OpCode::OP_IO_READ: {
+                // Pop file handle
+                Value fileVal = pop();
+
+                if (!fileVal.isFile()) {
+                    runtimeError("io_read requires file handle");
+                    push(Value::nil());
+                    break;
+                }
+
+                FileObject* file = getFile(fileVal.asFileIndex());
+                if (!file) {
+                    runtimeError("Invalid file handle");
+                    push(Value::nil());
+                    break;
+                }
+
+                // Read entire file
+                std::string content = file->readAll();
+                size_t stringIndex = internString(content);
+                push(Value::runtimeString(stringIndex));
+                break;
+            }
+
+            case OpCode::OP_IO_CLOSE: {
+                // Pop file handle
+                Value fileVal = pop();
+
+                if (!fileVal.isFile()) {
+                    runtimeError("io_close requires file handle");
+                    push(Value::nil());
+                    break;
+                }
+
+                closeFile(fileVal.asFileIndex());
+                push(Value::nil());
                 break;
             }
 

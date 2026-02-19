@@ -1,0 +1,50 @@
+#ifndef LUA_FILE_HPP
+#define LUA_FILE_HPP
+
+#include "common/common.hpp"
+#include "value/value.hpp"
+#include <fstream>
+#include <string>
+#include <memory>
+
+// FileObject: Represents an open file handle
+// Wraps C++ fstream for file I/O operations
+
+class FileObject {
+public:
+    // Open file with mode ("r" = read, "w" = write, "a" = append)
+    FileObject(const std::string& filename, const std::string& mode);
+    ~FileObject();
+
+    // Disable copy, allow move
+    FileObject(const FileObject&) = delete;
+    FileObject& operator=(const FileObject&) = delete;
+    FileObject(FileObject&&) = default;
+    FileObject& operator=(FileObject&&) = default;
+
+    // Check if file is open
+    bool isOpen() const;
+
+    // Write string to file
+    bool write(const std::string& data);
+
+    // Read entire file contents
+    std::string readAll();
+
+    // Read one line
+    std::string readLine();
+
+    // Close file
+    void close();
+
+    // Get filename for debugging
+    const std::string& filename() const { return filename_; }
+
+private:
+    std::string filename_;
+    std::string mode_;
+    std::unique_ptr<std::fstream> stream_;
+    bool isOpen_;
+};
+
+#endif // LUA_FILE_HPP
