@@ -174,6 +174,13 @@ void CodeGenerator::visitVariable(VariableExprNode* node) {
     emitByte(static_cast<uint8_t>(nameIndex));
 }
 
+void CodeGenerator::visitVararg(VarargExprNode* node) {
+    setLine(node->line());
+
+    // Emit opcode to get all varargs
+    emitOpCode(OpCode::OP_GET_VARARG);
+}
+
 void CodeGenerator::visitPrintStmt(PrintStmtNode* node) {
     setLine(node->line());
 
@@ -795,12 +802,13 @@ void CodeGenerator::visitFunctionDecl(FunctionDeclNode* node) {
     // Restore outer compiler state
     popCompilerState();
 
-    // Create FunctionObject with upvalue count
+    // Create FunctionObject with upvalue count and varargs flag
     auto func = new FunctionObject(
         node->name(),
         node->params().size(),
         std::move(functionChunk),
-        capturedUpvalues.size()
+        capturedUpvalues.size(),
+        node->hasVarargs()
     );
 
     // Add function to chunk's function pool and get its index

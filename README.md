@@ -30,6 +30,7 @@ A Lua implementation in C++ featuring a stack-based bytecode virtual machine wit
   - **Recursion**: Full recursive function support
   - **Closures**: Functions can capture variables from enclosing scopes (upvalues)
   - **Nested Functions**: Functions can be defined inside other functions
+  - **Variadic Functions**: Functions can accept variable arguments with `...`
 - **Arithmetic Operations**: +, -, *, /, % (modulo), ^ (power)
 - **Comparison Operations**: ==, ~=, <, <=, >, >= (Lua-compliant ~= operator)
 - **Unary Operations**: - (negation), not
@@ -443,6 +444,65 @@ io_close(infile)
 print(data)  -- Line 1 Line 2
 ```
 
+### Variadic Functions
+
+#### Function with Only Varargs
+
+```lua
+-- Accepts any number of arguments
+function printAll(...)
+    print(...)
+end
+
+printAll()           -- nil
+printAll(1)          -- 1
+printAll(1, 2, 3)    -- 1 2 3
+```
+
+#### Mixed Parameters and Varargs
+
+```lua
+-- Regular parameters followed by varargs
+function greet(name, ...)
+    print(name)
+    print(...)
+end
+
+greet("Alice")              -- Alice nil
+greet("Bob", "Hello")       -- Bob Hello
+greet("Charlie", 1, 2, 3)   -- Charlie 1 2 3
+```
+
+#### Using Varargs in Expressions
+
+```lua
+-- Get first vararg
+function getFirst(...)
+    local first = ...
+    return first
+end
+
+print(getFirst(42))        -- 42
+print(getFirst(10, 20))    -- 10
+
+-- Count demonstration
+function acceptAny(...)
+    print(1)  -- Always prints 1 regardless of args
+end
+
+acceptAny()
+acceptAny(1)
+acceptAny(1, 2, 3)
+-- Output: 1 1 1
+```
+
+#### Varargs Notes
+
+- The `...` must be the last parameter in function signature
+- In expressions, `...` expands to all varargs
+- With zero varargs, `...` evaluates to nil
+- Varargs work with closures and nested functions
+
 ### Tables (Hash Maps)
 
 #### Creating Tables
@@ -644,6 +704,7 @@ Uses **NaN-boxing** technique:
 | OP_IO_WRITE | Write to file: pop data and file handle |
 | OP_IO_READ | Read from file: pop file handle, push contents |
 | OP_IO_CLOSE | Close file: pop file handle |
+| OP_GET_VARARG | Push all varargs from current frame (or nil if none) |
 | OP_RETURN | End execution |
 
 ### Closures and Upvalues
@@ -707,8 +768,8 @@ Recursive descent with proper operator precedence:
 - ✅ Call frames and recursion
 - ✅ Closures and upvalues
 - ✅ Multiple return values (in single-value contexts)
+- ✅ Variadic functions (...)
 - ⏳ Multiple assignment (local a, b = func())
-- ⏳ Variadic functions (...)
 
 ### Phase 4: Objects & Memory (IN PROGRESS)
 - ✅ String objects with interning

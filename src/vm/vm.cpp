@@ -520,8 +520,16 @@ bool VM::run(const Chunk& chunk) {
 
                 FunctionObject* function = closure->function();
 
-                if (argCount != function->arity()) {
-                    runtimeError("Expected " + std::to_string(function->arity()) +
+                // Check argument count
+                int arity = function->arity();
+                bool hasVarargs = function->hasVarargs();
+
+                if (!hasVarargs && argCount != arity) {
+                    runtimeError("Expected " + std::to_string(arity) +
+                                 " arguments but got " + std::to_string(argCount));
+                    break;
+                } else if (hasVarargs && argCount < arity) {
+                    runtimeError("Expected at least " + std::to_string(arity) +
                                  " arguments but got " + std::to_string(argCount));
                     break;
                 }
@@ -531,6 +539,14 @@ bool VM::run(const Chunk& chunk) {
                     break;
                 }
 
+                // Calculate varargs if function accepts them
+                uint8_t varargCount = 0;
+                size_t varargBase = 0;
+                if (hasVarargs && argCount > arity) {
+                    varargCount = argCount - arity;
+                    varargBase = stack_.size() - varargCount;
+                }
+
                 // Create new call frame
                 CallFrame frame;
                 frame.closure = closure;
@@ -538,6 +554,8 @@ bool VM::run(const Chunk& chunk) {
                 frame.ip = ip_;  // Save current IP
                 frame.stackBase = stack_.size() - argCount;
                 frame.retCount = retCount;  // Store expected return count
+                frame.varargCount = varargCount;
+                frame.varargBase = varargBase;
                 frames_.push_back(frame);
 
                 // Switch to function's chunk
@@ -759,6 +777,30 @@ bool VM::run(const Chunk& chunk) {
 
                 closeFile(fileVal.asFileIndex());
                 push(Value::nil());
+                break;
+            }
+
+            case OpCode::OP_GET_VARARG: {
+                // Push all varargs onto the stack
+                if (frames_.empty()) {
+                    runtimeError("Cannot access varargs outside of a function");
+                    break;
+                }
+
+                CallFrame& frame = currentFrame();
+                uint8_t varargCount = frame.varargCount;
+                size_t varargBase = frame.varargBase;
+
+                // Push all varargs
+                for (uint8_t i = 0; i < varargCount; i++) {
+                    push(stack_[varargBase + i]);
+                }
+
+                // If no varargs, push nil
+                if (varargCount == 0) {
+                    push(Value::nil());
+                }
+
                 break;
             }
 

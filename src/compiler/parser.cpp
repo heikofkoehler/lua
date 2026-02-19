@@ -388,8 +388,16 @@ std::unique_ptr<StmtNode> Parser::functionDeclaration() {
     consume(TokenType::LEFT_PAREN, "Expected '(' after function name");
 
     std::vector<std::string> params;
+    bool hasVarargs = false;
+
     if (!check(TokenType::RIGHT_PAREN)) {
         do {
+            // Check for varargs (...)
+            if (match(TokenType::DOT_DOT_DOT)) {
+                hasVarargs = true;
+                break;  // ... must be last parameter
+            }
+
             if (!check(TokenType::IDENTIFIER)) {
                 errorAtCurrent("Expected parameter name");
                 return nullptr;
@@ -409,7 +417,7 @@ std::unique_ptr<StmtNode> Parser::functionDeclaration() {
 
     consume(TokenType::END, "Expected 'end' after function body");
 
-    return std::make_unique<FunctionDeclNode>(name, std::move(params), std::move(body), line);
+    return std::make_unique<FunctionDeclNode>(name, std::move(params), std::move(body), hasVarargs, line);
 }
 
 std::unique_ptr<StmtNode> Parser::returnStatement() {
@@ -613,6 +621,11 @@ std::unique_ptr<ExprNode> Parser::primary() {
     if (match(TokenType::STRING)) {
         // String content (lexer already stripped quotes)
         return std::make_unique<StringLiteralNode>(previous_.lexeme, line);
+    }
+
+    // Varargs
+    if (match(TokenType::DOT_DOT_DOT)) {
+        return std::make_unique<VarargExprNode>(line);
     }
 
     // Table constructor

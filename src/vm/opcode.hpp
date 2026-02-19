@@ -67,6 +67,9 @@ enum class OpCode : uint8_t {
     OP_IO_READ,     // Read from file: pop file handle, push data
     OP_IO_CLOSE,    // Close file: pop file handle
 
+    // Varargs
+    OP_GET_VARARG,  // Push all varargs onto stack [count: uint8_t]
+
     OP_RETURN,      // Return from current chunk
 };
 
@@ -113,6 +116,7 @@ inline const char* opcodeName(OpCode op) {
         case OpCode::OP_IO_WRITE:      return "OP_IO_WRITE";
         case OpCode::OP_IO_READ:       return "OP_IO_READ";
         case OpCode::OP_IO_CLOSE:      return "OP_IO_CLOSE";
+        case OpCode::OP_GET_VARARG:    return "OP_GET_VARARG";
         case OpCode::OP_RETURN:        return "OP_RETURN";
         default:                     return "UNKNOWN";
     }

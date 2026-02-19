@@ -108,6 +108,14 @@ private:
     std::string name_;
 };
 
+// Vararg expression: ... (variable arguments)
+class VarargExprNode : public ExprNode {
+public:
+    VarargExprNode(int line) : ExprNode(line) {}
+
+    void accept(ASTVisitor& visitor) override;
+};
+
 // Function call: func(args)
 class CallExprNode : public ExprNode {
 public:
@@ -386,20 +394,23 @@ public:
     FunctionDeclNode(const std::string& name,
                      std::vector<std::string> params,
                      std::vector<std::unique_ptr<StmtNode>> body,
+                     bool hasVarargs,
                      int line)
         : StmtNode(line), name_(name), params_(std::move(params)),
-          body_(std::move(body)) {}
+          body_(std::move(body)), hasVarargs_(hasVarargs) {}
 
     void accept(ASTVisitor& visitor) override;
 
     const std::string& name() const { return name_; }
     const std::vector<std::string>& params() const { return params_; }
     const std::vector<std::unique_ptr<StmtNode>>& body() const { return body_; }
+    bool hasVarargs() const { return hasVarargs_; }
 
 private:
     std::string name_;
     std::vector<std::string> params_;
     std::vector<std::unique_ptr<StmtNode>> body_;
+    bool hasVarargs_;
 };
 
 // Return statement: return expr1, expr2, ...
@@ -453,6 +464,7 @@ public:
     virtual void visitUnary(UnaryNode* node) = 0;
     virtual void visitBinary(BinaryNode* node) = 0;
     virtual void visitVariable(VariableExprNode* node) = 0;
+    virtual void visitVararg(VarargExprNode* node) = 0;
     virtual void visitCall(CallExprNode* node) = 0;
     virtual void visitTableConstructor(TableConstructorNode* node) = 0;
     virtual void visitIndexExpr(IndexExprNode* node) = 0;
@@ -491,6 +503,10 @@ inline void BinaryNode::accept(ASTVisitor& visitor) {
 
 inline void VariableExprNode::accept(ASTVisitor& visitor) {
     visitor.visitVariable(this);
+}
+
+inline void VarargExprNode::accept(ASTVisitor& visitor) {
+    visitor.visitVararg(this);
 }
 
 inline void CallExprNode::accept(ASTVisitor& visitor) {
