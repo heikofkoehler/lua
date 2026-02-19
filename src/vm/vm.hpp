@@ -4,6 +4,8 @@
 #include "common/common.hpp"
 #include "value/value.hpp"
 #include "value/function.hpp"
+#include "value/closure.hpp"
+#include "value/upvalue.hpp"
 #include "value/string.hpp"
 #include "value/table.hpp"
 #include "compiler/chunk.hpp"
@@ -13,7 +15,7 @@
 
 // Call frame for function calls
 struct CallFrame {
-    FunctionObject* function;   // Function being executed
+    ClosureObject* closure;     // Closure being executed (function + upvalues)
     const Chunk* callerChunk;   // Chunk to return to
     size_t ip;                  // Instruction pointer to return to
     size_t stackBase;           // Where this frame's locals start on value stack
@@ -48,6 +50,15 @@ public:
     // Table operations
     size_t createTable();
     TableObject* getTable(size_t index);
+
+    // Closure operations
+    size_t createClosure(FunctionObject* function);
+    ClosureObject* getClosure(size_t index);
+
+    // Upvalue operations
+    size_t captureUpvalue(size_t stackIndex);
+    UpvalueObject* getUpvalue(size_t index);
+    void closeUpvalues(size_t lastStackIndex);
 
 private:
     // Stack operations
@@ -86,6 +97,9 @@ private:
     std::vector<StringObject*> strings_;  // String pool (owns string objects, interned)
     std::unordered_map<uint32_t, size_t> stringIndices_;  // Hash to index mapping for interning
     std::vector<TableObject*> tables_;  // Table pool (owns table objects)
+    std::vector<ClosureObject*> closures_;  // Closure pool (owns closure objects)
+    std::vector<UpvalueObject*> upvalues_;  // Upvalue pool (owns upvalue objects)
+    std::vector<UpvalueObject*> openUpvalues_;  // Open upvalues (sorted by stack index)
     bool hadError_;               // Error flag
 
     // Stack size limits
