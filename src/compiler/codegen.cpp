@@ -2,7 +2,7 @@
 #include "value/function.hpp"
 
 CodeGenerator::CodeGenerator()
-    : chunk_(nullptr), currentLine_(1), scopeDepth_(0), localCount_(0) {}
+    : chunk_(nullptr), currentLine_(1), scopeDepth_(0), localCount_(0), enclosingCompiler_(nullptr) {}
 
 std::unique_ptr<Chunk> CodeGenerator::generate(ProgramNode* program) {
     chunk_ = std::make_unique<Chunk>();
@@ -147,21 +147,31 @@ void CodeGenerator::visitBinary(BinaryNode* node) {
 void CodeGenerator::visitVariable(VariableExprNode* node) {
     setLine(node->line());
 
-    // Try to resolve as local variable first
+    // Three-level resolution: local → upvalue → global
+
+    // 1. Try to resolve as local variable
     int slot = resolveLocal(node->name());
     if (slot != -1) {
-        // It's a local variable
         emitOpCode(OpCode::OP_GET_LOCAL);
         emitByte(static_cast<uint8_t>(slot));
-    } else {
-        // It's a global variable
-        size_t nameIndex = currentChunk()->addIdentifier(node->name());
-        if (nameIndex > UINT8_MAX) {
-            throw CompileError("Too many identifiers in one chunk", currentLine_);
-        }
-        emitOpCode(OpCode::OP_GET_GLOBAL);
-        emitByte(static_cast<uint8_t>(nameIndex));
+        return;
     }
+
+    // 2. Try to resolve as upvalue (captured from enclosing scope)
+    int upvalue = resolveUpvalue(node->name());
+    if (upvalue != -1) {
+        emitOpCode(OpCode::OP_GET_UPVALUE);
+        emitByte(static_cast<uint8_t>(upvalue));
+        return;
+    }
+
+    // 3. Fall back to global variable
+    size_t nameIndex = currentChunk()->addIdentifier(node->name());
+    if (nameIndex > UINT8_MAX) {
+        throw CompileError("Too many identifiers in one chunk", currentLine_);
+    }
+    emitOpCode(OpCode::OP_GET_GLOBAL);
+    emitByte(static_cast<uint8_t>(nameIndex));
 }
 
 void CodeGenerator::visitPrintStmt(PrintStmtNode* node) {
@@ -190,23 +200,33 @@ void CodeGenerator::visitAssignmentStmt(AssignmentStmtNode* node) {
     // Compile the value
     node->value()->accept(*this);
 
-    // Try to resolve as local variable first
+    // Three-level resolution: local → upvalue → global
+
+    // 1. Try to resolve as local variable
     int slot = resolveLocal(node->name());
     if (slot != -1) {
-        // It's a local variable
         emitOpCode(OpCode::OP_SET_LOCAL);
         emitByte(static_cast<uint8_t>(slot));
-    } else {
-        // It's a global variable
-        size_t nameIndex = currentChunk()->addIdentifier(node->name());
-        if (nameIndex > UINT8_MAX) {
-            throw CompileError("Too many identifiers in one chunk", currentLine_);
-        }
-        emitOpCode(OpCode::OP_SET_GLOBAL);
-        emitByte(static_cast<uint8_t>(nameIndex));
+        emitOpCode(OpCode::OP_POP);
+        return;
     }
 
-    // Pop the assigned value (assignment is a statement, not an expression)
+    // 2. Try to resolve as upvalue
+    int upvalue = resolveUpvalue(node->name());
+    if (upvalue != -1) {
+        emitOpCode(OpCode::OP_SET_UPVALUE);
+        emitByte(static_cast<uint8_t>(upvalue));
+        emitOpCode(OpCode::OP_POP);
+        return;
+    }
+
+    // 3. Fall back to global variable
+    size_t nameIndex = currentChunk()->addIdentifier(node->name());
+    if (nameIndex > UINT8_MAX) {
+        throw CompileError("Too many identifiers in one chunk", currentLine_);
+    }
+    emitOpCode(OpCode::OP_SET_GLOBAL);
+    emitByte(static_cast<uint8_t>(nameIndex));
     emitOpCode(OpCode::OP_POP);
 }
 
@@ -680,11 +700,19 @@ void CodeGenerator::visitFunctionDecl(FunctionDeclNode* node) {
     // Get compiled function chunk (don't call endScope - cleanup is handled by OP_RETURN_VALUE)
     auto functionChunk = std::move(chunk_);
 
+    // Capture upvalues BEFORE restoring compiler state
+    std::vector<Upvalue> capturedUpvalues = upvalues_;
+
     // Restore outer compiler state
     popCompilerState();
 
-    // Create FunctionObject
-    auto func = new FunctionObject(node->name(), node->params().size(), std::move(functionChunk));
+    // Create FunctionObject with upvalue count
+    auto func = new FunctionObject(
+        node->name(),
+        node->params().size(),
+        std::move(functionChunk),
+        capturedUpvalues.size()
+    );
 
     // Add function to chunk's function pool and get its index
     size_t funcIndex = currentChunk()->addFunction(func);
@@ -699,6 +727,12 @@ void CodeGenerator::visitFunctionDecl(FunctionDeclNode* node) {
     // Emit code to load function and store as global
     emitOpCode(OpCode::OP_CLOSURE);
     emitByte(static_cast<uint8_t>(constantIndex));
+
+    // Emit upvalue descriptors (for runtime closure creation)
+    for (const Upvalue& uv : capturedUpvalues) {
+        emitByte(uv.isLocal ? 1 : 0);  // 1 = local, 0 = upvalue
+        emitByte(uv.index);
+    }
 
     // Store in global variable
     size_t nameIndex = currentChunk()->addIdentifier(node->name());
@@ -772,6 +806,7 @@ void CodeGenerator::addLocal(const std::string& name) {
     local.name = name;
     local.depth = scopeDepth_;
     local.slot = localCount_++;
+    local.isCaptured = false;  // Not captured by default
     locals_.push_back(local);
 }
 
@@ -785,6 +820,65 @@ int CodeGenerator::resolveLocal(const std::string& name) {
     return -1;  // Not found, must be global
 }
 
+int CodeGenerator::resolveUpvalue(const std::string& name) {
+    // Can't have upvalues if we're at the top level
+    if (enclosingCompiler_ == nullptr) {
+        return -1;
+    }
+
+    // Try to find variable in enclosing function's locals
+    for (int i = static_cast<int>(enclosingCompiler_->locals.size()) - 1; i >= 0; i--) {
+        if (enclosingCompiler_->locals[i].name == name) {
+            // Mark the local as captured
+            enclosingCompiler_->locals[i].isCaptured = true;
+            // Add upvalue that captures this local
+            return addUpvalue(enclosingCompiler_->locals[i].slot, true);
+        }
+    }
+
+    // Not found in immediate parent, try parent's upvalues (recursive)
+    // We need to temporarily set enclosingCompiler to search recursively
+    if (enclosingCompiler_->enclosing != nullptr) {
+        // Save current enclosing
+        CompilerState* savedEnclosing = enclosingCompiler_;
+        enclosingCompiler_ = enclosingCompiler_->enclosing;
+
+        int upvalue = resolveUpvalue(name);
+
+        // Restore enclosing
+        enclosingCompiler_ = savedEnclosing;
+
+        if (upvalue != -1) {
+            // Add upvalue that captures parent's upvalue
+            return addUpvalue(upvalue, false);
+        }
+    }
+
+    return -1;  // Not found in any enclosing scope
+}
+
+int CodeGenerator::addUpvalue(uint8_t index, bool isLocal) {
+    // Check if we already have this upvalue (deduplicate)
+    for (size_t i = 0; i < upvalues_.size(); i++) {
+        if (upvalues_[i].index == index && upvalues_[i].isLocal == isLocal) {
+            return i;  // Reuse existing upvalue
+        }
+    }
+
+    // Check upvalue limit
+    if (upvalues_.size() >= 256) {
+        throw CompileError("Too many upvalues in function", currentLine_);
+    }
+
+    // Add new upvalue
+    Upvalue uv;
+    uv.index = index;
+    uv.isLocal = isLocal;
+    upvalues_.push_back(uv);
+
+    return upvalues_.size() - 1;
+}
+
 void CodeGenerator::beginScope() {
     scopeDepth_++;
 }
@@ -794,7 +888,12 @@ void CodeGenerator::endScope() {
 
     // Pop locals from this scope
     while (!locals_.empty() && locals_.back().depth > scopeDepth_) {
-        emitOpCode(OpCode::OP_POP);
+        if (locals_.back().isCaptured) {
+            // Close the upvalue instead of just popping
+            emitOpCode(OpCode::OP_CLOSE_UPVALUE);
+        } else {
+            emitOpCode(OpCode::OP_POP);
+        }
         locals_.pop_back();
         localCount_--;
     }
@@ -805,14 +904,20 @@ void CodeGenerator::pushCompilerState() {
     CompilerState state;
     state.chunk = std::move(chunk_);
     state.locals = std::move(locals_);
+    state.upvalues = std::move(upvalues_);
     state.scopeDepth = scopeDepth_;
     state.localCount = localCount_;
+    state.enclosing = enclosingCompiler_;
 
     compilerStack_.push_back(std::move(state));
+
+    // Set enclosing compiler for nested function
+    enclosingCompiler_ = &compilerStack_.back();
 
     // Reset for new function
     chunk_ = std::make_unique<Chunk>();
     locals_.clear();
+    upvalues_.clear();
     scopeDepth_ = 0;
     localCount_ = 0;
 }
@@ -828,6 +933,8 @@ void CodeGenerator::popCompilerState() {
 
     chunk_ = std::move(state.chunk);
     locals_ = std::move(state.locals);
+    upvalues_ = std::move(state.upvalues);
     scopeDepth_ = state.scopeDepth;
     localCount_ = state.localCount;
+    enclosingCompiler_ = state.enclosing;
 }
