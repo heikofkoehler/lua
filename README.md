@@ -40,6 +40,12 @@ A Lua implementation in C++ featuring a stack-based bytecode virtual machine wit
   - **For Loops**: Numeric for loops with step support, and generic for-in loops with iterators
   - **Break Statement**: Exit loops early
 - **Print Statement**: Built-in print() function
+- **File I/O**:
+  - **io_open(filename, mode)**: Open files in read, write, or append mode
+  - **io_write(file, data)**: Write string data to files
+  - **io_read(file)**: Read entire file contents
+  - **io_close(file)**: Close file handles
+  - **Multiple modes**: "r", "w", "a", "r+", "w+", "a+"
 - **REPL**: Interactive read-eval-print loop
 - **File Execution**: Run Lua scripts from files
 
@@ -387,6 +393,56 @@ setter(100)
 print(getter())  -- 100
 ```
 
+### File I/O
+
+#### Writing to Files
+
+```lua
+-- Open file for writing
+local file = io_open("output.txt", "w")
+io_write(file, "Hello from Lua!")
+io_write(file, " ")
+io_write(file, "This is line 2")
+io_close(file)
+```
+
+#### Reading from Files
+
+```lua
+-- Open file for reading
+local file = io_open("input.txt", "r")
+local content = io_read(file)
+io_close(file)
+
+print(content)  -- Prints entire file contents
+```
+
+#### Append Mode
+
+```lua
+-- Open file for appending
+local file = io_open("log.txt", "a")
+io_write(file, "New log entry")
+io_close(file)
+```
+
+#### Complete Example
+
+```lua
+-- Write data
+local outfile = io_open("data.txt", "w")
+io_write(outfile, "Line 1")
+io_write(outfile, " Line 2")
+io_close(outfile)
+
+-- Read it back
+local infile = io_open("data.txt", "r")
+local data = io_read(infile)
+io_close(infile)
+
+print(data)  -- Line 1 Line 2
+```
+
 ### Tables (Hash Maps)
 
 #### Creating Tables
@@ -512,7 +568,9 @@ lua/
 │   │   ├── closure.hpp         # Closure objects (function + upvalues)
 │   │   ├── upvalue.hpp         # Upvalue objects (captured variables)
 │   │   ├── string.hpp          # String objects with interning
-│   │   └── table.hpp           # Table objects (hash maps)
+│   │   ├── table.hpp           # Table objects (hash maps)
+│   │   ├── file.hpp            # File objects for I/O
+│   │   └── file.cpp
 │   ├── compiler/               # Compilation pipeline
 │   │   ├── token.hpp
 │   │   ├── lexer.hpp
@@ -542,16 +600,19 @@ lua/
 Uses **NaN-boxing** technique:
 - All values stored in 64-bit words
 - Numbers: IEEE 754 double-precision floats
-- Other types: Special NaN patterns with type tags
+- Other types: Special NaN patterns with type tags (4-bit tag field)
   - Nil: TAG_NIL (1)
   - Boolean: TAG_BOOL (2)
   - Function: TAG_FUNCTION (3) - stores function index
-  - String: TAG_STRING (4) - stores string index
+  - String: TAG_STRING (4) - stores compile-time string index (from chunk)
   - Table: TAG_TABLE (5) - stores table index
   - Closure: TAG_CLOSURE (6) - stores closure index (function + captured upvalues)
+  - File: TAG_FILE (7) - stores file handle index
+  - Runtime String: TAG_RUNTIME_STRING (8) - stores runtime string index (from VM pool)
 - Fast type checking via bit operations
 - Objects stored as indices into pools for safe pointer management
 - No raw pointers in values (prevents corruption)
+- Dual string system: compile-time strings in chunk, runtime strings in VM pool
 
 ### Bytecode Instructions
 
@@ -579,6 +640,10 @@ Uses **NaN-boxing** technique:
 | OP_PRINT | Print value |
 | OP_POP | Discard stack top |
 | OP_DUP | Duplicate stack top |
+| OP_IO_OPEN | Open file: pop mode and filename, push file handle |
+| OP_IO_WRITE | Write to file: pop data and file handle |
+| OP_IO_READ | Read from file: pop file handle, push contents |
+| OP_IO_CLOSE | Close file: pop file handle |
 | OP_RETURN | End execution |
 
 ### Closures and Upvalues
@@ -649,11 +714,13 @@ Recursive descent with proper operator precedence:
 - ✅ String objects with interning
 - ✅ Table objects (hash maps) with constructor `{}`, indexing `t[key]`, and assignment `t[key] = value`
 - ✅ Table constructor with initial values: `{1, 2, 3}`, `{x = 10}`, `{[expr] = val}`
+- ✅ File I/O: `io_open`, `io_write`, `io_read`, `io_close`
 - ⏳ Garbage collection (mark-and-sweep)
 
 ### Phase 5: Advanced Features
 - Metatables and metamethods
-- Standard library (string, table, math, io)
+- Extended standard library (string manipulation, table utilities, math functions)
+- String escape sequences (\n, \t, etc.)
 - Module system (require/module)
 - Coroutines
 
