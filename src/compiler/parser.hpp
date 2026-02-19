@@ -60,6 +60,7 @@ private:
     std::unique_ptr<ExprNode> factor();
     std::unique_ptr<ExprNode> power();
     std::unique_ptr<ExprNode> unary();
+    std::unique_ptr<ExprNode> postfix();
     std::unique_ptr<ExprNode> primary();
 };
 

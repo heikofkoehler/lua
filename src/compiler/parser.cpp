@@ -165,36 +165,39 @@ std::unique_ptr<StmtNode> Parser::expressionStatement() {
 
 std::unique_ptr<StmtNode> Parser::assignmentOrExpression() {
     int line = current_.line;
-    std::string varName = current_.lexeme;
-    advance();  // Consume identifier
 
+    // Parse the left-hand side expression (could be variable, function call, or table index)
+    auto expr = expression();
+
+    // Check if it's an assignment
     if (match(TokenType::EQUAL)) {
-        // It's an assignment
-        auto value = expression();
-        return std::make_unique<AssignmentStmtNode>(varName, std::move(value), line);
-    } else if (match(TokenType::LEFT_PAREN)) {
-        // It's a function call
-        std::vector<std::unique_ptr<ExprNode>> args;
+        // Check if the expression is assignable
+        if (auto* varExpr = dynamic_cast<VariableExprNode*>(expr.get())) {
+            // Variable assignment: x = value
+            std::string varName = varExpr->name();
+            auto value = expression();
+            return std::make_unique<AssignmentStmtNode>(varName, std::move(value), line);
+        } else if (auto* indexExpr = dynamic_cast<IndexExprNode*>(expr.get())) {
+            // Index assignment: t[key] = value
+            // We need to extract the table and key from indexExpr, then release ownership
+            // Since we need to move them, we'll create new nodes
+            auto value = expression();
 
-        if (!check(TokenType::RIGHT_PAREN)) {
-            do {
-                args.push_back(expression());
-            } while (match(TokenType::COMMA));
+            // Create IndexAssignmentStmtNode by moving table and key from indexExpr
+            return std::make_unique<IndexAssignmentStmtNode>(
+                indexExpr->releaseTable(),
+                indexExpr->releaseKey(),
+                std::move(value),
+                line
+            );
+        } else {
+            error("Invalid assignment target");
+            return std::make_unique<ExprStmtNode>(std::move(expr), line);
         }
-
-        consume(TokenType::RIGHT_PAREN, "Expected ')' after arguments");
-        auto callExpr = std::make_unique<CallExprNode>(varName, std::move(args), line);
-        return std::make_unique<ExprStmtNode>(std::move(callExpr), line);
-    } else {
-        // It's an expression starting with a variable
-        // Create a variable expression node for the identifier we already consumed
-        auto varExpr = std::make_unique<VariableExprNode>(varName, line);
-
-        // Continue parsing the rest of the expression (if any)
-        // For now, just return it as an expression statement
-        // TODO: Handle cases like x + 1, x.method(), etc.
-        return std::make_unique<ExprStmtNode>(std::move(varExpr), line);
     }
+
+    // Not an assignment, just an expression statement
+    return std::make_unique<ExprStmtNode>(std::move(expr), line);
 }
 
 std::unique_ptr<StmtNode> Parser::localDeclaration() {
@@ -529,7 +532,49 @@ std::unique_ptr<ExprNode> Parser::unary() {
         return std::make_unique<UnaryNode>(op, std::move(operand), line);
     }
 
-    return primary();
+    return postfix();
+}
+
+std::unique_ptr<ExprNode> Parser::postfix() {
+    auto expr = primary();
+
+    // Handle postfix operations: function calls and table indexing
+    while (true) {
+        int line = current_.line;
+
+        // Function call: expr(args)
+        if (match(TokenType::LEFT_PAREN)) {
+            // Only support calls on variable names for now
+            auto* varExpr = dynamic_cast<VariableExprNode*>(expr.get());
+            if (!varExpr) {
+                error("Can only call functions by name");
+                return expr;
+            }
+
+            std::string name = varExpr->name();
+            std::vector<std::unique_ptr<ExprNode>> args;
+
+            if (!check(TokenType::RIGHT_PAREN)) {
+                do {
+                    args.push_back(expression());
+                } while (match(TokenType::COMMA));
+            }
+
+            consume(TokenType::RIGHT_PAREN, "Expected ')' after arguments");
+            expr = std::make_unique<CallExprNode>(name, std::move(args), line);
+        }
+        // Table indexing: expr[key]
+        else if (match(TokenType::LEFT_BRACKET)) {
+            auto key = expression();
+            consume(TokenType::RIGHT_BRACKET, "Expected ']' after table key");
+            expr = std::make_unique<IndexExprNode>(std::move(expr), std::move(key), line);
+        }
+        else {
+            break;
+        }
+    }
+
+    return expr;
 }
 
 std::unique_ptr<ExprNode> Parser::primary() {
@@ -558,26 +603,15 @@ std::unique_ptr<ExprNode> Parser::primary() {
         return std::make_unique<StringLiteralNode>(previous_.lexeme, line);
     }
 
-    // Variable reference or function call
+    // Table constructor
+    if (match(TokenType::LEFT_BRACE)) {
+        consume(TokenType::RIGHT_BRACE, "Expected '}' after table constructor");
+        return std::make_unique<TableConstructorNode>(line);
+    }
+
+    // Variable reference (function calls handled in postfix())
     if (match(TokenType::IDENTIFIER)) {
         std::string name = previous_.lexeme;
-
-        // Check for function call
-        if (match(TokenType::LEFT_PAREN)) {
-            // Parse arguments
-            std::vector<std::unique_ptr<ExprNode>> args;
-
-            if (!check(TokenType::RIGHT_PAREN)) {
-                do {
-                    args.push_back(expression());
-                } while (match(TokenType::COMMA));
-            }
-
-            consume(TokenType::RIGHT_PAREN, "Expected ')' after arguments");
-            return std::make_unique<CallExprNode>(name, std::move(args), line);
-        }
-
-        // Just a variable reference
         return std::make_unique<VariableExprNode>(name, line);
     }
 

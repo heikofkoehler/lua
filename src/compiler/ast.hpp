@@ -147,6 +147,10 @@ public:
     ExprNode* table() const { return table_.get(); }
     ExprNode* key() const { return key_.get(); }
 
+    // Release ownership (for assignment parsing)
+    std::unique_ptr<ExprNode> releaseTable() { return std::move(table_); }
+    std::unique_ptr<ExprNode> releaseKey() { return std::move(key_); }
+
 private:
     std::unique_ptr<ExprNode> table_;
     std::unique_ptr<ExprNode> key_;

@@ -327,6 +327,85 @@ end
 print(fib(6))  -- 8
 ```
 
+### Tables (Hash Maps)
+
+#### Creating Tables
+
+```lua
+local t = {}  -- Empty table
+```
+
+#### Table Assignment and Access
+
+```lua
+local scores = {}
+
+-- Numeric keys
+scores[1] = 100
+scores[2] = 95
+scores[3] = 87
+
+print(scores[1])  -- 100
+print(scores[2])  -- 95
+
+-- String keys
+local person = {}
+person["name"] = "Alice"
+person["age"] = 30
+
+print(person["name"])  -- Alice
+print(person["age"])   -- 30
+
+-- Mixed keys
+local mixed = {}
+mixed[1] = "first"
+mixed["key"] = "value"
+mixed[true] = "boolean key"
+```
+
+#### Tables as Function Return Values
+
+```lua
+function makeData()
+    local t = {}
+    t["x"] = 10
+    t["y"] = 20
+    return t
+end
+
+local data = makeData()
+print(data["x"] + data["y"])  -- 30
+```
+
+#### Tables in Loops
+
+```lua
+local array = {}
+
+-- Populate array
+for i = 1, 5 do
+    array[i] = i * i
+end
+
+-- Print array
+for i = 1, 5 do
+    print(array[i])
+end
+-- Output: 1 4 9 16 25
+```
+
+#### Removing Keys
+
+```lua
+local t = {}
+t["key"] = "value"
+print(t["key"])  -- value
+
+-- Set to nil to remove key
+t["key"] = nil
+print(t["key"])  -- nil
+```
+
 ## Project Structure
 
 ```
@@ -442,8 +521,8 @@ Recursive descent with proper operator precedence:
 
 ### Phase 4: Objects & Memory (IN PROGRESS)
 - ✅ String objects with interning
-- ⏳ Table objects (hash maps) - Core infrastructure complete, parser support pending
-- ⏳ Table constructor syntax `{key = value}`
+- ✅ Table objects (hash maps) with constructor `{}`, indexing `t[key]`, and assignment `t[key] = value`
+- ⏳ Table constructor with initial values `{key = value, ...}`
 - ⏳ Garbage collection (mark-and-sweep)
 
 ### Phase 5: Advanced Features
