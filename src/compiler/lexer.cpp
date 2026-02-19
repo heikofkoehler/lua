@@ -84,6 +84,10 @@ Token Lexer::scanToken() {
 
         case '.':
             if (match('.')) {
+                // Check for third dot (...)
+                if (match('.')) {
+                    return makeToken(TokenType::DOT_DOT_DOT);
+                }
                 return makeToken(TokenType::DOT_DOT);
             } else if (isDigit(peek())) {
                 return number();

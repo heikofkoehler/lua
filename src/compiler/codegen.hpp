@@ -22,6 +22,7 @@ public:
     void visitUnary(UnaryNode* node) override;
     void visitBinary(BinaryNode* node) override;
     void visitVariable(VariableExprNode* node) override;
+    void visitVararg(VarargExprNode* node) override;
     void visitCall(CallExprNode* node) override;
     void visitTableConstructor(TableConstructorNode* node) override;
     void visitIndexExpr(IndexExprNode* node) override;
