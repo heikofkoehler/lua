@@ -59,5 +59,10 @@ void Value::print(std::ostream& os) const {
             os << "<file:" << fileIndex << ">";
             break;
         }
+
+        case Type::NATIVE_FUNCTION: {
+            os << "<native function>";
+            break;
+        }
     }
 }

@@ -28,6 +28,12 @@ struct CallFrame {
 // Virtual Machine: Stack-based bytecode interpreter
 // Executes compiled Lua bytecode
 
+// Native function signature
+// Returns true on success, false on error
+// Pops argCount arguments from stack, pushes results onto stack
+class VM;
+using NativeFunction = bool (*)(VM* vm, int argCount);
+
 class VM {
 public:
     VM();
@@ -69,12 +75,22 @@ public:
     FileObject* getFile(size_t index);
     void closeFile(size_t index);
 
-private:
-    // Stack operations
+    // Native function operations
+    size_t registerNativeFunction(const std::string& name, NativeFunction func);
+    NativeFunction getNativeFunction(size_t index);
+    void addNativeToTable(TableObject* table, const char* name, NativeFunction func);
+    void initStandardLibrary();
+
+    // Root chunk access (for native functions to access compile-time strings)
+    const Chunk* rootChunk() const { return rootChunk_; }
+
+    // Public stack operations (for native functions to use)
     void push(const Value& value);
     Value pop();
     Value peek(size_t distance = 0) const;
+    void runtimeError(const std::string& message);
 
+private:
     // Arithmetic operations
     Value add(const Value& a, const Value& b);
     Value subtract(const Value& a, const Value& b);
@@ -92,9 +108,6 @@ private:
     // Logical operations
     Value logicalNot(const Value& a);
 
-    // Runtime error reporting
-    void runtimeError(const std::string& message);
-
     // Execution state
     const Chunk* chunk_;          // Current chunk being executed
     const Chunk* rootChunk_;      // Root chunk (for function lookups)
@@ -110,7 +123,9 @@ private:
     std::vector<UpvalueObject*> upvalues_;  // Upvalue pool (owns upvalue objects)
     std::vector<UpvalueObject*> openUpvalues_;  // Open upvalues (sorted by stack index)
     std::vector<FileObject*> files_;  // File pool (owns file objects)
+    std::vector<NativeFunction> nativeFunctions_;  // Native function table
     bool hadError_;               // Error flag
+    bool stdlibInitialized_;      // Whether standard library has been initialized
 
     // Stack size limits
     static constexpr size_t STACK_MAX = 256;
