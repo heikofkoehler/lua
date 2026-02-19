@@ -47,5 +47,11 @@ void Value::print(std::ostream& os) const {
             os << "<table:" << tableIndex << ">";
             break;
         }
+
+        case Type::CLOSURE: {
+            size_t closureIndex = asClosureIndex();
+            os << "<closure:" << closureIndex << ">";
+            break;
+        }
     }
 }

@@ -29,7 +29,8 @@ public:
         NUMBER,
         FUNCTION,
         STRING,
-        TABLE
+        TABLE,
+        CLOSURE
     };
 
     // Constructors (private, use factory methods)
@@ -73,6 +74,12 @@ public:
         return Value(QNAN | TAG_TABLE | (tableIndex << 3));
     }
 
+    static Value closure(size_t closureIndex) {
+        // Encode closure index (not pointer!)
+        // Index fits easily in lower 48 bits
+        return Value(QNAN | TAG_CLOSURE | (closureIndex << 3));
+    }
+
     // Type checking
     bool isNil() const {
         return (bits_ & (QNAN | TAG_MASK)) == (QNAN | TAG_NIL);
@@ -98,12 +105,17 @@ public:
         return (bits_ & (QNAN | TAG_MASK)) == (QNAN | TAG_TABLE);
     }
 
+    bool isClosure() const {
+        return (bits_ & (QNAN | TAG_MASK)) == (QNAN | TAG_CLOSURE);
+    }
+
     Type type() const {
         if (isNumber()) return Type::NUMBER;
         if (isBool()) return Type::BOOL;
         if (isFunctionObject()) return Type::FUNCTION;
         if (isString()) return Type::STRING;
         if (isTable()) return Type::TABLE;
+        if (isClosure()) return Type::CLOSURE;
         return Type::NIL;
     }
 
@@ -151,6 +163,15 @@ public:
         return static_cast<size_t>(index);
     }
 
+    size_t asClosureIndex() const {
+        if (!isClosure()) {
+            throw RuntimeError("Value is not a closure");
+        }
+        // Extract closure index (shift right by 3 to undo the encoding)
+        uint64_t index = (bits_ & 0x0000FFFFFFFFFFFFULL) >> 3;
+        return static_cast<size_t>(index);
+    }
+
     // Equality
     bool operator==(const Value& other) const {
         // Special handling for NaN
@@ -193,6 +214,7 @@ private:
     static constexpr uint64_t TAG_FUNCTION = 3;
     static constexpr uint64_t TAG_STRING = 4;
     static constexpr uint64_t TAG_TABLE = 5;
+    static constexpr uint64_t TAG_CLOSURE = 6;
     static constexpr uint64_t TAG_MASK = 7;
 };
 

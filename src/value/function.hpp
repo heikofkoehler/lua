@@ -11,17 +11,19 @@
 
 class FunctionObject {
 public:
-    FunctionObject(const std::string& name, int arity, std::unique_ptr<Chunk> chunk)
-        : name_(name), arity_(arity), chunk_(std::move(chunk)) {}
+    FunctionObject(const std::string& name, int arity, std::unique_ptr<Chunk> chunk, int upvalueCount = 0)
+        : name_(name), arity_(arity), chunk_(std::move(chunk)), upvalueCount_(upvalueCount) {}
 
     const std::string& name() const { return name_; }
     int arity() const { return arity_; }
     Chunk* chunk() const { return chunk_.get(); }
+    int upvalueCount() const { return upvalueCount_; }
 
 private:
     std::string name_;
     int arity_;
     std::unique_ptr<Chunk> chunk_;
+    int upvalueCount_;  // Number of upvalues this function captures
 };
 
 #endif // LUA_FUNCTION_HPP
