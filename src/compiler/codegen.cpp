@@ -623,59 +623,41 @@ void CodeGenerator::visitForInStmt(ForInStmtNode* node) {
 void CodeGenerator::visitCall(CallExprNode* node) {
     setLine(node->line());
 
-    // Check for built-in IO functions
-    if (node->name() == "io_open" && node->args().size() == 2) {
-        // Compile arguments (filename, mode)
-        node->args()[0]->accept(*this);  // filename
-        node->args()[1]->accept(*this);  // mode
-        emitOpCode(OpCode::OP_IO_OPEN);
-        return;
-    }
-    if (node->name() == "io_write" && node->args().size() == 2) {
-        // Compile arguments (file, data)
-        node->args()[0]->accept(*this);  // file handle
-        node->args()[1]->accept(*this);  // data
-        emitOpCode(OpCode::OP_IO_WRITE);
-        return;
-    }
-    if (node->name() == "io_read" && node->args().size() == 1) {
-        // Compile argument (file)
-        node->args()[0]->accept(*this);  // file handle
-        emitOpCode(OpCode::OP_IO_READ);
-        return;
-    }
-    if (node->name() == "io_close" && node->args().size() == 1) {
-        // Compile argument (file)
-        node->args()[0]->accept(*this);  // file handle
-        emitOpCode(OpCode::OP_IO_CLOSE);
-        return;
-    }
+    // Check for built-in IO functions (only if callee is a simple variable)
+    auto* varExpr = dynamic_cast<VariableExprNode*>(node->callee());
+    if (varExpr) {
+        const std::string& name = varExpr->name();
 
-    // Load function onto stack using three-level resolution (local → upvalue → global)
-
-    // 1. Try to resolve as local variable
-    int slot = resolveLocal(node->name());
-    if (slot != -1) {
-        emitOpCode(OpCode::OP_GET_LOCAL);
-        emitByte(static_cast<uint8_t>(slot));
-    }
-    // 2. Try to resolve as upvalue (captured from enclosing scope)
-    else {
-        int upvalue = resolveUpvalue(node->name());
-        if (upvalue != -1) {
-            emitOpCode(OpCode::OP_GET_UPVALUE);
-            emitByte(static_cast<uint8_t>(upvalue));
+        if (name == "io_open" && node->args().size() == 2) {
+            // Compile arguments (filename, mode)
+            node->args()[0]->accept(*this);  // filename
+            node->args()[1]->accept(*this);  // mode
+            emitOpCode(OpCode::OP_IO_OPEN);
+            return;
         }
-        // 3. Fall back to global variable
-        else {
-            size_t nameIndex = currentChunk()->addIdentifier(node->name());
-            if (nameIndex > UINT8_MAX) {
-                throw CompileError("Too many identifiers in one chunk", currentLine_);
-            }
-            emitOpCode(OpCode::OP_GET_GLOBAL);
-            emitByte(static_cast<uint8_t>(nameIndex));
+        if (name == "io_write" && node->args().size() == 2) {
+            // Compile arguments (file, data)
+            node->args()[0]->accept(*this);  // file handle
+            node->args()[1]->accept(*this);  // data
+            emitOpCode(OpCode::OP_IO_WRITE);
+            return;
+        }
+        if (name == "io_read" && node->args().size() == 1) {
+            // Compile argument (file)
+            node->args()[0]->accept(*this);  // file handle
+            emitOpCode(OpCode::OP_IO_READ);
+            return;
+        }
+        if (name == "io_close" && node->args().size() == 1) {
+            // Compile argument (file)
+            node->args()[0]->accept(*this);  // file handle
+            emitOpCode(OpCode::OP_IO_CLOSE);
+            return;
         }
     }
+
+    // Compile the callee expression (evaluates to a function on the stack)
+    node->callee()->accept(*this);
 
     // Compile arguments and push onto stack
     for (const auto& arg : node->args()) {

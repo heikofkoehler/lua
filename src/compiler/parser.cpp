@@ -558,20 +558,12 @@ std::unique_ptr<ExprNode> Parser::unary() {
 std::unique_ptr<ExprNode> Parser::postfix() {
     auto expr = primary();
 
-    // Handle postfix operations: function calls and table indexing
+    // Handle postfix operations: function calls, table indexing, and field access
     while (true) {
         int line = current_.line;
 
         // Function call: expr(args)
         if (match(TokenType::LEFT_PAREN)) {
-            // Only support calls on variable names for now
-            auto* varExpr = dynamic_cast<VariableExprNode*>(expr.get());
-            if (!varExpr) {
-                error("Can only call functions by name");
-                return expr;
-            }
-
-            std::string name = varExpr->name();
             std::vector<std::unique_ptr<ExprNode>> args;
 
             if (!check(TokenType::RIGHT_PAREN)) {
@@ -581,12 +573,23 @@ std::unique_ptr<ExprNode> Parser::postfix() {
             }
 
             consume(TokenType::RIGHT_PAREN, "Expected ')' after arguments");
-            expr = std::make_unique<CallExprNode>(name, std::move(args), line);
+            expr = std::make_unique<CallExprNode>(std::move(expr), std::move(args), line);
         }
         // Table indexing: expr[key]
         else if (match(TokenType::LEFT_BRACKET)) {
             auto key = expression();
             consume(TokenType::RIGHT_BRACKET, "Expected ']' after table key");
+            expr = std::make_unique<IndexExprNode>(std::move(expr), std::move(key), line);
+        }
+        // Field access with dot notation: expr.field
+        else if (match(TokenType::DOT)) {
+            if (!check(TokenType::IDENTIFIER)) {
+                error("Expected field name after '.'");
+                return expr;
+            }
+            advance();
+            std::string fieldName = previous_.lexeme;
+            auto key = std::make_unique<StringLiteralNode>(fieldName, line);
             expr = std::make_unique<IndexExprNode>(std::move(expr), std::move(key), line);
         }
         else {

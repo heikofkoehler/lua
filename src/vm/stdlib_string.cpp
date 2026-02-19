@@ -15,9 +15,10 @@ bool native_string_len(VM* vm, int argCount) {
         vm->runtimeError("string.len expects string argument");
         return false;
     }
-    StringObject* str = strVal.isString()
-        ? vm->rootChunk()->getString(strVal.asStringIndex())
-        : vm->getString(strVal.asStringIndex());
+    // Check runtime string first (isString() returns true for both types)
+    StringObject* str = strVal.isRuntimeString()
+        ? vm->getString(strVal.asStringIndex())
+        : vm->rootChunk()->getString(strVal.asStringIndex());
     vm->push(Value::number(str->length()));
     return true;
 }
@@ -41,9 +42,10 @@ bool native_string_sub(VM* vm, int argCount) {
         return false;
     }
 
-    StringObject* str = strVal.isString()
-        ? vm->rootChunk()->getString(strVal.asStringIndex())
-        : vm->getString(strVal.asStringIndex());
+    // Check runtime string first (isString() returns true for both types)
+    StringObject* str = strVal.isRuntimeString()
+        ? vm->getString(strVal.asStringIndex())
+        : vm->rootChunk()->getString(strVal.asStringIndex());
 
     int start = static_cast<int>(startVal.asNumber());
     int end = endVal.isNil() ? str->length() : static_cast<int>(endVal.asNumber());
@@ -77,9 +79,10 @@ bool native_string_upper(VM* vm, int argCount) {
         vm->runtimeError("string.upper expects string argument");
         return false;
     }
-    StringObject* str = strVal.isString()
-        ? vm->rootChunk()->getString(strVal.asStringIndex())
-        : vm->getString(strVal.asStringIndex());
+    // Check runtime string first (isString() returns true for both types)
+    StringObject* str = strVal.isRuntimeString()
+        ? vm->getString(strVal.asStringIndex())
+        : vm->rootChunk()->getString(strVal.asStringIndex());
 
     std::string upper(str->chars(), str->length());
     std::transform(upper.begin(), upper.end(), upper.begin(), ::toupper);
@@ -97,9 +100,10 @@ bool native_string_lower(VM* vm, int argCount) {
         vm->runtimeError("string.lower expects string argument");
         return false;
     }
-    StringObject* str = strVal.isString()
-        ? vm->rootChunk()->getString(strVal.asStringIndex())
-        : vm->getString(strVal.asStringIndex());
+    // Check runtime string first (isString() returns true for both types)
+    StringObject* str = strVal.isRuntimeString()
+        ? vm->getString(strVal.asStringIndex())
+        : vm->rootChunk()->getString(strVal.asStringIndex());
 
     std::string lower(str->chars(), str->length());
     std::transform(lower.begin(), lower.end(), lower.begin(), ::tolower);
@@ -117,9 +121,10 @@ bool native_string_reverse(VM* vm, int argCount) {
         vm->runtimeError("string.reverse expects string argument");
         return false;
     }
-    StringObject* str = strVal.isString()
-        ? vm->rootChunk()->getString(strVal.asStringIndex())
-        : vm->getString(strVal.asStringIndex());
+    // Check runtime string first (isString() returns true for both types)
+    StringObject* str = strVal.isRuntimeString()
+        ? vm->getString(strVal.asStringIndex())
+        : vm->rootChunk()->getString(strVal.asStringIndex());
 
     std::string reversed(str->chars(), str->length());
     std::reverse(reversed.begin(), reversed.end());
@@ -141,9 +146,10 @@ bool native_string_byte(VM* vm, int argCount) {
         return false;
     }
 
-    StringObject* str = strVal.isString()
-        ? vm->rootChunk()->getString(strVal.asStringIndex())
-        : vm->getString(strVal.asStringIndex());
+    // Check runtime string first (isString() returns true for both types)
+    StringObject* str = strVal.isRuntimeString()
+        ? vm->getString(strVal.asStringIndex())
+        : vm->rootChunk()->getString(strVal.asStringIndex());
 
     int pos = static_cast<int>(posVal.asNumber());
     if (pos < 1 || pos > static_cast<int>(str->length())) {
