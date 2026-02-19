@@ -19,6 +19,7 @@ struct CallFrame {
     const Chunk* callerChunk;   // Chunk to return to
     size_t ip;                  // Instruction pointer to return to
     size_t stackBase;           // Where this frame's locals start on value stack
+    uint8_t retCount;           // Number of return values expected (0 = all, 1+ = that many)
 };
 
 // Virtual Machine: Stack-based bytecode interpreter

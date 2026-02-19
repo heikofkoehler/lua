@@ -647,13 +647,16 @@ void CodeGenerator::visitCall(CallExprNode* node) {
         arg->accept(*this);
     }
 
-    // Emit call instruction with argument count
+    // Emit call instruction with argument count and return count
     size_t argCount = node->args().size();
     if (argCount > UINT8_MAX) {
         throw CompileError("Too many arguments in function call", currentLine_);
     }
     emitOpCode(OpCode::OP_CALL);
     emitByte(static_cast<uint8_t>(argCount));
+    // For now, always request 1 return value (single-value context)
+    // TODO: Make this context-aware (0 for "all values" in returns, etc.)
+    emitByte(1);
 }
 
 void CodeGenerator::visitTableConstructor(TableConstructorNode* node) {
@@ -714,6 +717,7 @@ void CodeGenerator::visitFunctionDecl(FunctionDeclNode* node) {
     // Emit implicit return nil at end (if no explicit return)
     emitOpCode(OpCode::OP_NIL);
     emitOpCode(OpCode::OP_RETURN_VALUE);
+    emitByte(1);  // Return count: 1 value (nil)
 
     // Get compiled function chunk (don't call endScope - cleanup is handled by OP_RETURN_VALUE)
     auto functionChunk = std::move(chunk_);
@@ -776,15 +780,27 @@ void CodeGenerator::visitFunctionDecl(FunctionDeclNode* node) {
 void CodeGenerator::visitReturn(ReturnStmtNode* node) {
     setLine(node->line());
 
-    // Compile return value (or nil if none)
-    if (node->value()) {
-        node->value()->accept(*this);
-    } else {
+    // Compile all return values
+    const auto& values = node->values();
+    if (values.empty()) {
+        // Return with no values - just return nil
         emitOpCode(OpCode::OP_NIL);
-    }
+        emitOpCode(OpCode::OP_RETURN_VALUE);
+        emitByte(1);  // Returning 1 value (nil)
+    } else {
+        // Compile each return value
+        for (const auto& value : values) {
+            value->accept(*this);
+        }
 
-    // Emit return instruction
-    emitOpCode(OpCode::OP_RETURN_VALUE);
+        // Emit return instruction with count
+        emitOpCode(OpCode::OP_RETURN_VALUE);
+        size_t count = values.size();
+        if (count > UINT8_MAX) {
+            throw CompileError("Too many return values", currentLine_);
+        }
+        emitByte(static_cast<uint8_t>(count));
+    }
 }
 
 void CodeGenerator::visitBreak(BreakStmtNode* node) {
