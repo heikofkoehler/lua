@@ -616,13 +616,31 @@ void CodeGenerator::visitForInStmt(ForInStmtNode* node) {
 void CodeGenerator::visitCall(CallExprNode* node) {
     setLine(node->line());
 
-    // Load function onto stack
-    size_t nameIndex = currentChunk()->addIdentifier(node->name());
-    if (nameIndex > UINT8_MAX) {
-        throw CompileError("Too many identifiers in one chunk", currentLine_);
+    // Load function onto stack using three-level resolution (local → upvalue → global)
+
+    // 1. Try to resolve as local variable
+    int slot = resolveLocal(node->name());
+    if (slot != -1) {
+        emitOpCode(OpCode::OP_GET_LOCAL);
+        emitByte(static_cast<uint8_t>(slot));
     }
-    emitOpCode(OpCode::OP_GET_GLOBAL);
-    emitByte(static_cast<uint8_t>(nameIndex));
+    // 2. Try to resolve as upvalue (captured from enclosing scope)
+    else {
+        int upvalue = resolveUpvalue(node->name());
+        if (upvalue != -1) {
+            emitOpCode(OpCode::OP_GET_UPVALUE);
+            emitByte(static_cast<uint8_t>(upvalue));
+        }
+        // 3. Fall back to global variable
+        else {
+            size_t nameIndex = currentChunk()->addIdentifier(node->name());
+            if (nameIndex > UINT8_MAX) {
+                throw CompileError("Too many identifiers in one chunk", currentLine_);
+            }
+            emitOpCode(OpCode::OP_GET_GLOBAL);
+            emitByte(static_cast<uint8_t>(nameIndex));
+        }
+    }
 
     // Compile arguments and push onto stack
     for (const auto& arg : node->args()) {
@@ -700,8 +718,17 @@ void CodeGenerator::visitFunctionDecl(FunctionDeclNode* node) {
     // Get compiled function chunk (don't call endScope - cleanup is handled by OP_RETURN_VALUE)
     auto functionChunk = std::move(chunk_);
 
-    // Capture upvalues BEFORE restoring compiler state
-    std::vector<Upvalue> capturedUpvalues = upvalues_;
+    // Capture upvalues - important: nested functions may have added upvalues to the CompilerState
+    // that's on the stack. We need to get those before we pop.
+    std::vector<Upvalue> capturedUpvalues;
+    if (!compilerStack_.empty()) {
+        // The state on top of the stack has our upvalues (potentially modified by nested compilation)
+        capturedUpvalues = compilerStack_.back().upvalues;
+    }
+    // Also include upvalues from upvalues_ (those added directly during this function's compilation)
+    for (const auto& uv : upvalues_) {
+        capturedUpvalues.push_back(uv);
+    }
 
     // Restore outer compiler state
     popCompilerState();
@@ -821,40 +848,69 @@ int CodeGenerator::resolveLocal(const std::string& name) {
 }
 
 int CodeGenerator::resolveUpvalue(const std::string& name) {
-    // Can't have upvalues if we're at the top level
     if (enclosingCompiler_ == nullptr) {
         return -1;
     }
 
-    // Try to find variable in enclosing function's locals
+    // Try to find variable in immediate parent's locals
     for (int i = static_cast<int>(enclosingCompiler_->locals.size()) - 1; i >= 0; i--) {
         if (enclosingCompiler_->locals[i].name == name) {
             // Mark the local as captured
             enclosingCompiler_->locals[i].isCaptured = true;
-            // Add upvalue that captures this local
+            // Add upvalue to current function that captures this local
             return addUpvalue(enclosingCompiler_->locals[i].slot, true);
         }
     }
 
-    // Not found in immediate parent, try parent's upvalues (recursive)
-    // We need to temporarily set enclosingCompiler to search recursively
-    if (enclosingCompiler_->enclosing != nullptr) {
-        // Save current enclosing
-        CompilerState* savedEnclosing = enclosingCompiler_;
-        enclosingCompiler_ = enclosingCompiler_->enclosing;
+    // Not found in parent's locals, check parent's upvalues (grandparent capture)
+    // Use helper to recursively search ancestor scopes
+    int ancestorUpvalue = resolveUpvalueHelper(enclosingCompiler_, name);
+    if (ancestorUpvalue != -1) {
+        // Parent (or ancestor) has this as an upvalue, reference it
+        return addUpvalue(ancestorUpvalue, false);
+    }
 
-        int upvalue = resolveUpvalue(name);
+    return -1;
+}
 
-        // Restore enclosing
-        enclosingCompiler_ = savedEnclosing;
+int CodeGenerator::resolveUpvalueHelper(CompilerState* compiler, const std::string& name) {
+    if (compiler == nullptr || compiler->enclosing == nullptr) {
+        return -1;
+    }
 
-        if (upvalue != -1) {
-            // Add upvalue that captures parent's upvalue
-            return addUpvalue(upvalue, false);
+    CompilerState* parent = compiler->enclosing;
+
+    // Check parent's locals
+    for (int i = static_cast<int>(parent->locals.size()) - 1; i >= 0; i--) {
+        if (parent->locals[i].name == name) {
+            // Found in parent's locals
+            parent->locals[i].isCaptured = true;
+
+            // Add upvalue to compiler (the intermediate function) that captures this local
+            Upvalue uv;
+            uv.index = parent->locals[i].slot;
+            uv.isLocal = true;
+            uv.name = name;
+            compiler->upvalues.push_back(uv);
+
+            return compiler->upvalues.size() - 1;
         }
     }
 
-    return -1;  // Not found in any enclosing scope
+    // Not in parent's locals, search recursively
+    int ancestorUpvalue = resolveUpvalueHelper(parent, name);
+    if (ancestorUpvalue != -1) {
+        // Found in an ancestor, add upvalue to intermediate compiler
+        Upvalue uv;
+        uv.index = ancestorUpvalue;
+        uv.isLocal = false;
+        uv.name = name;
+        compiler->upvalues.push_back(uv);
+
+        return compiler->upvalues.size() - 1;
+    }
+
+    return -1;
 }
 
 int CodeGenerator::addUpvalue(uint8_t index, bool isLocal) {

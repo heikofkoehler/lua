@@ -429,7 +429,8 @@ bool VM::run(const Chunk& chunk) {
                 uint8_t constantIndex = readByte();
                 Value funcValue = chunk_->constants()[constantIndex];
                 size_t funcIndex = funcValue.asFunctionIndex();
-                FunctionObject* function = rootChunk_->getFunction(funcIndex);
+                // Look up function in current chunk (not rootChunk_) for nested functions
+                FunctionObject* function = chunk_->getFunction(funcIndex);
 
                 // Create closure
                 size_t closureIndex = createClosure(function);
