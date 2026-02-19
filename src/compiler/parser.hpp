@@ -28,6 +28,7 @@ private:
     void advance();
     void consume(TokenType type, const std::string& message);
     bool check(TokenType type) const;
+    Token peekNext() const;  // Look ahead one token
     bool match(TokenType type);
     bool isAtEnd() const;
 

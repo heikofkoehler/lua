@@ -405,6 +405,10 @@ bool VM::run(const Chunk& chunk) {
                 pop();
                 break;
 
+            case OpCode::OP_DUP:
+                push(peek(0));
+                break;
+
             case OpCode::OP_JUMP: {
                 uint16_t offset = readByte() | (readByte() << 8);
                 ip_ += offset;

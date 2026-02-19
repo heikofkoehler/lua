@@ -53,6 +53,12 @@ bool Parser::check(TokenType type) const {
     return current_.type == type;
 }
 
+Token Parser::peekNext() const {
+    // Peek at the next token without advancing
+    // Save current lexer state and get next token
+    return lexer_.peekToken();
+}
+
 bool Parser::match(TokenType type) {
     if (!check(type)) return false;
     advance();
@@ -611,8 +617,47 @@ std::unique_ptr<ExprNode> Parser::primary() {
 
     // Table constructor
     if (match(TokenType::LEFT_BRACE)) {
+        std::vector<TableConstructorNode::Entry> entries;
+
+        // Parse entries until we hit '}'
+        if (!check(TokenType::RIGHT_BRACE)) {
+            do {
+                // Check for [key] = value syntax
+                if (match(TokenType::LEFT_BRACKET)) {
+                    // Computed key: [expr] = value
+                    auto keyExpr = expression();
+                    consume(TokenType::RIGHT_BRACKET, "Expected ']' after table key");
+                    consume(TokenType::EQUAL, "Expected '=' after table key");
+
+                    TableConstructorNode::Entry entry;
+                    entry.key = std::move(keyExpr);
+                    entry.value = expression();
+                    entries.push_back(std::move(entry));
+                }
+                // Check for key = value syntax (identifier followed by =)
+                else if (check(TokenType::IDENTIFIER) && peekNext().type == TokenType::EQUAL) {
+                    // Record-style entry: key = value
+                    Token keyToken = current_;
+                    advance();  // consume identifier
+                    consume(TokenType::EQUAL, "Expected '=' after field name");
+
+                    TableConstructorNode::Entry entry;
+                    entry.key = std::make_unique<StringLiteralNode>(keyToken.lexeme, keyToken.line);
+                    entry.value = expression();
+                    entries.push_back(std::move(entry));
+                }
+                else {
+                    // Array-style entry: value (implicit numeric key)
+                    TableConstructorNode::Entry entry;
+                    entry.key = nullptr;
+                    entry.value = expression();
+                    entries.push_back(std::move(entry));
+                }
+            } while (match(TokenType::COMMA) || match(TokenType::SEMICOLON));
+        }
+
         consume(TokenType::RIGHT_BRACE, "Expected '}' after table constructor");
-        return std::make_unique<TableConstructorNode>(line);
+        return std::make_unique<TableConstructorNode>(std::move(entries), line);
     }
 
     // Variable reference (function calls handled in postfix())

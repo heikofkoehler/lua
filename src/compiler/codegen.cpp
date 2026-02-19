@@ -664,6 +664,36 @@ void CodeGenerator::visitTableConstructor(TableConstructorNode* node) {
 
     // Emit OP_NEW_TABLE to create a new empty table
     emitOpCode(OpCode::OP_NEW_TABLE);
+
+    // Table is now on top of stack
+    // For each entry, we: duplicate table, compile key, compile value, then OP_SET_TABLE
+
+    int arrayIndex = 1;  // Lua arrays start at 1
+
+    for (const auto& entry : node->entries()) {
+        // Duplicate the table reference for OP_SET_TABLE
+        // Stack: [table] -> [table, table]
+        emitOpCode(OpCode::OP_DUP);
+
+        // Compile key
+        if (entry.key == nullptr) {
+            // Array-style entry: use implicit numeric index
+            emitConstant(Value::number(arrayIndex++));
+        } else {
+            // Record-style or computed key
+            entry.key->accept(*this);
+        }
+
+        // Compile value
+        entry.value->accept(*this);
+
+        // Set table[key] = value
+        // Stack before: [table, table, key, value]
+        // Stack after: [table]
+        emitOpCode(OpCode::OP_SET_TABLE);
+    }
+
+    // Table is left on stack as the result of the constructor expression
 }
 
 void CodeGenerator::visitIndexExpr(IndexExprNode* node) {
