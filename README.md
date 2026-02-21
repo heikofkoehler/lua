@@ -47,6 +47,16 @@ A Lua implementation in C++ featuring a stack-based bytecode virtual machine wit
   - **io_read(file)**: Read entire file contents
   - **io_close(file)**: Close file handles
   - **Multiple modes**: "r", "w", "a", "r+", "w+", "a+"
+- **Garbage Collection**:
+  - **Mark-and-Sweep**: Automatic memory management for all heap objects
+  - **Automatic Triggering**: GC runs when memory threshold exceeded
+  - **Manual Control**: `collectgarbage()` function for explicit collection
+  - **Comprehensive Coverage**: All object types (strings, tables, closures, upvalues, files)
+- **Standard Library**:
+  - **String Library**: len, sub, upper, lower, reverse, byte, char
+  - **Table Library**: insert, remove, concat
+  - **Math Library**: sqrt, abs, floor, ceil, sin, cos, tan, exp, log, min, max, pi
+  - **Dot Notation**: Clean syntax like `string.len("hello")` and `math.sqrt(16)`
 - **REPL**: Interactive read-eval-print loop
 - **File Execution**: Run Lua scripts from files
 
@@ -612,6 +622,94 @@ t["key"] = nil
 print(t["key"])  -- nil
 ```
 
+### Standard Library
+
+#### String Functions
+
+```lua
+-- String length
+print(string.len("hello"))  -- 5
+
+-- Substring extraction
+print(string.sub("hello", 2, 4))  -- "ell"
+print(string.sub("hello", -3))    -- "llo" (negative index from end)
+
+-- Case conversion
+print(string.upper("hello"))  -- "HELLO"
+print(string.lower("WORLD"))  -- "world"
+
+-- String reversal
+print(string.reverse("abc"))  -- "cba"
+
+-- Character code conversion
+print(string.byte("A"))           -- 65
+print(string.char(72, 105))       -- "Hi"
+```
+
+#### Table Functions
+
+```lua
+local t = {10, 20, 30}
+
+-- Insert at end
+table.insert(t, 40)
+print(t[4])  -- 40
+
+-- Insert at position
+table.insert(t, 2, 15)
+print(t[2])  -- 15
+
+-- Remove element
+local removed = table.remove(t, 1)
+print(removed)  -- 10
+
+-- Concatenate array elements
+local arr = {"Hello", " ", "World"}
+print(table.concat(arr))  -- "Hello World"
+print(table.concat({1, 2, 3}, ", "))  -- "1, 2, 3"
+```
+
+#### Math Functions
+
+```lua
+-- Basic math operations
+print(math.sqrt(16))   -- 4
+print(math.abs(-5))    -- 5
+print(math.floor(3.7)) -- 3
+print(math.ceil(3.2))  -- 4
+
+-- Trigonometric functions
+print(math.sin(math.pi / 2))  -- 1
+print(math.cos(0))            -- 1
+print(math.tan(0))            -- 0
+
+-- Exponential and logarithm
+print(math.exp(1))      -- 2.71828...
+print(math.log(2.71828)) -- ~1
+
+-- Min and max
+print(math.min(5, 2, 8, 1))  -- 1
+print(math.max(5, 2, 8, 1))  -- 8
+
+-- Constants
+print(math.pi)  -- 3.14159...
+```
+
+#### Garbage Collection
+
+```lua
+-- Create some objects
+local t1 = {x = 1, y = 2}
+local t2 = {a = 10, b = 20}
+
+-- Manually trigger garbage collection
+collectgarbage()
+
+-- Objects still accessible after GC
+print(t1.x)  -- 1
+print(t2.a)  -- 10
+```
+
 ## Project Structure
 
 ```
@@ -669,10 +767,12 @@ Uses **NaN-boxing** technique:
   - Closure: TAG_CLOSURE (6) - stores closure index (function + captured upvalues)
   - File: TAG_FILE (7) - stores file handle index
   - Runtime String: TAG_RUNTIME_STRING (8) - stores runtime string index (from VM pool)
+  - Native Function: TAG_NATIVE_FUNCTION (9) - stores C++ function pointer index
 - Fast type checking via bit operations
 - Objects stored as indices into pools for safe pointer management
 - No raw pointers in values (prevents corruption)
 - Dual string system: compile-time strings in chunk, runtime strings in VM pool
+- Native functions enable standard library implementation in C++
 
 ### Bytecode Instructions
 
@@ -771,19 +871,27 @@ Recursive descent with proper operator precedence:
 - ✅ Variadic functions (...)
 - ⏳ Multiple assignment (local a, b = func())
 
-### Phase 4: Objects & Memory (IN PROGRESS)
+### Phase 4: Objects & Memory ✅ COMPLETE
 - ✅ String objects with interning
 - ✅ Table objects (hash maps) with constructor `{}`, indexing `t[key]`, and assignment `t[key] = value`
 - ✅ Table constructor with initial values: `{1, 2, 3}`, `{x = 10}`, `{[expr] = val}`
 - ✅ File I/O: `io_open`, `io_write`, `io_read`, `io_close`
-- ⏳ Garbage collection (mark-and-sweep)
+- ✅ Garbage collection (mark-and-sweep with automatic and manual triggering)
+- ✅ Native function system for C++ built-ins
+- ✅ Dot notation for table field access (`table.field`)
 
-### Phase 5: Advanced Features
+### Phase 5: Standard Library ✅ COMPLETE
+- ✅ Base library: `collectgarbage()`
+- ✅ String library: `string.len`, `string.sub`, `string.upper`, `string.lower`, `string.reverse`, `string.byte`, `string.char`
+- ✅ Table library: `table.insert`, `table.remove`, `table.concat`
+- ✅ Math library: `math.sqrt`, `math.abs`, `math.floor`, `math.ceil`, `math.sin`, `math.cos`, `math.tan`, `math.exp`, `math.log`, `math.min`, `math.max`, `math.pi`
+
+### Phase 6: Advanced Features
 - Metatables and metamethods
-- Extended standard library (string manipulation, table utilities, math functions)
 - String escape sequences (\n, \t, etc.)
 - Module system (require/module)
 - Coroutines
+- Iterators for tables (pairs, ipairs)
 
 ## Testing
 
