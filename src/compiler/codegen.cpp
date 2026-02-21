@@ -251,6 +251,101 @@ void CodeGenerator::visitLocalDeclStmt(LocalDeclStmtNode* node) {
     addLocal(node->name());
 }
 
+void CodeGenerator::visitMultipleLocalDeclStmt(MultipleLocalDeclStmtNode* node) {
+    setLine(node->line());
+
+    const auto& names = node->names();
+    const auto& initializers = node->initializers();
+
+    size_t varCount = names.size();
+    size_t initCount = initializers.size();
+
+    // Strategy: Evaluate all initializers, push values on stack, then add locals
+
+    // 1. Evaluate all initializers (left-to-right)
+    for (size_t i = 0; i < initCount; i++) {
+        initializers[i]->accept(*this);
+    }
+
+    // 2. Pad with nil if fewer values than variables
+    for (size_t i = initCount; i < varCount; i++) {
+        emitOpCode(OpCode::OP_NIL);
+    }
+
+    // 3. Discard excess values if more values than variables
+    for (size_t i = varCount; i < initCount; i++) {
+        emitOpCode(OpCode::OP_POP);
+    }
+
+    // 4. Add local variables (values are already on stack in correct order)
+    for (const auto& name : names) {
+        addLocal(name);
+    }
+}
+
+void CodeGenerator::visitMultipleAssignmentStmt(MultipleAssignmentStmtNode* node) {
+    setLine(node->line());
+
+    const auto& names = node->names();
+    const auto& values = node->values();
+
+    size_t varCount = names.size();
+    size_t valCount = values.size();
+
+    // Strategy: Evaluate all RHS values, adjust count, then assign to LHS variables
+
+    // 1. Evaluate all values (left-to-right) and push on stack
+    for (const auto& value : values) {
+        value->accept(*this);
+    }
+
+    // 2. Pad with nil if fewer values than variables
+    for (size_t i = valCount; i < varCount; i++) {
+        emitOpCode(OpCode::OP_NIL);
+    }
+
+    // 3. Discard excess values if more values than variables
+    for (size_t i = varCount; i < valCount; i++) {
+        emitOpCode(OpCode::OP_POP);
+    }
+
+    // Now stack has exactly varCount values (bottom to top: v1, v2, ..., vN)
+
+    // 4. Assign to variables in REVERSE order (pop from stack)
+    // Stack ordering: bottom=[var0 value], top=[varN-1 value]
+    // We need to assign from top to bottom
+
+    for (int i = varCount - 1; i >= 0; i--) {
+        const std::string& name = names[i];
+
+        // Three-level resolution: local → upvalue → global
+        int slot = resolveLocal(name);
+        if (slot != -1) {
+            emitOpCode(OpCode::OP_SET_LOCAL);
+            emitByte(static_cast<uint8_t>(slot));
+            emitOpCode(OpCode::OP_POP);
+            continue;
+        }
+
+        int upvalue = resolveUpvalue(name);
+        if (upvalue != -1) {
+            emitOpCode(OpCode::OP_SET_UPVALUE);
+            emitByte(static_cast<uint8_t>(upvalue));
+            emitOpCode(OpCode::OP_POP);
+            continue;
+        }
+
+        // Global variable
+        size_t nameIndex = currentChunk()->addIdentifier(name);
+        if (nameIndex > UINT8_MAX) {
+            throw CompileError("Too many identifiers in one chunk", currentLine_);
+        }
+        emitOpCode(OpCode::OP_SET_GLOBAL);
+        emitByte(static_cast<uint8_t>(nameIndex));
+        emitOpCode(OpCode::OP_POP);
+    }
+}
+
 void CodeGenerator::visitProgram(ProgramNode* node) {
     setLine(node->line());
 

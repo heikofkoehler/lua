@@ -172,24 +172,56 @@ std::unique_ptr<StmtNode> Parser::expressionStatement() {
 std::unique_ptr<StmtNode> Parser::assignmentOrExpression() {
     int line = current_.line;
 
-    // Parse the left-hand side expression (could be variable, function call, or table index)
-    auto expr = expression();
+    // Parse first expression
+    auto firstExpr = expression();
 
-    // Check if it's an assignment
+    // Check for multiple assignment: a, b, c = ...
+    if (match(TokenType::COMMA)) {
+        // Collect all left-hand side variables
+        std::vector<std::string> names;
+
+        // First expression must be a variable
+        if (auto* varExpr = dynamic_cast<VariableExprNode*>(firstExpr.get())) {
+            names.push_back(varExpr->name());
+        } else {
+            error("Multiple assignment requires variable names on left side");
+            return std::make_unique<ExprStmtNode>(std::move(firstExpr), line);
+        }
+
+        // Parse remaining variables: b, c
+        do {
+            if (!check(TokenType::IDENTIFIER)) {
+                errorAtCurrent("Expected variable name in assignment list");
+                return nullptr;
+            }
+            names.push_back(current_.lexeme);
+            advance();
+        } while (match(TokenType::COMMA));
+
+        // Expect '='
+        if (!match(TokenType::EQUAL)) {
+            error("Expected '=' after variable list");
+            return nullptr;
+        }
+
+        // Parse value list: 1, 2, 3
+        std::vector<std::unique_ptr<ExprNode>> values;
+        do {
+            values.push_back(expression());
+        } while (match(TokenType::COMMA));
+
+        return std::make_unique<MultipleAssignmentStmtNode>(
+            std::move(names), std::move(values), line
+        );
+    }
+
+    // Single assignment (existing code)
     if (match(TokenType::EQUAL)) {
-        // Check if the expression is assignable
-        if (auto* varExpr = dynamic_cast<VariableExprNode*>(expr.get())) {
-            // Variable assignment: x = value
-            std::string varName = varExpr->name();
+        if (auto* varExpr = dynamic_cast<VariableExprNode*>(firstExpr.get())) {
             auto value = expression();
-            return std::make_unique<AssignmentStmtNode>(varName, std::move(value), line);
-        } else if (auto* indexExpr = dynamic_cast<IndexExprNode*>(expr.get())) {
-            // Index assignment: t[key] = value
-            // We need to extract the table and key from indexExpr, then release ownership
-            // Since we need to move them, we'll create new nodes
+            return std::make_unique<AssignmentStmtNode>(varExpr->name(), std::move(value), line);
+        } else if (auto* indexExpr = dynamic_cast<IndexExprNode*>(firstExpr.get())) {
             auto value = expression();
-
-            // Create IndexAssignmentStmtNode by moving table and key from indexExpr
             return std::make_unique<IndexAssignmentStmtNode>(
                 indexExpr->releaseTable(),
                 indexExpr->releaseKey(),
@@ -198,34 +230,48 @@ std::unique_ptr<StmtNode> Parser::assignmentOrExpression() {
             );
         } else {
             error("Invalid assignment target");
-            return std::make_unique<ExprStmtNode>(std::move(expr), line);
         }
     }
 
-    // Not an assignment, just an expression statement
-    return std::make_unique<ExprStmtNode>(std::move(expr), line);
+    // Expression statement
+    return std::make_unique<ExprStmtNode>(std::move(firstExpr), line);
 }
 
 std::unique_ptr<StmtNode> Parser::localDeclaration() {
     int line = previous_.line;
 
-    if (!check(TokenType::IDENTIFIER)) {
-        errorAtCurrent("Expected variable name after 'local'");
-        return nullptr;
-    }
+    // Parse variable list: local a, b, c
+    std::vector<std::string> names;
 
-    std::string varName = current_.lexeme;
-    advance();
+    do {
+        if (!check(TokenType::IDENTIFIER)) {
+            errorAtCurrent("Expected variable name");
+            return nullptr;
+        }
+        names.push_back(current_.lexeme);
+        advance();
+    } while (match(TokenType::COMMA));
 
-    std::unique_ptr<ExprNode> initializer = nullptr;
+    // Parse initializer list (if present)
+    std::vector<std::unique_ptr<ExprNode>> initializers;
     if (match(TokenType::EQUAL)) {
-        initializer = expression();
-    } else {
-        // No initializer, defaults to nil
-        initializer = std::make_unique<LiteralNode>(Value::nil(), line);
+        do {
+            initializers.push_back(expression());
+        } while (match(TokenType::COMMA));
     }
 
-    return std::make_unique<LocalDeclStmtNode>(varName, std::move(initializer), line);
+    // Single variable: use existing node for backward compatibility
+    if (names.size() == 1) {
+        auto init = initializers.empty()
+            ? std::make_unique<LiteralNode>(Value::nil(), line)
+            : std::move(initializers[0]);
+        return std::make_unique<LocalDeclStmtNode>(names[0], std::move(init), line);
+    }
+
+    // Multiple variables: use new node
+    return std::make_unique<MultipleLocalDeclStmtNode>(
+        std::move(names), std::move(initializers), line
+    );
 }
 
 std::unique_ptr<StmtNode> Parser::ifStatement() {

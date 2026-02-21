@@ -264,6 +264,42 @@ private:
     std::unique_ptr<ExprNode> initializer_;
 };
 
+// Multiple local variable declaration: local a, b, c = 1, 2, 3
+class MultipleLocalDeclStmtNode : public StmtNode {
+public:
+    MultipleLocalDeclStmtNode(std::vector<std::string> names,
+                             std::vector<std::unique_ptr<ExprNode>> initializers,
+                             int line)
+        : StmtNode(line), names_(std::move(names)), initializers_(std::move(initializers)) {}
+
+    void accept(ASTVisitor& visitor) override;
+
+    const std::vector<std::string>& names() const { return names_; }
+    const std::vector<std::unique_ptr<ExprNode>>& initializers() const { return initializers_; }
+
+private:
+    std::vector<std::string> names_;
+    std::vector<std::unique_ptr<ExprNode>> initializers_;
+};
+
+// Multiple assignment: x, y, z = 1, 2, 3
+class MultipleAssignmentStmtNode : public StmtNode {
+public:
+    MultipleAssignmentStmtNode(std::vector<std::string> names,
+                              std::vector<std::unique_ptr<ExprNode>> values,
+                              int line)
+        : StmtNode(line), names_(std::move(names)), values_(std::move(values)) {}
+
+    void accept(ASTVisitor& visitor) override;
+
+    const std::vector<std::string>& names() const { return names_; }
+    const std::vector<std::unique_ptr<ExprNode>>& values() const { return values_; }
+
+private:
+    std::vector<std::string> names_;
+    std::vector<std::unique_ptr<ExprNode>> values_;
+};
+
 // If statement: if-then-elseif-else-end
 class IfStmtNode : public StmtNode {
 public:
@@ -473,6 +509,8 @@ public:
     virtual void visitAssignmentStmt(AssignmentStmtNode* node) = 0;
     virtual void visitIndexAssignmentStmt(IndexAssignmentStmtNode* node) = 0;
     virtual void visitLocalDeclStmt(LocalDeclStmtNode* node) = 0;
+    virtual void visitMultipleLocalDeclStmt(MultipleLocalDeclStmtNode* node) = 0;
+    virtual void visitMultipleAssignmentStmt(MultipleAssignmentStmtNode* node) = 0;
     virtual void visitIfStmt(IfStmtNode* node) = 0;
     virtual void visitWhileStmt(WhileStmtNode* node) = 0;
     virtual void visitRepeatStmt(RepeatStmtNode* node) = 0;
@@ -539,6 +577,14 @@ inline void IndexAssignmentStmtNode::accept(ASTVisitor& visitor) {
 
 inline void LocalDeclStmtNode::accept(ASTVisitor& visitor) {
     visitor.visitLocalDeclStmt(this);
+}
+
+inline void MultipleLocalDeclStmtNode::accept(ASTVisitor& visitor) {
+    visitor.visitMultipleLocalDeclStmt(this);
+}
+
+inline void MultipleAssignmentStmtNode::accept(ASTVisitor& visitor) {
+    visitor.visitMultipleAssignmentStmt(this);
 }
 
 inline void IfStmtNode::accept(ASTVisitor& visitor) {
