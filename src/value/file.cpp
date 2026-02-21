@@ -2,7 +2,7 @@
 #include <sstream>
 
 FileObject::FileObject(const std::string& filename, const std::string& mode)
-    : filename_(filename), mode_(mode), isOpen_(false) {
+    : GCObject(GCObject::Type::FILE), filename_(filename), mode_(mode), isOpen_(false) {
 
     stream_ = std::make_unique<std::fstream>();
 

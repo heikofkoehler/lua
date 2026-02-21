@@ -2,6 +2,7 @@
 #define LUA_VM_HPP
 
 #include "common/common.hpp"
+#include "vm/gc.hpp"
 #include "value/value.hpp"
 #include "value/function.hpp"
 #include "value/closure.hpp"
@@ -90,6 +91,18 @@ public:
     Value peek(size_t distance = 0) const;
     void runtimeError(const std::string& message);
 
+    // Access to globals (for base library)
+    std::unordered_map<std::string, Value>& globals() { return globals_; }
+
+    // Garbage collection
+    void collectGarbage();
+    void markRoots();
+    void markValue(const Value& value);
+    void markObject(GCObject* object);
+    void sweep();
+    void freeObject(GCObject* object);
+    void addObject(GCObject* object);
+
 private:
     // Arithmetic operations
     Value add(const Value& a, const Value& b);
@@ -126,6 +139,12 @@ private:
     std::vector<NativeFunction> nativeFunctions_;  // Native function table
     bool hadError_;               // Error flag
     bool stdlibInitialized_;      // Whether standard library has been initialized
+
+    // Garbage collection
+    GCObject* gcObjects_;         // Linked list of all GC objects
+    size_t bytesAllocated_;       // Total bytes allocated
+    size_t nextGC_;               // Threshold for next GC
+    bool gcEnabled_;              // Can disable GC for debugging
 
     // Stack size limits
     static constexpr size_t STACK_MAX = 256;

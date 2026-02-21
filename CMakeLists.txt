@@ -36,6 +36,8 @@ set(SOURCES
     src/compiler/chunk.cpp
     src/compiler/codegen.cpp
     src/vm/vm.cpp
+    src/vm/gc.cpp
+    src/vm/stdlib_base.cpp
     src/vm/stdlib_string.cpp
     src/vm/stdlib_table.cpp
     src/vm/stdlib_math.cpp

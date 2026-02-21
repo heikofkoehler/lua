@@ -1,15 +1,16 @@
 #ifndef LUA_STRING_HPP
 #define LUA_STRING_HPP
 
+#include "vm/gc.hpp"
 #include <string>
 #include <cstdint>
 #include <cstring>
 
 // String object with hash for interning
-class StringObject {
+class StringObject : public GCObject {
 public:
     StringObject(const char* chars, size_t length)
-        : length_(length), hash_(0) {
+        : GCObject(GCObject::Type::STRING), length_(length), hash_(0) {
         chars_ = new char[length + 1];
         std::memcpy(chars_, chars, length);
         chars_[length] = '\0';
@@ -42,6 +43,9 @@ public:
         if (length_ != length) return false;
         return std::memcmp(chars_, chars, length) == 0;
     }
+
+    // GC interface: strings don't reference other objects
+    void markReferences() override {}
 
 private:
     char* chars_;

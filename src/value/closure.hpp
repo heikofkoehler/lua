@@ -1,6 +1,7 @@
 #ifndef LUA_CLOSURE_HPP
 #define LUA_CLOSURE_HPP
 
+#include "vm/gc.hpp"
 #include "value/function.hpp"
 #include <vector>
 #include <cstddef>
@@ -11,11 +12,11 @@
 // variables from enclosing scopes. The closure stores indices into the
 // VM's upvalue pool, allowing multiple closures to share upvalues.
 
-class ClosureObject {
+class ClosureObject : public GCObject {
 public:
     // Create closure for a function with specified upvalue count
     ClosureObject(FunctionObject* function, size_t upvalueCount)
-        : function_(function), upvalues_(upvalueCount, SIZE_MAX) {}
+        : GCObject(GCObject::Type::CLOSURE), function_(function), upvalues_(upvalueCount, SIZE_MAX) {}
 
     // Get the underlying function
     FunctionObject* function() const { return function_; }
@@ -37,6 +38,9 @@ public:
         }
         return SIZE_MAX;
     }
+
+    // GC interface: mark function and upvalues
+    void markReferences() override;
 
 private:
     FunctionObject* function_;           // Not owned (owned by Chunk)
