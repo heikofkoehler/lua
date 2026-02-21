@@ -23,6 +23,11 @@ A Lua implementation in C++ featuring a stack-based bytecode virtual machine wit
   - **Local Variables**: Block-scoped with proper shadowing
   - **Global Variables**: Module-level scope
   - **Assignment**: Full assignment support for both local and global variables
+  - **Multiple Assignment**: Assign multiple values to multiple variables in one statement
+    - `local a, b, c = 1, 2, 3` - Multiple local declarations
+    - `x, y, z = 10, 20, 30` - Multiple global assignments
+    - `x, y = y, x` - Swap idiom (all RHS evaluated before assignment)
+    - **Value Adjustment**: Pads with nil or discards extras to match variable count
 - **Functions**:
   - **Function Declarations**: Named functions with parameters
   - **Function Calls**: Full call stack with proper argument passing

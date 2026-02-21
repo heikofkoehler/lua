@@ -31,6 +31,8 @@ public:
     void visitAssignmentStmt(AssignmentStmtNode* node) override;
     void visitIndexAssignmentStmt(IndexAssignmentStmtNode* node) override;
     void visitLocalDeclStmt(LocalDeclStmtNode* node) override;
+    void visitMultipleLocalDeclStmt(MultipleLocalDeclStmtNode* node) override;
+    void visitMultipleAssignmentStmt(MultipleAssignmentStmtNode* node) override;
     void visitIfStmt(IfStmtNode* node) override;
     void visitWhileStmt(WhileStmtNode* node) override;
     void visitRepeatStmt(RepeatStmtNode* node) override;
