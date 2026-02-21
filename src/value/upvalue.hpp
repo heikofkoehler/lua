@@ -1,6 +1,7 @@
 #ifndef LUA_UPVALUE_HPP
 #define LUA_UPVALUE_HPP
 
+#include "vm/gc.hpp"
 #include "value/value.hpp"
 #include <vector>
 
@@ -13,11 +14,11 @@
 // When a scope exits, open upvalues are "closed" - their values are copied
 // from the stack to heap storage, allowing closures to outlive their parent functions.
 
-class UpvalueObject {
+class UpvalueObject : public GCObject {
 public:
     // Constructor for open upvalue (points to stack)
     explicit UpvalueObject(size_t stackIndex)
-        : stackIndex_(stackIndex), closed_(Value::nil()), isClosed_(false) {}
+        : GCObject(GCObject::Type::UPVALUE), stackIndex_(stackIndex), closed_(Value::nil()), isClosed_(false) {}
 
     // Get the value (from stack if open, from closed_ if closed)
     Value get(const std::vector<Value>& stack) const {
@@ -47,6 +48,9 @@ public:
     // Query state
     bool isClosed() const { return isClosed_; }
     size_t stackIndex() const { return stackIndex_; }
+
+    // GC interface: mark closed value if upvalue is closed
+    void markReferences() override;
 
 private:
     size_t stackIndex_;  // Index in VM stack (for open upvalues)

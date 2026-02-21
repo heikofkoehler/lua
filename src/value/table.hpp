@@ -1,6 +1,7 @@
 #ifndef LUA_TABLE_HPP
 #define LUA_TABLE_HPP
 
+#include "vm/gc.hpp"
 #include "value/value.hpp"
 #include <unordered_map>
 #include <functional>
@@ -33,10 +34,13 @@ struct ValueEqual {
     }
 };
 
+// Forward declaration
+class VM;
+
 // Table object: Lua's associative array (hash map)
-class TableObject {
+class TableObject : public GCObject {
 public:
-    TableObject() = default;
+    TableObject() : GCObject(GCObject::Type::TABLE) {}
     ~TableObject() = default;
 
     // Table operations
@@ -73,6 +77,9 @@ public:
     const std::unordered_map<Value, Value, ValueHash, ValueEqual>& data() const {
         return map_;
     }
+
+    // GC interface: mark all keys and values
+    void markReferences() override;
 
 private:
     std::unordered_map<Value, Value, ValueHash, ValueEqual> map_;

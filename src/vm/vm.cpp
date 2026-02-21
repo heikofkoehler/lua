@@ -6,8 +6,10 @@
 void registerStringLibrary(VM* vm, TableObject* stringTable);
 void registerTableLibrary(VM* vm, TableObject* tableTable);
 void registerMathLibrary(VM* vm, TableObject* mathTable);
+void registerBaseLibrary(VM* vm);
 
-VM::VM() : chunk_(nullptr), rootChunk_(nullptr), ip_(0), hadError_(false), stdlibInitialized_(false) {
+VM::VM() : chunk_(nullptr), rootChunk_(nullptr), ip_(0), hadError_(false), stdlibInitialized_(false),
+           gcObjects_(nullptr), bytesAllocated_(0), nextGC_(1024 * 1024), gcEnabled_(true) {
     stack_.reserve(STACK_MAX);
     frames_.reserve(FRAMES_MAX);
     // Standard library will be initialized on first run() call
@@ -82,9 +84,17 @@ size_t VM::internString(const char* chars, size_t length) {
 
     // String doesn't exist, create and intern it
     StringObject* str = new StringObject(chars, length);
+    addObject(str);  // Register with GC
     size_t index = strings_.size();
     strings_.push_back(str);
     stringIndices_[hash] = index;
+
+    // Trigger GC if needed
+    bytesAllocated_ += sizeof(StringObject) + length;
+    if (bytesAllocated_ > nextGC_) {
+        collectGarbage();
+    }
+
     return index;
 }
 
@@ -102,8 +112,16 @@ StringObject* VM::getString(size_t index) {
 
 size_t VM::createTable() {
     TableObject* table = new TableObject();
+    addObject(table);  // Register with GC
     size_t index = tables_.size();
     tables_.push_back(table);
+
+    // Trigger GC if needed
+    bytesAllocated_ += sizeof(TableObject);
+    if (bytesAllocated_ > nextGC_) {
+        collectGarbage();
+    }
+
     return index;
 }
 
@@ -117,6 +135,7 @@ TableObject* VM::getTable(size_t index) {
 
 size_t VM::createClosure(FunctionObject* function) {
     ClosureObject* closure = new ClosureObject(function, function->upvalueCount());
+    addObject(closure);  // Register with GC
     size_t index = closures_.size();
     closures_.push_back(closure);
     return index;
@@ -145,6 +164,7 @@ size_t VM::captureUpvalue(size_t stackIndex) {
 
     // Create new upvalue
     UpvalueObject* upvalue = new UpvalueObject(stackIndex);
+    addObject(upvalue);  // Register with GC
     size_t index = upvalues_.size();
     upvalues_.push_back(upvalue);
 
@@ -182,6 +202,7 @@ void VM::closeUpvalues(size_t lastStackIndex) {
 
 size_t VM::openFile(const std::string& filename, const std::string& mode) {
     FileObject* file = new FileObject(filename, mode);
+    addObject(file);  // Register with GC
     files_.push_back(file);
     return files_.size() - 1;
 }
@@ -223,6 +244,9 @@ void VM::addNativeToTable(TableObject* table, const char* name, NativeFunction f
 }
 
 void VM::initStandardLibrary() {
+    // Register base library (global functions like collectgarbage)
+    registerBaseLibrary(this);
+
     // Create 'string' table
     size_t stringTableIdx = createTable();
     TableObject* stringTable = getTable(stringTableIdx);
@@ -1046,4 +1070,122 @@ void VM::traceExecution() {
 
     // Disassemble current instruction
     chunk_->disassembleInstruction(ip_);
+}
+
+// ============================================================================
+// Garbage Collector Implementation
+// ============================================================================
+
+void VM::addObject(GCObject* object) {
+    object->setNext(gcObjects_);
+    gcObjects_ = object;
+}
+
+void VM::markValue(const Value& value) {
+    if (value.isRuntimeString()) {
+        size_t idx = value.asStringIndex();
+        if (idx < strings_.size() && strings_[idx]) {
+            markObject(strings_[idx]);
+        }
+    } else if (value.isTable()) {
+        size_t idx = value.asTableIndex();
+        if (idx < tables_.size() && tables_[idx]) {
+            markObject(tables_[idx]);
+        }
+    } else if (value.isClosure()) {
+        size_t idx = value.asClosureIndex();
+        if (idx < closures_.size() && closures_[idx]) {
+            markObject(closures_[idx]);
+        }
+    } else if (value.isFile()) {
+        size_t idx = value.asFileIndex();
+        if (idx < files_.size() && files_[idx]) {
+            markObject(files_[idx]);
+        }
+    }
+}
+
+void VM::markObject(GCObject* object) {
+    if (!object || object->isMarked()) return;
+
+    object->mark();
+
+    switch (object->type()) {
+        case GCObject::Type::TABLE: {
+            TableObject* table = static_cast<TableObject*>(object);
+            for (const auto& pair : table->data()) {
+                markValue(pair.first);
+                markValue(pair.second);
+            }
+            break;
+        }
+        case GCObject::Type::CLOSURE: {
+            ClosureObject* closure = static_cast<ClosureObject*>(object);
+            for (size_t i = 0; i < closure->upvalueCount(); i++) {
+                size_t idx = closure->getUpvalue(i);
+                if (idx != SIZE_MAX && idx < upvalues_.size() && upvalues_[idx]) {
+                    markObject(upvalues_[idx]);
+                }
+            }
+            break;
+        }
+        case GCObject::Type::UPVALUE: {
+            // Upvalues are handled specially - they reference stack values
+            // which are marked as roots, or closed values which we'll handle
+            // through the upvalue's internal storage
+            break;
+        }
+        default:
+            break;
+    }
+}
+
+void VM::markRoots() {
+    for (const Value& value : stack_) {
+        markValue(value);
+    }
+
+    for (const auto& pair : globals_) {
+        markValue(pair.second);
+    }
+
+    for (const CallFrame& frame : frames_) {
+        if (frame.closure) {
+            markObject(frame.closure);
+        }
+    }
+
+    for (UpvalueObject* upvalue : openUpvalues_) {
+        markObject(upvalue);
+    }
+}
+
+void VM::sweep() {
+    GCObject** current = &gcObjects_;
+    while (*current) {
+        GCObject* obj = *current;
+        if (!obj->isMarked()) {
+            *current = obj->next();
+            freeObject(obj);
+        } else {
+            obj->unmark();
+            current = &obj->nextRef();
+        }
+    }
+}
+
+void VM::freeObject(GCObject* object) {
+    delete object;
+}
+
+void VM::collectGarbage() {
+    if (!gcEnabled_) return;
+
+    markRoots();
+    sweep();
+
+    nextGC_ = bytesAllocated_ * 2;
+    if (nextGC_ < 1024 * 1024) {
+        nextGC_ = 1024 * 1024;
+    }
 }
