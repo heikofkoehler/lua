@@ -947,4 +947,6 @@ nil
 
 ## License
 
+MIT License - see [LICENSE](LICENSE) file for details.
+
 This is an educational implementation of a Lua-like language for learning purposes.
