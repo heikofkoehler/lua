@@ -874,7 +874,7 @@ Recursive descent with proper operator precedence:
 - ✅ Closures and upvalues
 - ✅ Multiple return values (in single-value contexts)
 - ✅ Variadic functions (...)
-- ⏳ Multiple assignment (local a, b = func())
+- ✅ Multiple assignment (local a, b, c = 1, 2, 3 and x, y = y, x)
 
 ### Phase 4: Objects & Memory ✅ COMPLETE
 - ✅ String objects with interning
