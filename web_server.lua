@@ -30,7 +30,8 @@ while true do
         -- Receive request (read first 1024 bytes)
         local request = socket.receive(client, 1024)
         if request then
-            print("Request received:")
+            print("Request received, length:")
+            print(string.len(request))
 
             -- Send HTTP response (using CRLF for protocol compliance)
             local response = "HTTP/1.1 200 OK\r\n" ..
@@ -40,14 +41,22 @@ while true do
                              "\r\n" ..
                              "<html><body><h1>Hello from Lua!</h1></body></html>"
 
-            socket.send(client, response)
-            sleep(0.1) -- Longer sleep to ensure data is sent
+            print("Response length:")
+            print(string.len(response))
+
+            local sent = socket.send(client, response)
+            print("Sent bytes:")
+            print(sent)
+
+            sleep(0.1) -- Sleep to ensure data is sent
+        else
+            print("No request received (request is nil)")
         end
 
         socket.close(client)
         print("Connection closed")
     end
 
-    -- Small sleep to prevent 100% CPU in case accept is non-blocking (though here it is blocking)
+    -- Small sleep to prevent 100% CPU
     sleep(0.01)
 end

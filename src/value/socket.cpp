@@ -86,9 +86,12 @@ std::string SocketObject::receive(int bufferSize) {
 
 void SocketObject::close() {
     if (isValid()) {
+        // Shutdown write side to flush send buffer and signal EOF
 #ifdef _WIN32
+        ::shutdown(fd_, SD_SEND);
         ::closesocket(fd_);
 #else
+        ::shutdown(fd_, SHUT_WR);
         ::close(fd_);
 #endif
         fd_ = INVALID_SOCKET;
