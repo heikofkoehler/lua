@@ -138,9 +138,9 @@ void VM::sweep() {
             *current = unreached->next();
             freeObject(unreached);
         } else {
-            // Marked object - unmark for next GC cycle
+            // Marked object - unmark for next GC cycle and advance to next element
             (*current)->unmark();
-            current = &((*current)->setNext((*current)->next()), *current);
+            current = &((*current)->nextRef());
         }
     }
 }

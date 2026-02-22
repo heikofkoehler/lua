@@ -490,10 +490,13 @@ void CodeGenerator::visitWhileStmt(WhileStmtNode* node) {
     size_t exitJump = emitJump(OpCode::OP_JUMP_IF_FALSE);
     emitOpCode(OpCode::OP_POP);  // Pop condition
 
-    // Compile body
+    // Compile body in its own scope so locals declared inside the loop
+    // are cleaned up at the end of each iteration.
+    beginScope();
     for (const auto& stmt : node->body()) {
         stmt->accept(*this);
     }
+    endScope();
 
     // Loop back to condition
     emitLoop(loopStart);
@@ -868,17 +871,11 @@ void CodeGenerator::visitFunctionDecl(FunctionDeclNode* node) {
     // Get compiled function chunk (don't call endScope - cleanup is handled by OP_RETURN_VALUE)
     auto functionChunk = std::move(chunk_);
 
-    // Capture upvalues - important: nested functions may have added upvalues to the CompilerState
-    // that's on the stack. We need to get those before we pop.
-    std::vector<Upvalue> capturedUpvalues;
-    if (!compilerStack_.empty()) {
-        // The state on top of the stack has our upvalues (potentially modified by nested compilation)
-        capturedUpvalues = compilerStack_.back().upvalues;
-    }
-    // Also include upvalues from upvalues_ (those added directly during this function's compilation)
-    for (const auto& uv : upvalues_) {
-        capturedUpvalues.push_back(uv);
-    }
+    // capturedUpvalues contains the upvalues for the current function.
+    // upvalues_ was populated during this function's body compilation via resolveUpvalue/
+    // resolveUpvalueHelper. After popCompilerState(), the parent's upvalues_ will be restored
+    // (including any entries added by resolveUpvalueHelper for grandparent captures).
+    std::vector<Upvalue> capturedUpvalues = upvalues_;
 
     // Restore outer compiler state
     popCompilerState();

@@ -4,6 +4,7 @@
 #include "common/common.hpp"
 #include "compiler/ast.hpp"
 #include "compiler/chunk.hpp"
+#include <deque>
 #include <memory>
 
 // CodeGenerator: Walks AST and generates bytecode
@@ -75,7 +76,7 @@ private:
     std::vector<Upvalue> upvalues_;
     int scopeDepth_;
     int localCount_;
-    std::vector<CompilerState> compilerStack_;
+    std::deque<CompilerState> compilerStack_;
     CompilerState* enclosingCompiler_;  // Parent compiler for upvalue resolution
 
     // Loop context for break statements
