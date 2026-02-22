@@ -37,10 +37,13 @@ set(SOURCES
     src/compiler/codegen.cpp
     src/vm/vm.cpp
     src/vm/gc.cpp
+    src/vm/gc_impl.cpp
     src/vm/stdlib_base.cpp
     src/vm/stdlib_string.cpp
     src/vm/stdlib_table.cpp
     src/vm/stdlib_math.cpp
+    src/vm/stdlib_socket.cpp
+    src/value/socket.cpp
 )
 
 # Create executable

@@ -48,6 +48,7 @@ public:
     // Query state
     bool isClosed() const { return isClosed_; }
     size_t stackIndex() const { return stackIndex_; }
+    const Value& closedValue() const { return closed_; }
 
     // GC interface: mark closed value if upvalue is closed
     void markReferences() override;

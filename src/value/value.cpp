@@ -60,6 +60,12 @@ void Value::print(std::ostream& os) const {
             break;
         }
 
+        case Type::SOCKET: {
+            size_t socketIndex = asSocketIndex();
+            os << "<socket:" << socketIndex << ">";
+            break;
+        }
+
         case Type::NATIVE_FUNCTION: {
             os << "<native function>";
             break;

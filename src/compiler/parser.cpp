@@ -537,13 +537,26 @@ std::unique_ptr<ExprNode> Parser::equality() {
 }
 
 std::unique_ptr<ExprNode> Parser::comparison() {
-    auto expr = term();
+    auto expr = concat();
 
     while (match(TokenType::GREATER) || match(TokenType::GREATER_EQUAL) ||
            match(TokenType::LESS) || match(TokenType::LESS_EQUAL)) {
         TokenType op = previous_.type;
         int line = previous_.line;
-        auto right = term();
+        auto right = concat();
+        expr = std::make_unique<BinaryNode>(std::move(expr), op, std::move(right), line);
+    }
+
+    return expr;
+}
+
+std::unique_ptr<ExprNode> Parser::concat() {
+    auto expr = term();
+
+    if (match(TokenType::DOT_DOT)) {
+        TokenType op = previous_.type;
+        int line = previous_.line;
+        auto right = concat();  // Right-associative
         expr = std::make_unique<BinaryNode>(std::move(expr), op, std::move(right), line);
     }
 

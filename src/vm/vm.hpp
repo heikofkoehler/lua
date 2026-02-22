@@ -10,6 +10,7 @@
 #include "value/string.hpp"
 #include "value/table.hpp"
 #include "value/file.hpp"
+#include "value/socket.hpp"
 #include "compiler/chunk.hpp"
 #include <vector>
 #include <unordered_map>
@@ -76,6 +77,12 @@ public:
     FileObject* getFile(size_t index);
     void closeFile(size_t index);
 
+    // Socket operations
+    size_t createSocket(socket_t fd);
+    size_t registerSocket(SocketObject* socket);
+    SocketObject* getSocket(size_t index);
+    void closeSocket(size_t index);
+
     // Native function operations
     size_t registerNativeFunction(const std::string& name, NativeFunction func);
     NativeFunction getNativeFunction(size_t index);
@@ -111,6 +118,8 @@ private:
     Value divide(const Value& a, const Value& b);
     Value modulo(const Value& a, const Value& b);
     Value power(const Value& a, const Value& b);
+    Value concat(const Value& a, const Value& b);
+    std::string getStringValue(const Value& value);
     Value negate(const Value& a);
 
     // Comparison operations
@@ -136,6 +145,7 @@ private:
     std::vector<UpvalueObject*> upvalues_;  // Upvalue pool (owns upvalue objects)
     std::vector<UpvalueObject*> openUpvalues_;  // Open upvalues (sorted by stack index)
     std::vector<FileObject*> files_;  // File pool (owns file objects)
+    std::vector<SocketObject*> sockets_;  // Socket pool (owns socket objects)
     std::vector<NativeFunction> nativeFunctions_;  // Native function table
     bool hadError_;               // Error flag
     bool stdlibInitialized_;      // Whether standard library has been initialized

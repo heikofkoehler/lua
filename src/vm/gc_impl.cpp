@@ -1,0 +1,254 @@
+// Garbage Collector Implementation
+// Temporary file - will be merged into vm.cpp
+
+#include "vm/vm.hpp"
+#include <iostream>
+
+// Add a GC object to the linked list
+void VM::addObject(GCObject* object) {
+    object->setNext(gcObjects_);
+    gcObjects_ = object;
+}
+
+// Mark a single value (if it references a GC object)
+void VM::markValue(const Value& value) {
+    // Mark objects based on value type
+    if (value.isString()) {
+        // Compile-time strings from chunk - mark the string
+        size_t idx = value.asStringIndex();
+        if (idx < rootChunk_->numStrings()) {
+            markObject(rootChunk_->getString(idx));
+        }
+    } else if (value.isRuntimeString()) {
+        // Runtime strings from VM pool
+        size_t idx = value.asStringIndex();
+        if (idx < strings_.size()) {
+            markObject(strings_[idx]);
+        }
+    } else if (value.isTable()) {
+        size_t idx = value.asTableIndex();
+        if (idx < tables_.size()) {
+            markObject(tables_[idx]);
+        }
+    } else if (value.isClosure()) {
+        size_t idx = value.asClosureIndex();
+        if (idx < closures_.size()) {
+            markObject(closures_[idx]);
+        }
+    } else if (value.isFile()) {
+        size_t idx = value.asFileIndex();
+        if (idx < files_.size()) {
+            markObject(files_[idx]);
+        }
+    } else if (value.isSocket()) {
+        size_t idx = value.asSocketIndex();
+        if (idx < sockets_.size()) {
+            markObject(sockets_[idx]);
+        }
+    }
+}
+
+// Mark a GC object and its references
+void VM::markObject(GCObject* object) {
+    if (object == nullptr) return;
+    if (object->isMarked()) return;  // Already marked
+
+    object->mark();
+
+    // Mark referenced objects based on type
+    switch (object->type()) {
+        case GCObject::Type::STRING:
+            // Strings don't reference other objects
+            break;
+
+        case GCObject::Type::TABLE: {
+            TableObject* table = static_cast<TableObject*>(object);
+            // Mark all keys and values
+            for (const auto& pair : table->data()) {
+                markValue(pair.first);   // Mark key
+                markValue(pair.second);  // Mark value
+            }
+            break;
+        }
+
+        case GCObject::Type::CLOSURE: {
+            ClosureObject* closure = static_cast<ClosureObject*>(object);
+            // Mark all upvalues
+            for (size_t i = 0; i < closure->upvalueCount(); i++) {
+                size_t upvalueIdx = closure->getUpvalue(i);
+                if (upvalueIdx != SIZE_MAX && upvalueIdx < upvalues_.size()) {
+                    markObject(upvalues_[upvalueIdx]);
+                }
+            }
+            break;
+        }
+
+        case GCObject::Type::UPVALUE: {
+            UpvalueObject* upvalue = static_cast<UpvalueObject*>(object);
+            // If closed, mark the closed value
+            if (upvalue->isClosed()) {
+                markValue(upvalue->closedValue());
+            }
+            break;
+        }
+
+        case GCObject::Type::FILE:
+            // Files don't reference other objects
+            break;
+
+        case GCObject::Type::SOCKET:
+            // Sockets don't reference other objects
+            break;
+    }
+}
+
+// Mark all root objects
+void VM::markRoots() {
+    // Mark values on the stack
+    for (const Value& value : stack_) {
+        markValue(value);
+    }
+
+    // Mark global variables
+    for (const auto& pair : globals_) {
+        markValue(pair.second);
+    }
+
+    // Mark closures in call frames
+    for (const CallFrame& frame : frames_) {
+        if (frame.closure) {
+            markObject(frame.closure);
+        }
+    }
+
+    // Mark open upvalues
+    for (UpvalueObject* upvalue : openUpvalues_) {
+        markObject(upvalue);
+    }
+}
+
+// Sweep unmarked objects
+void VM::sweep() {
+    GCObject** current = &gcObjects_;
+
+    while (*current != nullptr) {
+        if (!(*current)->isMarked()) {
+            // Unmarked object - remove from list and free
+            GCObject* unreached = *current;
+            *current = unreached->next();
+            freeObject(unreached);
+        } else {
+            // Marked object - unmark for next GC cycle
+            (*current)->unmark();
+            current = &((*current)->setNext((*current)->next()), *current);
+        }
+    }
+}
+
+// Free a GC object
+void VM::freeObject(GCObject* object) {
+    switch (object->type()) {
+        case GCObject::Type::STRING: {
+            StringObject* str = static_cast<StringObject*>(object);
+            // Remove from string pool if it's there
+            for (size_t i = 0; i < strings_.size(); i++) {
+                if (strings_[i] == str) {
+                    strings_[i] = nullptr;  // Leave gap for now
+                    break;
+                }
+            }
+            delete str;
+            break;
+        }
+
+        case GCObject::Type::TABLE: {
+            TableObject* table = static_cast<TableObject*>(object);
+            // Remove from table pool
+            for (size_t i = 0; i < tables_.size(); i++) {
+                if (tables_[i] == table) {
+                    tables_[i] = nullptr;
+                    break;
+                }
+            }
+            delete table;
+            break;
+        }
+
+        case GCObject::Type::CLOSURE: {
+            ClosureObject* closure = static_cast<ClosureObject*>(object);
+            // Remove from closure pool
+            for (size_t i = 0; i < closures_.size(); i++) {
+                if (closures_[i] == closure) {
+                    closures_[i] = nullptr;
+                    break;
+                }
+            }
+            delete closure;
+            break;
+        }
+
+        case GCObject::Type::UPVALUE: {
+            UpvalueObject* upvalue = static_cast<UpvalueObject*>(object);
+            // Remove from upvalue pool
+            for (size_t i = 0; i < upvalues_.size(); i++) {
+                if (upvalues_[i] == upvalue) {
+                    upvalues_[i] = nullptr;
+                    break;
+                }
+            }
+            delete upvalue;
+            break;
+        }
+
+        case GCObject::Type::FILE: {
+            FileObject* file = static_cast<FileObject*>(object);
+            // Remove from file pool
+            for (size_t i = 0; i < files_.size(); i++) {
+                if (files_[i] == file) {
+                    files_[i] = nullptr;
+                    break;
+                }
+            }
+            delete file;
+            break;
+        }
+
+        case GCObject::Type::SOCKET: {
+            SocketObject* socket = static_cast<SocketObject*>(object);
+            // Remove from socket pool
+            for (size_t i = 0; i < sockets_.size(); i++) {
+                if (sockets_[i] == socket) {
+                    sockets_[i] = nullptr;
+                    break;
+                }
+            }
+            delete socket;
+            break;
+        }
+    }
+}
+
+// Run garbage collection
+void VM::collectGarbage() {
+    if (!gcEnabled_) return;
+
+#ifdef DEBUG_LOG_GC
+    std::cout << "-- GC begin\n";
+    size_t before = bytesAllocated_;
+#endif
+
+    // Mark phase
+    markRoots();
+
+    // Sweep phase
+    sweep();
+
+#ifdef DEBUG_LOG_GC
+    std::cout << "-- GC end\n";
+    std::cout << "   collected " << (before - bytesAllocated_)
+              << " bytes (from " << before << " to " << bytesAllocated_ << ")\n";
+#endif
+
+    // Adjust next GC threshold
+    nextGC_ = bytesAllocated_ * 2;
+}

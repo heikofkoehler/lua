@@ -57,6 +57,7 @@ private:
     std::unique_ptr<ExprNode> logicalAnd();
     std::unique_ptr<ExprNode> equality();
     std::unique_ptr<ExprNode> comparison();
+    std::unique_ptr<ExprNode> concat();
     std::unique_ptr<ExprNode> term();
     std::unique_ptr<ExprNode> factor();
     std::unique_ptr<ExprNode> power();

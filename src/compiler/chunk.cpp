@@ -128,6 +128,8 @@ size_t Chunk::disassembleInstruction(size_t offset) const {
             return simpleInstruction("OP_MOD", offset);
         case OpCode::OP_POW:
             return simpleInstruction("OP_POW", offset);
+        case OpCode::OP_CONCAT:
+            return simpleInstruction("OP_CONCAT", offset);
 
         case OpCode::OP_NEG:
             return simpleInstruction("OP_NEG", offset);
@@ -145,16 +147,44 @@ size_t Chunk::disassembleInstruction(size_t offset) const {
         case OpCode::OP_GREATER_EQUAL:
             return simpleInstruction("OP_GREATER_EQUAL", offset);
 
+        case OpCode::OP_GET_UPVALUE:
+            return byteInstruction("OP_GET_UPVALUE", offset);
+        case OpCode::OP_SET_UPVALUE:
+            return byteInstruction("OP_SET_UPVALUE", offset);
+        case OpCode::OP_CLOSE_UPVALUE:
+            return simpleInstruction("OP_CLOSE_UPVALUE", offset);
+
         case OpCode::OP_PRINT:
             return simpleInstruction("OP_PRINT", offset);
         case OpCode::OP_POP:
             return simpleInstruction("OP_POP", offset);
+        case OpCode::OP_DUP:
+            return simpleInstruction("OP_DUP", offset);
         case OpCode::OP_JUMP:
             return jumpInstruction("OP_JUMP", 1, offset);
         case OpCode::OP_JUMP_IF_FALSE:
             return jumpInstruction("OP_JUMP_IF_FALSE", 1, offset);
         case OpCode::OP_LOOP:
             return jumpInstruction("OP_LOOP", -1, offset);
+
+        case OpCode::OP_CLOSURE:
+            return constantInstruction("OP_CLOSURE", offset);
+        case OpCode::OP_CALL:
+            // TODO: call instruction has 2 bytes (args, returns)
+            return byteInstruction("OP_CALL", offset);
+        case OpCode::OP_RETURN_VALUE:
+            return simpleInstruction("OP_RETURN_VALUE", offset);
+
+        case OpCode::OP_NEW_TABLE:
+            return simpleInstruction("OP_NEW_TABLE", offset);
+        case OpCode::OP_GET_TABLE:
+            return simpleInstruction("OP_GET_TABLE", offset);
+        case OpCode::OP_SET_TABLE:
+            return simpleInstruction("OP_SET_TABLE", offset);
+
+        case OpCode::OP_GET_VARARG:
+            return byteInstruction("OP_GET_VARARG", offset);
+
         case OpCode::OP_RETURN:
             return simpleInstruction("OP_RETURN", offset);
 

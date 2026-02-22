@@ -12,7 +12,8 @@ public:
         TABLE,
         CLOSURE,
         UPVALUE,
-        FILE
+        FILE,
+        SOCKET
     };
 
     GCObject(Type type) : type_(type), isMarked_(false), next_(nullptr) {}

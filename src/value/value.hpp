@@ -32,6 +32,7 @@ public:
         TABLE,
         CLOSURE,
         FILE,
+        SOCKET,
         NATIVE_FUNCTION
     };
 
@@ -95,6 +96,12 @@ public:
         return Value(QNAN | TAG_FILE | (fileIndex << 4));
     }
 
+    static Value socket(size_t socketIndex) {
+        // Encode socket index (not pointer!)
+        // Index fits easily in lower 48 bits
+        return Value(QNAN | TAG_SOCKET | (socketIndex << 4));
+    }
+
     static Value nativeFunction(size_t funcIndex) {
         // Encode native function index (not pointer!)
         // Index fits easily in lower 48 bits
@@ -139,6 +146,10 @@ public:
         return (bits_ & (QNAN | TAG_MASK)) == (QNAN | TAG_FILE);
     }
 
+    bool isSocket() const {
+        return (bits_ & (QNAN | TAG_MASK)) == (QNAN | TAG_SOCKET);
+    }
+
     bool isNativeFunction() const {
         return (bits_ & (QNAN | TAG_MASK)) == (QNAN | TAG_NATIVE_FUNCTION);
     }
@@ -151,6 +162,7 @@ public:
         if (isTable()) return Type::TABLE;
         if (isClosure()) return Type::CLOSURE;
         if (isFile()) return Type::FILE;
+        if (isSocket()) return Type::SOCKET;
         if (isNativeFunction()) return Type::NATIVE_FUNCTION;
         return Type::NIL;
     }
@@ -217,6 +229,15 @@ public:
         return static_cast<size_t>(index);
     }
 
+    size_t asSocketIndex() const {
+        if (!isSocket()) {
+            throw RuntimeError("Value is not a socket");
+        }
+        // Extract socket index (shift right by 4 to undo the encoding)
+        uint64_t index = (bits_ & 0x0000FFFFFFFFFFFFULL) >> 4;
+        return static_cast<size_t>(index);
+    }
+
     size_t asNativeFunctionIndex() const {
         if (!isNativeFunction()) {
             throw RuntimeError("Value is not a native function");
@@ -270,8 +291,9 @@ private:
     static constexpr uint64_t TAG_TABLE = 5;
     static constexpr uint64_t TAG_CLOSURE = 6;
     static constexpr uint64_t TAG_FILE = 7;
-    static constexpr uint64_t TAG_RUNTIME_STRING = 8;  // Runtime string (from VM pool)
-    static constexpr uint64_t TAG_NATIVE_FUNCTION = 9;  // Native function (C++ function pointer)
+    static constexpr uint64_t TAG_SOCKET = 8;
+    static constexpr uint64_t TAG_RUNTIME_STRING = 9;  // Runtime string (from VM pool)
+    static constexpr uint64_t TAG_NATIVE_FUNCTION = 10;  // Native function (C++ function pointer)
     static constexpr uint64_t TAG_MASK = 15;  // Updated to 4 bits for more tags
 };
 

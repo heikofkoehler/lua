@@ -102,6 +102,10 @@ void CodeGenerator::visitBinary(BinaryNode* node) {
             emitOpCode(OpCode::OP_POW);
             break;
 
+        case TokenType::DOT_DOT:
+            emitOpCode(OpCode::OP_CONCAT);
+            break;
+
         case TokenType::EQUAL_EQUAL:
             emitOpCode(OpCode::OP_EQUAL);
             break;

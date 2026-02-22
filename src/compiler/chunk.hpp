@@ -40,6 +40,7 @@ public:
     // Returns the index of the string
     size_t addString(const std::string& str);
     StringObject* getString(size_t index) const;
+    size_t numStrings() const { return strings_.size(); }
 
     // Access bytecode
     const std::vector<uint8_t>& code() const { return code_; }

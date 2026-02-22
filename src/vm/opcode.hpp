@@ -29,6 +29,7 @@ enum class OpCode : uint8_t {
     OP_DIV,         // Division: pop b, pop a, push a / b
     OP_MOD,         // Modulo: pop b, pop a, push a % b
     OP_POW,         // Power: pop b, pop a, push a ^ b
+    OP_CONCAT,      // Concatenation: pop b, pop a, push a .. b
 
     // Unary operations
     OP_NEG,         // Negation: pop a, push -a
@@ -93,6 +94,7 @@ inline const char* opcodeName(OpCode op) {
         case OpCode::OP_DIV:         return "OP_DIV";
         case OpCode::OP_MOD:         return "OP_MOD";
         case OpCode::OP_POW:         return "OP_POW";
+        case OpCode::OP_CONCAT:      return "OP_CONCAT";
         case OpCode::OP_NEG:         return "OP_NEG";
         case OpCode::OP_NOT:         return "OP_NOT";
         case OpCode::OP_EQUAL:         return "OP_EQUAL";
