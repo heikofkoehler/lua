@@ -1097,6 +1097,12 @@ Value VM::negate(const Value& a) {
 }
 
 Value VM::equal(const Value& a, const Value& b) {
+    // Strings may come from two pools (compile-time vs runtime), so compare content
+    bool aIsStr = a.isString() || a.isRuntimeString();
+    bool bIsStr = b.isString() || b.isRuntimeString();
+    if (aIsStr && bIsStr) {
+        return Value::boolean(getStringValue(a) == getStringValue(b));
+    }
     return Value::boolean(a == b);
 }
 

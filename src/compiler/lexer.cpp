@@ -185,10 +185,61 @@ void Lexer::skipWhitespace() {
 
 Token Lexer::string() {
     char quote = source_[start_];  // Remember opening quote (' or ")
+    std::string value;
 
     while (peek() != quote && !isAtEnd()) {
-        if (peek() == '\n') line_++;
-        advance();
+        char c = peek();
+
+        if (c == '\\') {
+            advance();  // consume backslash
+            if (isAtEnd()) break;
+            char esc = advance();
+            switch (esc) {
+                case 'a':  value += '\a'; break;
+                case 'b':  value += '\b'; break;
+                case 'f':  value += '\f'; break;
+                case 'n':  value += '\n'; break;
+                case 'r':  value += '\r'; break;
+                case 't':  value += '\t'; break;
+                case 'v':  value += '\v'; break;
+                case '\\': value += '\\'; break;
+                case '\'': value += '\''; break;
+                case '"':  value += '"';  break;
+                case '0':  value += '\0'; break;
+                case '\n': line_++; value += '\n'; break;
+                case '\r':
+                    if (peek() == '\n') advance();
+                    line_++;
+                    value += '\n';
+                    break;
+                case 'x': {
+                    // Hex escape \xXX
+                    int hex = 0;
+                    for (int i = 0; i < 2 && isxdigit(peek()); i++) {
+                        char h = advance();
+                        hex = hex * 16 + (isdigit(h) ? h - '0' :
+                                          tolower(h) - 'a' + 10);
+                    }
+                    value += static_cast<char>(hex);
+                    break;
+                }
+                default:
+                    if (isDigit(esc)) {
+                        // Decimal escape \ddd (up to 3 digits, 0-255)
+                        int dec = esc - '0';
+                        if (isDigit(peek())) dec = dec * 10 + (advance() - '0');
+                        if (isDigit(peek())) dec = dec * 10 + (advance() - '0');
+                        if (dec > 255) return errorToken("Decimal escape too large");
+                        value += static_cast<char>(dec);
+                    } else {
+                        return errorToken(std::string("Invalid escape sequence '\\") + esc + "'");
+                    }
+                    break;
+            }
+        } else {
+            if (c == '\n') line_++;
+            value += advance();
+        }
     }
 
     if (isAtEnd()) {
@@ -198,8 +249,6 @@ Token Lexer::string() {
     // Closing quote
     advance();
 
-    // Extract string content (without quotes)
-    std::string value = source_.substr(start_ + 1, current_ - start_ - 2);
     return Token(TokenType::STRING, value, line_);
 }
 
