@@ -239,13 +239,19 @@ SocketObject* VM::getSocket(size_t index) {
     if (index >= sockets_.size()) {
         return nullptr;
     }
-    return sockets_[index];
+    SocketObject* sock = sockets_[index];
+    if (!sock) {
+        return nullptr;  // Socket was closed and nullified
+    }
+    return sock;
 }
 
 void VM::closeSocket(size_t index) {
     SocketObject* socket = getSocket(index);
     if (socket) {
         socket->close();
+        // Nullify the socket in the vector so it can't be accidentally reused
+        sockets_[index] = nullptr;
     }
 }
 

@@ -154,7 +154,6 @@ bool native_socket_send(VM* vm, int argCount) {
     }
 
     int sent = sock->send(data);
-    std::cout << "Socket sent " << sent << " bytes" << std::endl;
     vm->push(Value::number(sent));
     return true;
 }

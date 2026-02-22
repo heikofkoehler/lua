@@ -46,12 +46,23 @@ SocketObject* SocketObject::accept() {
 }
 
 int SocketObject::send(const std::string& data) {
-    if (!isValid()) return -1;
-    int sent = ::send(fd_, data.c_str(), data.length(), 0);
-    if (sent < 0) {
-        std::cerr << "send failed: " << errno << " (fd: " << fd_ << ")" << std::endl;
+    if (!isValid()) {
+        return -1;
     }
-    return sent;
+
+    size_t totalSent = 0;
+    while (totalSent < data.length()) {
+        int sent = ::send(fd_, data.c_str() + totalSent, data.length() - totalSent, 0);
+        if (sent < 0) {
+            return -1;
+        }
+        if (sent == 0) {
+            // Connection closed by peer
+            break;
+        }
+        totalSent += sent;
+    }
+    return static_cast<int>(totalSent);
 }
 
 std::string SocketObject::receive(int bufferSize) {
