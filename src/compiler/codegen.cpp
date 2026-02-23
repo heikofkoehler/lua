@@ -1,5 +1,6 @@
 #include "compiler/codegen.hpp"
 #include "value/function.hpp"
+#include "value/string.hpp"
 
 CodeGenerator::CodeGenerator()
     : chunk_(nullptr), currentLine_(1), scopeDepth_(0), localCount_(0), enclosingCompiler_(nullptr), expectedRetCount_(1) {}
@@ -198,11 +199,11 @@ void CodeGenerator::visitVararg(VarargExprNode* node) {
 void CodeGenerator::visitPrintStmt(PrintStmtNode* node) {
     setLine(node->line());
 
-    // Compile expression
-    node->expr()->accept(*this);
-
-    // Emit print instruction
-    emitOpCode(OpCode::OP_PRINT);
+    // Compile each expression and emit print instruction
+    for (const auto& arg : node->args()) {
+        arg->accept(*this);
+        emitOpCode(OpCode::OP_PRINT);
+    }
 }
 
 void CodeGenerator::visitExprStmt(ExprStmtNode* node) {
@@ -889,6 +890,28 @@ void CodeGenerator::visitCall(CallExprNode* node) {
             // Compile argument (file)
             node->args()[0]->accept(*this);  // file handle
             emitOpCode(OpCode::OP_IO_CLOSE);
+            return;
+        }
+    }
+
+    // Check for coroutine.yield (if callee is coroutine.yield)
+    auto* indexExpr = dynamic_cast<IndexExprNode*>(node->callee());
+    if (indexExpr) {
+        auto* tableVar = dynamic_cast<VariableExprNode*>(indexExpr->table());
+        auto* stringKey = dynamic_cast<StringLiteralNode*>(indexExpr->key());
+        if (tableVar && tableVar->name() == "coroutine" && 
+            stringKey && stringKey->content() == "yield") {
+            
+            // Compile arguments
+            for (const auto& arg : node->args()) {
+                arg->accept(*this);
+            }
+            // Emit yield instruction
+            emitOpCode(OpCode::OP_YIELD);
+            if (node->args().size() > UINT8_MAX) {
+                throw CompileError("Too many arguments to yield", currentLine_);
+            }
+            emitByte(static_cast<uint8_t>(node->args().size()));
             return;
         }
     }

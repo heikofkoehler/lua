@@ -157,10 +157,17 @@ std::unique_ptr<StmtNode> Parser::statement() {
 std::unique_ptr<StmtNode> Parser::printStatement() {
     int line = previous_.line;
     consume(TokenType::LEFT_PAREN, "Expected '(' after 'print'");
-    auto expr = expression();
-    consume(TokenType::RIGHT_PAREN, "Expected ')' after expression");
+    
+    std::vector<std::unique_ptr<ExprNode>> args;
+    if (!check(TokenType::RIGHT_PAREN)) {
+        do {
+            args.push_back(expression());
+        } while (match(TokenType::COMMA));
+    }
+    
+    consume(TokenType::RIGHT_PAREN, "Expected ')' after arguments");
 
-    return std::make_unique<PrintStmtNode>(std::move(expr), line);
+    return std::make_unique<PrintStmtNode>(std::move(args), line);
 }
 
 std::unique_ptr<StmtNode> Parser::expressionStatement() {

@@ -43,6 +43,7 @@ set(SOURCES
     src/vm/stdlib_table.cpp
     src/vm/stdlib_math.cpp
     src/vm/stdlib_socket.cpp
+    src/vm/stdlib_coroutine.cpp
     src/value/socket.cpp
 )
 

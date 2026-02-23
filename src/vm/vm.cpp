@@ -10,13 +10,17 @@ void registerStringLibrary(VM* vm, TableObject* stringTable);
 void registerTableLibrary(VM* vm, TableObject* tableTable);
 void registerMathLibrary(VM* vm, TableObject* mathTable);
 void registerSocketLibrary(VM* vm, TableObject* socketTable);
+void registerCoroutineLibrary(VM* vm, TableObject* coroutineTable);
 void registerBaseLibrary(VM* vm);
 
-VM::VM() : chunk_(nullptr), rootChunk_(nullptr), ip_(0), hadError_(false), stdlibInitialized_(false),
+VM::VM() : mainCoroutine_(nullptr), currentCoroutine_(nullptr),
+           hadError_(false), stdlibInitialized_(false),
            gcObjects_(nullptr), bytesAllocated_(0), nextGC_(1024 * 1024), gcEnabled_(true) {
-    stack_.reserve(STACK_MAX);
-    frames_.reserve(FRAMES_MAX);
-    // Standard library will be initialized on first run() call
+    // Create main coroutine
+    createCoroutine(nullptr);
+    mainCoroutine_ = coroutines_.back();
+    mainCoroutine_->status = CoroutineObject::Status::RUNNING;
+    currentCoroutine_ = mainCoroutine_;
 }
 
 VM::~VM() {
@@ -27,8 +31,20 @@ VM::~VM() {
 }
 
 void VM::reset() {
-    stack_.clear();
-    frames_.clear();
+    // Clean up coroutines (VM owns them)
+    for (auto* co : coroutines_) {
+        delete co;
+    }
+    coroutines_.clear();
+    mainCoroutine_ = nullptr;
+    currentCoroutine_ = nullptr;
+
+    // Create a new main coroutine for next use
+    createCoroutine(nullptr);
+    mainCoroutine_ = coroutines_.back();
+    mainCoroutine_->status = CoroutineObject::Status::RUNNING;
+    currentCoroutine_ = mainCoroutine_;
+
     // Note: functions_ not cleaned up here since Chunk owns function objects
     functions_.clear();
     // Clean up strings (VM owns them)
@@ -52,16 +68,16 @@ void VM::reset() {
         delete upvalue;
     }
     upvalues_.clear();
-    openUpvalues_.clear();
+    currentCoroutine_->openUpvalues.clear();
     // Clean up files (VM owns them)
     for (auto* file : files_) {
         delete file;
     }
     files_.clear();
-    ip_ = 0;
+    currentCoroutine_->ip = 0;
     hadError_ = false;
-    chunk_ = nullptr;
-    rootChunk_ = nullptr;
+    currentCoroutine_->chunk = nullptr;
+    currentCoroutine_->rootChunk = nullptr;
 }
 
 size_t VM::registerFunction(FunctionObject* func) {
@@ -189,9 +205,70 @@ ClosureObject* VM::getClosure(size_t index) {
     return closures_[index];
 }
 
+size_t VM::createCoroutine(ClosureObject* closure) {
+    if (bytesAllocated_ > nextGC_) {
+        collectGarbage();
+    }
+
+    CoroutineObject* co = new CoroutineObject();
+    addObject(co);  // Register with GC
+    size_t index = coroutines_.size();
+    coroutines_.push_back(co);
+
+    if (closure) {
+        // Find the index of this closure.
+        size_t closureIdx = SIZE_MAX;
+        for (size_t i = 0; i < closures_.size(); i++) {
+            if (closures_[i] == closure) {
+                closureIdx = i;
+                break;
+            }
+        }
+        
+        if (closureIdx != SIZE_MAX) {
+            co->stack.push_back(Value::closure(closureIdx));
+            
+            CallFrame frame;
+            frame.closure = closure;
+            frame.callerChunk = nullptr;
+            frame.ip = 0;
+            frame.stackBase = 1;
+            frame.retCount = 0;
+            frame.varargCount = 0;
+            frame.varargBase = 0;
+            co->frames.push_back(frame);
+            
+            co->chunk = closure->function()->chunk();
+            co->rootChunk = closure->function()->chunk(); // Set rootChunk for the coroutine
+            co->ip = 0;
+        }
+    }
+
+    bytesAllocated_ += sizeof(CoroutineObject);
+
+    return index;
+}
+
+CoroutineObject* VM::getCoroutine(size_t index) {
+    if (index >= coroutines_.size()) {
+        runtimeError("Invalid thread index");
+        return nullptr;
+    }
+    return coroutines_[index];
+}
+
+size_t VM::getCoroutineIndex(CoroutineObject* co) {
+    for (size_t i = 0; i < coroutines_.size(); i++) {
+        if (coroutines_[i] == co) {
+            return i;
+        }
+    }
+    return SIZE_MAX;
+}
+
 size_t VM::captureUpvalue(size_t stackIndex) {
     // Check if upvalue already exists for this stack slot
-    for (UpvalueObject* openUpvalue : openUpvalues_) {
+    for (UpvalueObject* openUpvalue : currentCoroutine_->openUpvalues) {
         if (!openUpvalue->isClosed() && openUpvalue->stackIndex() == stackIndex) {
             // Find and return index
             for (size_t i = 0; i < upvalues_.size(); i++) {
@@ -212,12 +289,12 @@ size_t VM::captureUpvalue(size_t stackIndex) {
     size_t index = upvalues_.size();
     upvalues_.push_back(upvalue);
 
-    // Insert into openUpvalues_ (keep sorted by stack index for efficient closing)
-    auto it = openUpvalues_.begin();
-    while (it != openUpvalues_.end() && (*it)->stackIndex() < stackIndex) {
+    // Insert into currentCoroutine_->openUpvalues (keep sorted by stack index for efficient closing)
+    auto it = currentCoroutine_->openUpvalues.begin();
+    while (it != currentCoroutine_->openUpvalues.end() && (*it)->stackIndex() < stackIndex) {
         ++it;
     }
-    openUpvalues_.insert(it, upvalue);
+    currentCoroutine_->openUpvalues.insert(it, upvalue);
 
     bytesAllocated_ += sizeof(UpvalueObject);
 
@@ -235,12 +312,12 @@ UpvalueObject* VM::getUpvalue(size_t index) {
 
 void VM::closeUpvalues(size_t lastStackIndex) {
     // Close all open upvalues at or above lastStackIndex
-    auto it = openUpvalues_.begin();
-    while (it != openUpvalues_.end()) {
+    auto it = currentCoroutine_->openUpvalues.begin();
+    while (it != currentCoroutine_->openUpvalues.end()) {
         UpvalueObject* upvalue = *it;
         if (!upvalue->isClosed() && upvalue->stackIndex() >= lastStackIndex) {
-            upvalue->close(stack_);
-            it = openUpvalues_.erase(it);
+            upvalue->close(currentCoroutine_->stack);
+            it = currentCoroutine_->openUpvalues.erase(it);
         } else {
             ++it;
         }
@@ -348,34 +425,43 @@ void VM::initStandardLibrary() {
     TableObject* socketTable = getTable(socketTableIdx);
     registerSocketLibrary(this, socketTable);
     globals_["socket"] = Value::table(socketTableIdx);
+
+    // Create 'coroutine' table
+    size_t coroutineTableIdx = createTable();
+    TableObject* coroutineTable = getTable(coroutineTableIdx);
+    registerCoroutineLibrary(this, coroutineTable);
+    globals_["coroutine"] = Value::table(coroutineTableIdx);
 }
 
 CallFrame& VM::currentFrame() {
-    if (frames_.empty()) {
+    if (currentCoroutine_->frames.empty()) {
         throw RuntimeError("No active call frame");
     }
-    return frames_.back();
+    return currentCoroutine_->frames.back();
 }
 
 const CallFrame& VM::currentFrame() const {
-    if (frames_.empty()) {
+    if (currentCoroutine_->frames.empty()) {
         throw RuntimeError("No active call frame");
     }
-    return frames_.back();
+    return currentCoroutine_->frames.back();
 }
 
 bool VM::run(const Chunk& chunk) {
     // Save current state for recursive calls
-    const Chunk* oldChunk = chunk_;
-    const Chunk* oldRoot = rootChunk_;
-    size_t oldIP = ip_;
-    size_t oldFrameCount = frames_.size();
+    const Chunk* oldChunk = currentCoroutine_->chunk;
+    const Chunk* oldRoot = currentCoroutine_->rootChunk;
+    size_t oldIP = currentCoroutine_->ip;
+    size_t oldFrameCount = currentCoroutine_->frames.size();
 
-    chunk_ = &chunk;
-    if (rootChunk_ == nullptr) {
-        rootChunk_ = &chunk;
+    currentCoroutine_->chunk = &chunk;
+    if (currentCoroutine_->rootChunk == nullptr) {
+        currentCoroutine_->rootChunk = &chunk;
     }
-    ip_ = 0;
+    if (mainCoroutine_->rootChunk == nullptr) {
+        mainCoroutine_->rootChunk = &chunk;
+    }
+    currentCoroutine_->ip = 0;
     hadError_ = false;
 
     // Initialize standard library on first run (needs chunk for string pool)
@@ -393,11 +479,30 @@ bool VM::run(const Chunk& chunk) {
     rootFrame.closure = nullptr;
     rootFrame.callerChunk = nullptr;
     rootFrame.ip = 0;
-    rootFrame.stackBase = stack_.size(); // Use current stack size as base
+    rootFrame.stackBase = currentCoroutine_->stack.size(); // Use current stack size as base
     rootFrame.retCount = 0;
     rootFrame.varargCount = 0;
     rootFrame.varargBase = 0;
-    frames_.push_back(rootFrame);
+    currentCoroutine_->frames.push_back(rootFrame);
+
+    bool result = run();
+
+    // Restore previous state
+    currentCoroutine_->chunk = oldChunk;
+    currentCoroutine_->rootChunk = oldRoot;
+    currentCoroutine_->ip = oldIP;
+    
+    // Clean up frames from this call (if any left)
+    while (currentCoroutine_->frames.size() > oldFrameCount) {
+        currentCoroutine_->frames.pop_back();
+    }
+
+    return result;
+}
+
+bool VM::run() {
+    // Save current frame count to know when to return from this run() call
+    size_t startFrameCount = currentCoroutine_->frames.size();
 
     // Main execution loop
     while (true) {
@@ -429,7 +534,7 @@ bool VM::run(const Chunk& chunk) {
 
             case OpCode::OP_GET_GLOBAL: {
                 uint8_t nameIndex = readByte();
-                const std::string& varName = chunk_->getIdentifier(nameIndex);
+                const std::string& varName = currentCoroutine_->chunk->getIdentifier(nameIndex);
                 auto it = globals_.find(varName);
                 if (it == globals_.end()) {
                     runtimeError("Undefined variable '" + varName + "'");
@@ -442,7 +547,7 @@ bool VM::run(const Chunk& chunk) {
 
             case OpCode::OP_SET_GLOBAL: {
                 uint8_t nameIndex = readByte();
-                const std::string& varName = chunk_->getIdentifier(nameIndex);
+                const std::string& varName = currentCoroutine_->chunk->getIdentifier(nameIndex);
                 globals_[varName] = peek(0);
                 break;
             }
@@ -450,36 +555,26 @@ bool VM::run(const Chunk& chunk) {
             case OpCode::OP_GET_LOCAL: {
                 uint8_t slot = readByte();
                 // Add stackBase offset if inside a function
-                size_t actualSlot = frames_.empty() ? slot : (currentFrame().stackBase + slot);
-                if (actualSlot >= stack_.size()) {
-                    std::cout << "GET_LOCAL OUT OF BOUNDS: slot=" << (int)slot << " actual=" << actualSlot << " size=" << stack_.size() << std::endl;
-                } else {
-                    // std::cout << "GET_LOCAL " << (int)slot << " [" << actualSlot << "] = " << stack_[actualSlot].toString() << std::endl;
-                }
-                push(stack_[actualSlot]);
+                size_t actualSlot = currentCoroutine_->frames.empty() ? slot : (currentFrame().stackBase + slot);
+                push(currentCoroutine_->stack[actualSlot]);
                 break;
             }
 
             case OpCode::OP_SET_LOCAL: {
                 uint8_t slot = readByte();
                 // Add stackBase offset if inside a function
-                size_t actualSlot = frames_.empty() ? slot : (currentFrame().stackBase + slot);
-                if (actualSlot >= stack_.size()) {
-                    std::cout << "SET_LOCAL OUT OF BOUNDS: slot=" << (int)slot << " actual=" << actualSlot << " size=" << stack_.size() << std::endl;
-                } else {
-                    // std::cout << "SET_LOCAL " << (int)slot << " [" << actualSlot << "] = " << peek(0).toString() << std::endl;
-                }
-                stack_[actualSlot] = peek(0);
+                size_t actualSlot = currentCoroutine_->frames.empty() ? slot : (currentFrame().stackBase + slot);
+                currentCoroutine_->stack[actualSlot] = peek(0);
                 break;
             }
 
             case OpCode::OP_GET_UPVALUE: {
                 uint8_t upvalueIndex = readByte();
-                if (!frames_.empty()) {
+                if (!currentCoroutine_->frames.empty()) {
                     size_t uvIndex = currentFrame().closure->getUpvalue(upvalueIndex);
                     UpvalueObject* upvalue = getUpvalue(uvIndex);
                     if (upvalue) {
-                        push(upvalue->get(stack_));
+                        push(upvalue->get(currentCoroutine_->stack));
                     } else {
                         push(Value::nil());
                     }
@@ -492,11 +587,11 @@ bool VM::run(const Chunk& chunk) {
 
             case OpCode::OP_SET_UPVALUE: {
                 uint8_t upvalueIndex = readByte();
-                if (!frames_.empty()) {
+                if (!currentCoroutine_->frames.empty()) {
                     size_t uvIndex = currentFrame().closure->getUpvalue(upvalueIndex);
                     UpvalueObject* upvalue = getUpvalue(uvIndex);
                     if (upvalue) {
-                        upvalue->set(stack_, peek(0));
+                        upvalue->set(currentCoroutine_->stack, peek(0));
                     }
                 } else {
                     runtimeError("Upvalue access outside of closure");
@@ -506,7 +601,7 @@ bool VM::run(const Chunk& chunk) {
 
             case OpCode::OP_CLOSE_UPVALUE: {
                 // Close upvalue at top of stack
-                closeUpvalues(stack_.size() - 1);
+                closeUpvalues(currentCoroutine_->stack.size() - 1);
                 pop();
                 break;
             }
@@ -695,7 +790,7 @@ bool VM::run(const Chunk& chunk) {
                         str = getString(index);
                     } else {
                         // Use current chunk if possible, otherwise fall back to root
-                        str = chunk_ ? chunk_->getString(index) : rootChunk_->getString(index);
+                        str = currentCoroutine_->chunk ? currentCoroutine_->chunk->getString(index) : currentCoroutine_->rootChunk->getString(index);
                     }
 
                     if (str) {
@@ -719,30 +814,30 @@ bool VM::run(const Chunk& chunk) {
 
             case OpCode::OP_JUMP: {
                 uint16_t offset = readByte() | (readByte() << 8);
-                ip_ += offset;
+                currentCoroutine_->ip += offset;
                 break;
             }
 
             case OpCode::OP_JUMP_IF_FALSE: {
                 uint16_t offset = readByte() | (readByte() << 8);
                 if (peek(0).isFalsey()) {
-                    ip_ += offset;
+                    currentCoroutine_->ip += offset;
                 }
                 break;
             }
 
             case OpCode::OP_LOOP: {
                 uint16_t offset = readByte() | (readByte() << 8);
-                ip_ -= offset;
+                currentCoroutine_->ip -= offset;
                 break;
             }
 
             case OpCode::OP_CLOSURE: {
                 uint8_t constantIndex = readByte();
-                Value funcValue = chunk_->constants()[constantIndex];
+                Value funcValue = currentCoroutine_->chunk->constants()[constantIndex];
                 size_t funcIndex = funcValue.asFunctionIndex();
-                // Look up function in current chunk (not rootChunk_) for nested functions
-                FunctionObject* function = chunk_->getFunction(funcIndex);
+                // Look up function in current chunk (not currentCoroutine_->rootChunk) for nested functions
+                FunctionObject* function = currentCoroutine_->chunk->getFunction(funcIndex);
 
                 // Create closure
                 size_t closureIndex = createClosure(function);
@@ -755,13 +850,13 @@ bool VM::run(const Chunk& chunk) {
 
                     if (isLocal) {
                         // Capture local variable from current frame
-                        size_t stackIndex = frames_.empty() ? index :
+                        size_t stackIndex = currentCoroutine_->frames.empty() ? index :
                             (currentFrame().stackBase + index);
                         size_t upvalueIndex = captureUpvalue(stackIndex);
                         closure->setUpvalue(i, upvalueIndex);
                     } else {
                         // Capture upvalue from enclosing closure
-                        if (!frames_.empty()) {
+                        if (!currentCoroutine_->frames.empty()) {
                             size_t upvalueIndex = currentFrame().closure->getUpvalue(index);
                             closure->setUpvalue(i, upvalueIndex);
                         }
@@ -794,26 +889,25 @@ bool VM::run(const Chunk& chunk) {
                 // Reverse so they're in correct order
                 std::reverse(returnValues.begin(), returnValues.end());
 
-                if (frames_.size() == oldFrameCount + 1) {
+                if (currentCoroutine_->frames.size() == startFrameCount) {
                     // Returning from script's root frame (in this run() call)
                     // Pop all from current stack base
                     size_t stackBase = currentFrame().stackBase;
-                    while (stack_.size() > stackBase) {
+                    while (currentCoroutine_->stack.size() > stackBase) {
                         pop();
                     }
                     
-                    // Push all return values onto stack for caller
+                    // Also pop the closure (at stackBase - 1) if it's there
+                    if (stackBase > 0) pop();
+
+                    // Push results
                     for (const auto& value : returnValues) {
                         push(value);
                     }
                     
                     // Pop the root frame we added
-                    frames_.pop_back();
+                    currentCoroutine_->frames.pop_back();
                     
-                    // Restore previous state
-                    chunk_ = oldChunk;
-                    rootChunk_ = oldRoot;
-                    ip_ = oldIP;
                     return !hadError_;
                 }
 
@@ -837,7 +931,7 @@ bool VM::run(const Chunk& chunk) {
                 closeUpvalues(stackBase);
 
                 // Pop all locals and arguments (down to stackBase)
-                while (stack_.size() > stackBase) {
+                while (currentCoroutine_->stack.size() > stackBase) {
                     pop();
                 }
 
@@ -849,11 +943,11 @@ bool VM::run(const Chunk& chunk) {
                 size_t returnIP = currentFrame().ip;
 
                 // Pop call frame
-                frames_.pop_back();
+                currentCoroutine_->frames.pop_back();
 
                 // Restore execution state
-                chunk_ = returnChunk;
-                ip_ = returnIP;
+                currentCoroutine_->chunk = returnChunk;
+                currentCoroutine_->ip = returnIP;
 
                 // Push all return values (replaces where function was)
                 for (const auto& value : returnValues) {
@@ -958,14 +1052,14 @@ bool VM::run(const Chunk& chunk) {
                 if (filenameVal.isRuntimeString()) {
                     filenameStr = getString(filenameVal.asStringIndex());
                 } else {
-                    filenameStr = rootChunk_->getString(filenameVal.asStringIndex());
+                    filenameStr = currentCoroutine_->rootChunk->getString(filenameVal.asStringIndex());
                 }
 
                 StringObject* modeStr = nullptr;
                 if (modeVal.isRuntimeString()) {
                     modeStr = getString(modeVal.asStringIndex());
                 } else {
-                    modeStr = rootChunk_->getString(modeVal.asStringIndex());
+                    modeStr = currentCoroutine_->rootChunk->getString(modeVal.asStringIndex());
                 }
 
                 if (!filenameStr || !modeStr) {
@@ -1007,7 +1101,7 @@ bool VM::run(const Chunk& chunk) {
                 if (dataVal.isRuntimeString()) {
                     dataStr = getString(dataVal.asStringIndex());
                 } else {
-                    dataStr = rootChunk_->getString(dataVal.asStringIndex());
+                    dataStr = currentCoroutine_->rootChunk->getString(dataVal.asStringIndex());
                 }
 
                 if (!file || !dataStr) {
@@ -1065,7 +1159,7 @@ bool VM::run(const Chunk& chunk) {
 
             case OpCode::OP_GET_VARARG: {
                 // Push all varargs onto the stack
-                if (frames_.empty()) {
+                if (currentCoroutine_->frames.empty()) {
                     runtimeError("Cannot access varargs outside of a function");
                     break;
                 }
@@ -1076,7 +1170,7 @@ bool VM::run(const Chunk& chunk) {
 
                 // Push all varargs
                 for (uint8_t i = 0; i < varargCount; i++) {
-                    push(stack_[varargBase + i]);
+                    push(currentCoroutine_->stack[varargBase + i]);
                 }
 
                 // If no varargs, push nil
@@ -1087,80 +1181,68 @@ bool VM::run(const Chunk& chunk) {
                 break;
             }
 
+            case OpCode::OP_YIELD: {
+                uint8_t count = readByte();
+                currentCoroutine_->status = CoroutineObject::Status::SUSPENDED;
+                currentCoroutine_->yieldCount = count;
+                return true; // Return to resumer
+            }
+
             case OpCode::OP_RETURN:
-                // Clean up frames from this call
-                while (frames_.size() > oldFrameCount) {
-                    frames_.pop_back();
+                if (currentCoroutine_->frames.size() <= startFrameCount) {
+                    return !hadError_;
                 }
-                
-                // Restore previous state
-                chunk_ = oldChunk;
-                rootChunk_ = oldRoot;
-                ip_ = oldIP;
-                return !hadError_;
+                // Internal returns are handled by OP_RETURN_VALUE
+                break;
 
             default:
                 runtimeError("Unknown opcode");
-                // Clean up and restore even on error
-                while (frames_.size() > oldFrameCount) {
-                    frames_.pop_back();
-                }
-                chunk_ = oldChunk;
-                rootChunk_ = oldRoot;
-                ip_ = oldIP;
                 return false;
         }
 
         if (hadError_) {
-            // Clean up and restore even on error
-            while (frames_.size() > oldFrameCount) {
-                frames_.pop_back();
-            }
-            chunk_ = oldChunk;
-            rootChunk_ = oldRoot;
-            ip_ = oldIP;
             return false;
         }
     }
 }
 
 void VM::push(const Value& value) {
-    if (stack_.size() >= STACK_MAX) {
+    if (currentCoroutine_->stack.size() >= STACK_MAX) {
         runtimeError("Stack overflow");
         return;
     }
-    stack_.push_back(value);
+    currentCoroutine_->stack.push_back(value);
 }
 
 Value VM::pop() {
-    if (stack_.empty()) {
+    if (currentCoroutine_->stack.empty()) {
         runtimeError("Stack underflow");
         return Value::nil();
     }
-    Value value = stack_.back();
-    stack_.pop_back();
+    Value value = currentCoroutine_->stack.back();
+    currentCoroutine_->stack.pop_back();
     return value;
 }
 
 Value VM::peek(size_t distance) const {
-    if (distance >= stack_.size()) {
+    if (distance >= currentCoroutine_->stack.size()) {
         return Value::nil();
     }
-    return stack_[stack_.size() - 1 - distance];
+    return currentCoroutine_->stack[currentCoroutine_->stack.size() - 1 - distance];
 }
 
 uint8_t VM::readByte() {
-    return chunk_->at(ip_++);
+    return currentCoroutine_->chunk->at(currentCoroutine_->ip++);
 }
 
 Value VM::readConstant() {
     uint8_t index = readByte();
-    Value constant = chunk_->getConstant(index);
+    Value constant = currentCoroutine_->chunk->getConstant(index);
     
     // If it's a compile-time string, intern it to get a runtime string
     // This ensures all strings in the VM use the same pool and can be compared by index/identity
     if (constant.isString() && !constant.isRuntimeString()) {
-        StringObject* str = chunk_->getString(constant.asStringIndex());
+        StringObject* str = currentCoroutine_->chunk->getString(constant.asStringIndex());
         size_t runtimeIdx = internString(str->chars(), str->length());
         return Value::runtimeString(runtimeIdx);
     }
@@ -1195,14 +1277,14 @@ bool VM::callValue(int argCount, int retCount) {
             return false;
         }
 
-        size_t funcPosition = stack_.size() - argCount - 1;
+        size_t funcPosition = currentCoroutine_->stack.size() - argCount - 1;
 
         if (!func(this, argCount)) {
             return false;
         }
 
         // After native call, stack is: [..., func, result1, result2, ...]
-        size_t resultCount = stack_.size() - funcPosition - 1;
+        size_t resultCount = currentCoroutine_->stack.size() - funcPosition - 1;
 
         std::vector<Value> results;
         results.reserve(resultCount);
@@ -1255,7 +1337,7 @@ bool VM::callValue(int argCount, int retCount) {
             argCount = arity;
         }
 
-        if (frames_.size() >= FRAMES_MAX) {
+        if (currentCoroutine_->frames.size() >= FRAMES_MAX) {
             runtimeError("Stack overflow");
             return false;
         }
@@ -1264,21 +1346,21 @@ bool VM::callValue(int argCount, int retCount) {
         size_t varargBase = 0;
         if (hasVarargs && argCount > arity) {
             varargCount = argCount - arity;
-            varargBase = stack_.size() - varargCount;
+            varargBase = currentCoroutine_->stack.size() - varargCount;
         }
 
         CallFrame frame;
         frame.closure = closure;
-        frame.callerChunk = chunk_;
-        frame.ip = ip_;
-        frame.stackBase = stack_.size() - argCount;
+        frame.callerChunk = currentCoroutine_->chunk;
+        frame.ip = currentCoroutine_->ip;
+        frame.stackBase = currentCoroutine_->stack.size() - argCount;
         frame.retCount = retCount;
         frame.varargCount = varargCount;
         frame.varargBase = varargBase;
-        frames_.push_back(frame);
+        currentCoroutine_->frames.push_back(frame);
 
-        chunk_ = function->chunk();
-        ip_ = 0;
+        currentCoroutine_->chunk = function->chunk();
+        currentCoroutine_->ip = 0;
         return true;
     } else if (callee.isTable()) {
         Value callMethod = getMetamethod(callee, "__call");
@@ -1290,7 +1372,7 @@ bool VM::callValue(int argCount, int retCount) {
              // We can just push callMethod, then rotate?
              // Or simpler: verify stack depth.
              // argCount is N.
-             // callee is at stack_.size() - 1 - argCount.
+             // callee is at currentCoroutine_->stack.size() - 1 - argCount.
              
              // Insert logic:
              // push(callMethod);
@@ -1399,7 +1481,7 @@ std::string VM::getStringValue(const Value& value) {
             str = getString(index);
         } else {
             // Use current chunk if possible, otherwise fall back to root
-            str = chunk_ ? chunk_->getString(index) : rootChunk_->getString(index);
+            str = currentCoroutine_->chunk ? currentCoroutine_->chunk->getString(index) : currentCoroutine_->rootChunk->getString(index);
         }
         return str ? str->chars() : "";
     }
@@ -1446,7 +1528,7 @@ Value VM::logicalNot(const Value& a) {
 
 void VM::runtimeError(const std::string& message) {
     // Get line number from current instruction
-    int line = chunk_->getLine(ip_ - 1);
+    int line = currentCoroutine_->chunk->getLine(currentCoroutine_->ip - 1);
     Log::error(message, line);
     hadError_ = true;
 }
@@ -1454,13 +1536,13 @@ void VM::runtimeError(const std::string& message) {
 void VM::traceExecution() {
     // Print stack contents
     std::cout << "          ";
-    for (const auto& value : stack_) {
+    for (const auto& value : currentCoroutine_->stack) {
         std::cout << "[ " << value << " ]";
     }
     std::cout << std::endl;
 
     // Disassemble current instruction
-    chunk_->disassembleInstruction(ip_);
+    currentCoroutine_->chunk->disassembleInstruction(currentCoroutine_->ip);
 }
 
 bool VM::runSource(const std::string& source, const std::string& name) {
@@ -1484,6 +1566,16 @@ bool VM::runSource(const std::string& source, const std::string& name) {
         std::cerr << "Error in runSource (" << name << "): " << e.what() << std::endl;
         return false;
     }
+}
+
+bool VM::resumeCoroutine(CoroutineObject* co) {
+    CoroutineObject* oldCo = currentCoroutine_;
+    currentCoroutine_ = co;
+    
+    bool result = run();
+
+    currentCoroutine_ = oldCo;
+    return result;
 }
 
 // ============================================================================

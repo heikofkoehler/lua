@@ -182,18 +182,18 @@ protected:
     explicit StmtNode(int line) : ASTNode(line) {}
 };
 
-// Print statement: print(expr)
+// Print statement: print(expr1, expr2, ...)
 class PrintStmtNode : public StmtNode {
 public:
-    PrintStmtNode(std::unique_ptr<ExprNode> expr, int line)
-        : StmtNode(line), expr_(std::move(expr)) {}
+    PrintStmtNode(std::vector<std::unique_ptr<ExprNode>> args, int line)
+        : StmtNode(line), args_(std::move(args)) {}
 
     void accept(ASTVisitor& visitor) override;
 
-    ExprNode* expr() const { return expr_.get(); }
+    const std::vector<std::unique_ptr<ExprNode>>& args() const { return args_; }
 
 private:
-    std::unique_ptr<ExprNode> expr_;
+    std::vector<std::unique_ptr<ExprNode>> args_;
 };
 
 // Expression statement: evaluate expression and discard result

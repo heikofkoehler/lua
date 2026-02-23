@@ -11,6 +11,7 @@
 #include "value/table.hpp"
 #include "value/file.hpp"
 #include "value/socket.hpp"
+#include "value/coroutine.hpp"
 #include "compiler/chunk.hpp"
 #include <vector>
 #include <unordered_map>
@@ -44,6 +45,7 @@ public:
     // Execute a chunk of bytecode
     // Returns true if execution succeeded, false on error
     bool run(const Chunk& chunk);
+    bool run();
 
     // Execute Lua source code
     bool runSource(const std::string& source, const std::string& name = "script");
@@ -52,7 +54,7 @@ public:
     void reset();
 
     // Stack operations (for debugging/testing)
-    const std::vector<Value>& stack() const { return stack_; }
+    const std::vector<Value>& stack() const { return currentCoroutine_->stack; }
 
     // Function table operations
     size_t registerFunction(FunctionObject* func);
@@ -70,6 +72,12 @@ public:
     // Closure operations
     size_t createClosure(FunctionObject* function);
     ClosureObject* getClosure(size_t index);
+
+    // Coroutine operations
+    size_t createCoroutine(ClosureObject* closure);
+    CoroutineObject* getCoroutine(size_t index);
+    size_t getCoroutineIndex(CoroutineObject* co);
+    bool resumeCoroutine(CoroutineObject* co);
 
     // Upvalue operations
     size_t captureUpvalue(size_t stackIndex);
@@ -94,7 +102,7 @@ public:
     void initStandardLibrary();
 
     // Root chunk access (for native functions to access compile-time strings)
-    const Chunk* rootChunk() const { return rootChunk_; }
+    const Chunk* rootChunk() const { return currentCoroutine_->rootChunk; }
 
     // Public stack operations (for native functions to use)
     void push(const Value& value);
@@ -104,6 +112,9 @@ public:
 
     // Access to globals (for base library)
     std::unordered_map<std::string, Value>& globals() { return globals_; }
+
+    // Access to current coroutine
+    CoroutineObject* currentCoroutine() { return currentCoroutine_; }
 
     // Garbage collection
     void collectGarbage();
@@ -140,22 +151,9 @@ private:
     Value logicalNot(const Value& a);
 
     // Execution state
-    const Chunk* chunk_;          // Current chunk being executed
-    const Chunk* rootChunk_;      // Root chunk (for function lookups)
-    size_t ip_;                   // Instruction pointer
-    std::vector<Value> stack_;    // Value stack
-    std::unordered_map<std::string, Value> globals_;  // Global variables
-    std::vector<CallFrame> frames_;  // Call stack
-    std::vector<FunctionObject*> functions_;  // Function table (owns function objects)
-    std::vector<StringObject*> strings_;  // String pool (owns string objects, interned)
-    std::unordered_map<uint32_t, size_t> stringIndices_;  // Hash to index mapping for interning
-    std::vector<TableObject*> tables_;  // Table pool (owns table objects)
-    std::vector<ClosureObject*> closures_;  // Closure pool (owns closure objects)
-    std::vector<UpvalueObject*> upvalues_;  // Upvalue pool (owns upvalue objects)
-    std::vector<UpvalueObject*> openUpvalues_;  // Open upvalues (sorted by stack index)
-    std::vector<FileObject*> files_;  // File pool (owns file objects)
-    std::vector<SocketObject*> sockets_;  // Socket pool (owns socket objects)
-    std::vector<NativeFunction> nativeFunctions_;  // Native function table
+    std::vector<CoroutineObject*> coroutines_; // Coroutine pool (owns objects)
+    CoroutineObject* mainCoroutine_;
+    CoroutineObject* currentCoroutine_;
     bool hadError_;               // Error flag
     bool stdlibInitialized_;      // Whether standard library has been initialized
 
@@ -164,6 +162,17 @@ private:
     size_t bytesAllocated_;       // Total bytes allocated
     size_t nextGC_;               // Threshold for next GC
     bool gcEnabled_;              // Can disable GC for debugging
+
+    std::unordered_map<std::string, Value> globals_;  // Global variables
+    std::vector<FunctionObject*> functions_;  // Function table (owns function objects)
+    std::vector<StringObject*> strings_;  // String pool (owns string objects, interned)
+    std::unordered_map<uint32_t, size_t> stringIndices_;  // Hash to index mapping for interning
+    std::vector<TableObject*> tables_;  // Table pool (owns table objects)
+    std::vector<ClosureObject*> closures_;  // Closure pool (owns closure objects)
+    std::vector<UpvalueObject*> upvalues_;  // Upvalue pool (owns upvalue objects)
+    std::vector<FileObject*> files_;  // File pool (owns file objects)
+    std::vector<SocketObject*> sockets_;  // Socket pool (owns socket objects)
+    std::vector<NativeFunction> nativeFunctions_;  // Native function table
 
     // Stack size limits
     static constexpr size_t STACK_MAX = 256;

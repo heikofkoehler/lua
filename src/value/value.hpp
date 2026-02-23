@@ -33,7 +33,8 @@ public:
         CLOSURE,
         FILE,
         SOCKET,
-        NATIVE_FUNCTION
+        NATIVE_FUNCTION,
+        THREAD
     };
 
     // Constructors (private, use factory methods)
@@ -108,6 +109,11 @@ public:
         return Value(QNAN | TAG_NATIVE_FUNCTION | (funcIndex << 4));
     }
 
+    static Value thread(size_t threadIndex) {
+        // Encode thread index
+        return Value(QNAN | TAG_THREAD | (threadIndex << 4));
+    }
+
     // Type checking
     bool isNil() const {
         return (bits_ & (QNAN | TAG_MASK)) == (QNAN | TAG_NIL);
@@ -153,6 +159,10 @@ public:
     bool isNativeFunction() const {
         return (bits_ & (QNAN | TAG_MASK)) == (QNAN | TAG_NATIVE_FUNCTION);
     }
+
+    bool isThread() const {
+        return (bits_ & (QNAN | TAG_MASK)) == (QNAN | TAG_THREAD);
+    }
     
     bool isFunction() const {
         return isFunctionObject() || isClosure() || isNativeFunction();
@@ -168,6 +178,7 @@ public:
         if (isFile()) return Type::FILE;
         if (isSocket()) return Type::SOCKET;
         if (isNativeFunction()) return Type::NATIVE_FUNCTION;
+        if (isThread()) return Type::THREAD;
         return Type::NIL;
     }
 
@@ -251,6 +262,14 @@ public:
         return static_cast<size_t>(index);
     }
 
+    size_t asThreadIndex() const {
+        if (!isThread()) {
+            throw RuntimeError("Value is not a thread");
+        }
+        uint64_t index = (bits_ & 0x0000FFFFFFFFFFFFULL) >> 4;
+        return static_cast<size_t>(index);
+    }
+
     // Equality
     bool operator==(const Value& other) const {
         // Special handling for NaN
@@ -287,7 +306,8 @@ public:
         if (isNil()) return "nil";
         if (isString()) return "string";
         if (isTable()) return "table";
-        if (isFunctionObject() || isClosure() || isNativeFunction()) return "function";
+        if (isNativeFunction()) return "function";
+        if (isThread()) return "thread";
         if (isFile()) return "userdata"; // Lua calls file userdata usually
         if (isSocket()) return "userdata";
         return "unknown";
@@ -311,6 +331,7 @@ private:
     static constexpr uint64_t TAG_SOCKET = 8;
     static constexpr uint64_t TAG_RUNTIME_STRING = 9;  // Runtime string (from VM pool)
     static constexpr uint64_t TAG_NATIVE_FUNCTION = 10;  // Native function (C++ function pointer)
+    static constexpr uint64_t TAG_THREAD = 11;           // Coroutine object
     static constexpr uint64_t TAG_MASK = 15;  // Updated to 4 bits for more tags
 };
 

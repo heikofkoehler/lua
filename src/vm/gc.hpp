@@ -13,7 +13,8 @@ public:
         CLOSURE,
         UPVALUE,
         FILE,
-        SOCKET
+        SOCKET,
+        COROUTINE
     };
 
     GCObject(Type type) : type_(type), isMarked_(false), next_(nullptr) {}

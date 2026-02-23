@@ -70,5 +70,11 @@ void Value::print(std::ostream& os) const {
             os << "<native function>";
             break;
         }
+
+        case Type::THREAD: {
+            size_t threadIndex = asThreadIndex();
+            os << "<thread:" << threadIndex << ">";
+            break;
+        }
     }
 }

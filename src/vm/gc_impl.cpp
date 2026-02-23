@@ -39,7 +39,16 @@ void VM::markValue(const Value& value) {
         if (idx < sockets_.size()) {
             markObject(sockets_[idx]);
         }
+    } else if (value.isThread()) {
+        size_t idx = value.asThreadIndex();
+        if (idx < coroutines_.size()) {
+            markObject(coroutines_[idx]);
+        }
     }
+}
+
+void CoroutineObject::markReferences() {
+    // CoroutineObject references are marked by VM::markObject(COROUTINE)
 }
 
 // Mark a GC object and its references
@@ -108,42 +117,51 @@ void VM::markObject(GCObject* object) {
         case GCObject::Type::SOCKET:
             // Sockets don't reference other objects
             break;
+
+        case GCObject::Type::COROUTINE: {
+            CoroutineObject* co = static_cast<CoroutineObject*>(object);
+            // Mark root chunk constants if this was the root
+            if (co->rootChunk) {
+                for (size_t i = 0; i < co->rootChunk->numStrings(); i++) {
+                    markObject(co->rootChunk->getString(i));
+                }
+                for (const auto& constant : co->rootChunk->constants()) {
+                    markValue(constant);
+                }
+            }
+            // Mark values on stack
+            for (const auto& val : co->stack) {
+                markValue(val);
+            }
+            // Mark closures in frames
+            for (const auto& frame : co->frames) {
+                if (frame.closure) {
+                    markObject(frame.closure);
+                }
+            }
+            // Mark open upvalues
+            for (auto* uv : co->openUpvalues) {
+                markObject(uv);
+            }
+            // Mark caller
+            if (co->caller) {
+                markObject(co->caller);
+            }
+            break;
+        }
     }
 }
 
 // Mark all root objects
 void VM::markRoots() {
-    // Mark all strings and constants in root chunk
-    if (rootChunk_) {
-        for (size_t i = 0; i < rootChunk_->numStrings(); i++) {
-            markObject(rootChunk_->getString(i));
-        }
-        for (const auto& constant : rootChunk_->constants()) {
-            markValue(constant);
-        }
-    }
-
-    // Mark values on the stack
-    for (const Value& value : stack_) {
-        markValue(value);
-    }
-
     // Mark global variables
     for (const auto& pair : globals_) {
         markValue(pair.second);
     }
 
-    // Mark closures in call frames
-    for (const CallFrame& frame : frames_) {
-        if (frame.closure) {
-            markObject(frame.closure);
-        }
-    }
-
-    // Mark open upvalues
-    for (UpvalueObject* upvalue : openUpvalues_) {
-        markObject(upvalue);
-    }
+    // Mark main and current coroutines
+    if (mainCoroutine_) markObject(mainCoroutine_);
+    if (currentCoroutine_) markObject(currentCoroutine_);
 }
 
 // Sweep unmarked objects
@@ -254,6 +272,19 @@ void VM::freeObject(GCObject* object) {
                 }
             }
             delete socket;
+            break;
+        }
+
+        case GCObject::Type::COROUTINE: {
+            CoroutineObject* co = static_cast<CoroutineObject*>(object);
+            // Remove from coroutines pool
+            for (size_t i = 0; i < coroutines_.size(); i++) {
+                if (coroutines_[i] == co) {
+                    coroutines_[i] = nullptr;
+                    break;
+                }
+            }
+            delete co;
             break;
         }
     }
