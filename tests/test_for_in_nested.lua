@@ -1,5 +1,5 @@
 -- Test nested generic for loops
-function small(n)
+function small(s, n)
     if n == nil then
         return 1
     elseif n < 3 then

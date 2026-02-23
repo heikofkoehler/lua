@@ -1,5 +1,5 @@
 -- Iterator that generates range 1 to 5
-function range(n)
+function range(s, n)
     if n == nil then
         return 1
     elseif n < 5 then

@@ -73,6 +73,33 @@ public:
         return map_.size();
     }
 
+    // Iteration support
+    // Returns pair<key, value>. If key is nil, returns first pair.
+    // If next pair doesn't exist (end of iteration), returns pair<nil, nil>.
+    std::pair<Value, Value> next(const Value& key) const {
+        if (key.isNil()) {
+            // Return first element
+            if (map_.empty()) {
+                return {Value::nil(), Value::nil()};
+            }
+            auto it = map_.begin();
+            return {it->first, it->second};
+        } else {
+            // Find key and return next
+            auto it = map_.find(key);
+            if (it == map_.end()) {
+                // Key not found or invalid
+                return {Value::nil(), Value::nil()};
+            }
+            ++it;
+            if (it == map_.end()) {
+                // End of table
+                return {Value::nil(), Value::nil()};
+            }
+            return {it->first, it->second};
+        }
+    }
+
     // For iteration (if needed later)
     const std::unordered_map<Value, Value, ValueHash, ValueEqual>& data() const {
         return map_;

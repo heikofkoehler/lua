@@ -78,6 +78,9 @@ private:
     int localCount_;
     std::deque<CompilerState> compilerStack_;
     CompilerState* enclosingCompiler_;  // Parent compiler for upvalue resolution
+    
+    // Context for expression return values
+    uint8_t expectedRetCount_; // 0=all (multires), 1=single (default), >1=specific count
 
     // Loop context for break statements
     std::vector<std::vector<size_t>> breakJumps_;  // Stack of break jump lists

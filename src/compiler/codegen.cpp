@@ -2,7 +2,7 @@
 #include "value/function.hpp"
 
 CodeGenerator::CodeGenerator()
-    : chunk_(nullptr), currentLine_(1), scopeDepth_(0), localCount_(0), enclosingCompiler_(nullptr) {}
+    : chunk_(nullptr), currentLine_(1), scopeDepth_(0), localCount_(0), enclosingCompiler_(nullptr), expectedRetCount_(1) {}
 
 std::unique_ptr<Chunk> CodeGenerator::generate(ProgramNode* program) {
     chunk_ = std::make_unique<Chunk>();
@@ -655,55 +655,127 @@ void CodeGenerator::visitForStmt(ForStmtNode* node) {
 void CodeGenerator::visitForInStmt(ForInStmtNode* node) {
     setLine(node->line());
 
-    // Begin scope for iterator and loop variable
+    // Begin scope for iterator state and loop variables
     beginScope();
 
     beginLoop();  // Start loop context for break statements
 
-    // Evaluate iterator expression and store in hidden local
-    node->iterator()->accept(*this);
+    // Evaluate iterator expression
+    // We expect 3 values: iterator, state, control_var
+    // If iterator expression is a call, we can ask for 3 values.
+    // If it's not a call (e.g. variable), we get 1 value and pad with 2 nils.
+    
+    // Save current expected return count and set to 3 for iterator init
+    uint8_t oldRetCount = expectedRetCount_;
+    
+    // Check if iterator is a call
+    auto* callExpr = dynamic_cast<CallExprNode*>(node->iterator());
+    if (callExpr) {
+        expectedRetCount_ = 3;
+        node->iterator()->accept(*this);
+        // Stack has 3 values (or padded/truncated by OP_CALL)
+    } else {
+        expectedRetCount_ = 1; // Default
+        node->iterator()->accept(*this);
+        // Stack has 1 value. Push 2 nils for state and control
+        emitOpCode(OpCode::OP_NIL);
+        emitOpCode(OpCode::OP_NIL);
+    }
+    
+    expectedRetCount_ = oldRetCount; // Restore
+
+    // Store iterator state in hidden locals
+    // Stack top is control, then state, then iterator
+    // We need to store them in locals to access them efficiently
     addLocal("(for iterator)");
+    addLocal("(for state)");
+    addLocal("(for control)");
+    
     int iteratorSlot = resolveLocal("(for iterator)");
+    int stateSlot = resolveLocal("(for state)");
+    int controlSlot = resolveLocal("(for control)");
 
-    // Initialize loop variable to nil
-    emitOpCode(OpCode::OP_NIL);
-    addLocal(node->varName());
-    int varSlot = resolveLocal(node->varName());
-
+    // Add loop variables (initialized to nil)
+    const auto& varNames = node->varNames();
+    for (const auto& name : varNames) {
+        emitOpCode(OpCode::OP_NIL);
+        addLocal(name);
+    }
+    
     size_t loopStart = currentChunk()->size();
 
-    // Call iterator with current loop variable value
-    // Get iterator function
+    // Call iterator(state, control)
+    // Get iterator
     emitOpCode(OpCode::OP_GET_LOCAL);
     emitByte(static_cast<uint8_t>(iteratorSlot));
 
-    // Get current loop variable value as argument
+    // Get state
     emitOpCode(OpCode::OP_GET_LOCAL);
-    emitByte(static_cast<uint8_t>(varSlot));
+    emitByte(static_cast<uint8_t>(stateSlot));
+    
+    // Get control variable
+    emitOpCode(OpCode::OP_GET_LOCAL);
+    emitByte(static_cast<uint8_t>(controlSlot));
 
-    // Call iterator(loopVar)
+    // Call iterator(state, control)
     emitOpCode(OpCode::OP_CALL);
-    emitByte(1);  // 1 argument
+    emitByte(2);  // 2 arguments
 
-    // Store result back to loop variable
-    emitOpCode(OpCode::OP_SET_LOCAL);
-    emitByte(static_cast<uint8_t>(varSlot));
-    // Result is left on stack after SET_LOCAL
+    
+    // We need varNames.size() return values
+    // But we need at least 1 (to check for nil)
+    // If varNames is empty (invalid?), we still need 1.
+    uint8_t retCount = varNames.empty() ? 1 : static_cast<uint8_t>(varNames.size());
+    emitByte(retCount); 
 
-    // Check if result is nil
+    // Values are now on stack.
+    // Top is varN, bottom is var1.
+    // We need to update control variable with var1.
+    // And update loop locals.
+    
+    // Strategy: Store to locals in reverse order
+    for (int i = static_cast<int>(varNames.size()) - 1; i >= 0; i--) {
+        int slot = resolveLocal(varNames[i]);
+        emitOpCode(OpCode::OP_SET_LOCAL);
+        emitByte(static_cast<uint8_t>(slot));
+        
+        // If this is the first variable (i=0), update control variable too
+        if (i == 0) {
+            // Stack top: v1. (SET_LOCAL doesn't pop in VM but CodeGen usually emits POP?)
+            // Wait, standard OP_SET_LOCAL usage in assignment is SET_LOCAL + POP.
+            // Here I emitted SET_LOCAL. Value is still on stack.
+            
+            // Also update control variable
+            emitOpCode(OpCode::OP_SET_LOCAL);
+            emitByte(static_cast<uint8_t>(controlSlot));
+            
+            // Value still on stack.
+            // Pop it.
+            emitOpCode(OpCode::OP_POP);
+        } else {
+            // Not first variable. Just pop.
+            emitOpCode(OpCode::OP_POP);
+        }
+    }
+    
+    // Check if control variable is nil
+    emitOpCode(OpCode::OP_GET_LOCAL);
+    emitByte(static_cast<uint8_t>(controlSlot));
     emitOpCode(OpCode::OP_NIL);
     emitOpCode(OpCode::OP_EQUAL);
-
-    // If result is nil, exit loop
-    size_t exitJump = emitJump(OpCode::OP_JUMP_IF_FALSE);
-    emitOpCode(OpCode::OP_POP);  // Pop comparison result
-
-    // Break out of loop (jump to end)
-    size_t breakJump = emitJump(OpCode::OP_JUMP);
-
-    // Not nil, continue with loop body
-    patchJump(exitJump);
-    emitOpCode(OpCode::OP_POP);  // Pop comparison result
+    // Stack: [is_nil]
+    
+    // We want to jump if is_nil is true.
+    // JUMP_IF_FALSE jumps if false.
+    // So we NOT it.
+    emitOpCode(OpCode::OP_NOT);
+    // Stack: [not_nil]
+    
+    // If not_nil is true (value exists), continue.
+    // If not_nil is false (value is nil), break.
+    
+    size_t breakJump = emitJump(OpCode::OP_JUMP_IF_FALSE);
+    emitOpCode(OpCode::OP_POP); // Pop boolean result
 
     // Compile body
     for (const auto& stmt : node->body()) {
@@ -715,6 +787,7 @@ void CodeGenerator::visitForInStmt(ForInStmtNode* node) {
 
     // Exit point (when iterator returns nil)
     patchJump(breakJump);
+    emitOpCode(OpCode::OP_POP); // Pop boolean result
 
     endLoop();  // End loop context and patch all break jumps
 
@@ -759,12 +832,19 @@ void CodeGenerator::visitCall(CallExprNode* node) {
     }
 
     // Compile the callee expression (evaluates to a function on the stack)
+    // Save current expected return count
+    uint8_t oldRetCount = expectedRetCount_;
+    expectedRetCount_ = 1; // Arguments expect 1 value
+    
     node->callee()->accept(*this);
 
     // Compile arguments and push onto stack
     for (const auto& arg : node->args()) {
         arg->accept(*this);
     }
+    
+    // Restore expected return count for OP_CALL
+    expectedRetCount_ = oldRetCount;
 
     // Emit call instruction with argument count and return count
     size_t argCount = node->args().size();
@@ -773,9 +853,8 @@ void CodeGenerator::visitCall(CallExprNode* node) {
     }
     emitOpCode(OpCode::OP_CALL);
     emitByte(static_cast<uint8_t>(argCount));
-    // For now, always request 1 return value (single-value context)
-    // TODO: Make this context-aware (0 for "all values" in returns, etc.)
-    emitByte(1);
+    // Use expectedRetCount_
+    emitByte(expectedRetCount_);
 }
 
 void CodeGenerator::visitTableConstructor(TableConstructorNode* node) {

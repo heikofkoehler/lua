@@ -1,5 +1,5 @@
 -- Test break in generic for loop
-function counter(n)
+function counter(s, n)
     if n == nil then
         return 1
     elseif n < 10 then

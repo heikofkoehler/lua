@@ -910,11 +910,11 @@ Recursive descent with proper operator precedence:
 - ✅ Table library: `table.insert`, `table.remove`, `table.concat`
 - ✅ Math library: `math.sqrt`, `math.abs`, `math.floor`, `math.ceil`, `math.sin`, `math.cos`, `math.tan`, `math.exp`, `math.log`, `math.min`, `math.max`, `math.pi`
 - ✅ Metamethods: `__add`, `__sub`, `__mul`, `__div`, `__mod`, `__pow`, `__unm`, `__concat`, `__eq`, `__lt`, `__le`, `__index`, `__newindex`, `__call`
+- ✅ Iterators: `pairs`, `ipairs`, `next`
 
 ### Phase 6: Advanced Features
 - Module system (require/module)
 - Coroutines
-- Iterators for tables (pairs, ipairs)
 
 ## Testing
 

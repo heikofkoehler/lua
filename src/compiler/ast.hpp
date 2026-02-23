@@ -401,25 +401,24 @@ private:
     std::vector<std::unique_ptr<StmtNode>> body_;
 };
 
-// Generic for loop: for var in iterator do body end
-// Simplified version - single variable, single iterator
+// Generic for loop: for var1, var2 in iterator do body end
 class ForInStmtNode : public StmtNode {
 public:
-    ForInStmtNode(const std::string& varName,
+    ForInStmtNode(std::vector<std::string> varNames,
                   std::unique_ptr<ExprNode> iterator,
                   std::vector<std::unique_ptr<StmtNode>> body,
                   int line)
-        : StmtNode(line), varName_(varName), iterator_(std::move(iterator)),
+        : StmtNode(line), varNames_(std::move(varNames)), iterator_(std::move(iterator)),
           body_(std::move(body)) {}
 
     void accept(ASTVisitor& visitor) override;
 
-    const std::string& varName() const { return varName_; }
+    const std::vector<std::string>& varNames() const { return varNames_; }
     ExprNode* iterator() const { return iterator_.get(); }
     const std::vector<std::unique_ptr<StmtNode>>& body() const { return body_; }
 
 private:
-    std::string varName_;
+    std::vector<std::string> varNames_;
     std::unique_ptr<ExprNode> iterator_;
     std::vector<std::unique_ptr<StmtNode>> body_;
 };

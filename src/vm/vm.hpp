@@ -110,6 +110,12 @@ public:
     void freeObject(GCObject* object);
     void addObject(GCObject* object);
 
+    // Metamethod helper
+    Value getMetamethod(const Value& obj, const std::string& method);
+    bool callBinaryMetamethod(const Value& a, const Value& b, const std::string& method);
+    bool callValue(int argCount, int retCount);
+    std::string getStringValue(const Value& value);
+
 private:
     // Arithmetic operations
     Value add(const Value& a, const Value& b);
@@ -119,18 +125,12 @@ private:
     Value modulo(const Value& a, const Value& b);
     Value power(const Value& a, const Value& b);
     Value concat(const Value& a, const Value& b);
-    std::string getStringValue(const Value& value);
     Value negate(const Value& a);
 
     // Comparison operations
     Value equal(const Value& a, const Value& b);
     Value less(const Value& a, const Value& b);
     Value lessEqual(const Value& a, const Value& b);
-
-    // Metamethod helper
-    Value getMetamethod(const Value& obj, const std::string& method);
-    bool callBinaryMetamethod(const Value& a, const Value& b, const std::string& method);
-    bool callValue(int argCount, int retCount);
 
     // Logical operations
     Value logicalNot(const Value& a);

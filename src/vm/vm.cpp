@@ -349,6 +349,17 @@ bool VM::run(const Chunk& chunk) {
     chunk.disassemble("script");
 #endif
 
+    // Push root call frame
+    CallFrame rootFrame;
+    rootFrame.closure = nullptr;
+    rootFrame.callerChunk = nullptr;
+    rootFrame.ip = 0;
+    rootFrame.stackBase = 0;
+    rootFrame.retCount = 0;
+    rootFrame.varargCount = 0;
+    rootFrame.varargBase = 0;
+    frames_.push_back(rootFrame);
+
     // Main execution loop
     while (true) {
 #ifdef TRACE_EXECUTION
@@ -401,6 +412,11 @@ bool VM::run(const Chunk& chunk) {
                 uint8_t slot = readByte();
                 // Add stackBase offset if inside a function
                 size_t actualSlot = frames_.empty() ? slot : (currentFrame().stackBase + slot);
+                if (actualSlot >= stack_.size()) {
+                    std::cout << "GET_LOCAL OUT OF BOUNDS: slot=" << (int)slot << " actual=" << actualSlot << " size=" << stack_.size() << std::endl;
+                } else {
+                    // std::cout << "GET_LOCAL " << (int)slot << " [" << actualSlot << "] = " << stack_[actualSlot].toString() << std::endl;
+                }
                 push(stack_[actualSlot]);
                 break;
             }
@@ -409,6 +425,11 @@ bool VM::run(const Chunk& chunk) {
                 uint8_t slot = readByte();
                 // Add stackBase offset if inside a function
                 size_t actualSlot = frames_.empty() ? slot : (currentFrame().stackBase + slot);
+                if (actualSlot >= stack_.size()) {
+                    std::cout << "SET_LOCAL OUT OF BOUNDS: slot=" << (int)slot << " actual=" << actualSlot << " size=" << stack_.size() << std::endl;
+                } else {
+                    // std::cout << "SET_LOCAL " << (int)slot << " [" << actualSlot << "] = " << peek(0).toString() << std::endl;
+                }
                 stack_[actualSlot] = peek(0);
                 break;
             }
@@ -1129,12 +1150,12 @@ bool VM::callValue(int argCount, int retCount) {
         int arity = function->arity();
         bool hasVarargs = function->hasVarargs();
 
-        if (!hasVarargs && argCount != arity) {
-            runtimeError("Expected " + std::to_string(arity) + " arguments but got " + std::to_string(argCount));
-            return false;
-        } else if (hasVarargs && argCount < arity) {
-            runtimeError("Expected at least " + std::to_string(arity) + " arguments but got " + std::to_string(argCount));
-            return false;
+        if (argCount < arity) {
+            // Pad with nils
+            for (int i = 0; i < arity - argCount; i++) {
+                push(Value::nil());
+            }
+            argCount = arity;
         }
 
         if (frames_.size() >= FRAMES_MAX) {

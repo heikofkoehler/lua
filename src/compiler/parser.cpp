@@ -354,15 +354,15 @@ std::unique_ptr<StmtNode> Parser::repeatStatement() {
 std::unique_ptr<StmtNode> Parser::forStatement() {
     int line = previous_.line;
 
-    // Parse loop variable name
+    // Parse loop variable name(s)
     if (!check(TokenType::IDENTIFIER)) {
         errorAtCurrent("Expected variable name after 'for'");
         return nullptr;
     }
-    std::string varName = current_.lexeme;
+    std::string firstVar = current_.lexeme;
     advance();
 
-    // Check if it's numeric (=) or generic (in) for loop
+    // Check if it's numeric (=) or generic (in or ,) for loop
     if (match(TokenType::EQUAL)) {
         // Numeric for loop: for var = start, end, step do ... end
 
@@ -392,10 +392,26 @@ std::unique_ptr<StmtNode> Parser::forStatement() {
 
         consume(TokenType::END, "Expected 'end' after for body");
 
-        return std::make_unique<ForStmtNode>(varName, std::move(start), std::move(end),
+        return std::make_unique<ForStmtNode>(firstVar, std::move(start), std::move(end),
                                              std::move(step), std::move(body), line);
-    } else if (match(TokenType::IN)) {
-        // Generic for loop: for var in iterator do ... end
+    } else {
+        // Generic for loop: for var1, var2 in iterator do ... end
+        std::vector<std::string> vars;
+        vars.push_back(firstVar);
+        
+        while (match(TokenType::COMMA)) {
+            if (!check(TokenType::IDENTIFIER)) {
+                errorAtCurrent("Expected variable name after ','");
+                return nullptr;
+            }
+            vars.push_back(current_.lexeme);
+            advance();
+        }
+        
+        if (!match(TokenType::IN)) {
+             errorAtCurrent("Expected '=' or 'in' after for variable(s)");
+             return nullptr;
+        }
 
         // Parse iterator expression
         auto iterator = expression();
@@ -411,11 +427,8 @@ std::unique_ptr<StmtNode> Parser::forStatement() {
 
         consume(TokenType::END, "Expected 'end' after for body");
 
-        return std::make_unique<ForInStmtNode>(varName, std::move(iterator),
+        return std::make_unique<ForInStmtNode>(std::move(vars), std::move(iterator),
                                                std::move(body), line);
-    } else {
-        errorAtCurrent("Expected '=' or 'in' after for variable");
-        return nullptr;
     }
 }
 
