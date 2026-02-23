@@ -181,6 +181,81 @@ bool native_string_char(VM* vm, int argCount) {
     return true;
 }
 
+bool native_string_find(VM* vm, int argCount) {
+    if (argCount < 2 || argCount > 3) {
+        vm->runtimeError("string.find expects 2 or 3 arguments");
+        return false;
+    }
+    Value startVal = (argCount == 3) ? vm->pop() : Value::number(1);
+    Value patternVal = vm->pop();
+    Value strVal = vm->pop();
+
+    if ((!strVal.isString() && !strVal.isRuntimeString()) || 
+        (!patternVal.isString() && !patternVal.isRuntimeString())) {
+        vm->runtimeError("string.find expects string arguments");
+        return false;
+    }
+    if (!startVal.isNumber()) {
+        vm->runtimeError("string.find expects number as third argument");
+        return false;
+    }
+
+    std::string s = vm->getStringValue(strVal);
+    std::string p = vm->getStringValue(patternVal);
+    int start = static_cast<int>(startVal.asNumber());
+
+    // Lua uses 1-based indexing
+    if (start < 1) start = 1;
+    if (start > static_cast<int>(s.length()) + 1) {
+        vm->push(Value::nil());
+        return true;
+    }
+
+    size_t pos = s.find(p, start - 1);
+    if (pos == std::string::npos) {
+        vm->push(Value::nil());
+    } else {
+        vm->push(Value::number(pos + 1));
+        vm->push(Value::number(pos + p.length()));
+    }
+    return true;
+}
+
+
+bool native_string_gsub(VM* vm, int argCount) {
+    if (argCount < 3) {
+        vm->runtimeError("string.gsub expects at least 3 arguments");
+        return false;
+    }
+    Value replVal = vm->pop();
+    Value patternVal = vm->pop();
+    Value strVal = vm->pop();
+
+    if ((!strVal.isString() && !strVal.isRuntimeString()) || 
+        (!patternVal.isString() && !patternVal.isRuntimeString()) ||
+        (!replVal.isString() && !replVal.isRuntimeString())) {
+        vm->runtimeError("string.gsub expects string arguments");
+        return false;
+    }
+
+    std::string s = vm->getStringValue(strVal);
+    std::string p = vm->getStringValue(patternVal);
+    std::string r = vm->getStringValue(replVal);
+
+    std::string result = s;
+    size_t pos = 0;
+    int count = 0;
+    while ((pos = result.find(p, pos)) != std::string::npos) {
+        result.replace(pos, p.length(), r);
+        pos += r.length();
+        count++;
+    }
+
+    vm->push(Value::runtimeString(vm->internString(result)));
+    vm->push(Value::number(count));
+    return true;
+}
+
 } // anonymous namespace
 
 void registerStringLibrary(VM* vm, TableObject* stringTable) {
@@ -191,4 +266,7 @@ void registerStringLibrary(VM* vm, TableObject* stringTable) {
     vm->addNativeToTable(stringTable, "reverse", native_string_reverse);
     vm->addNativeToTable(stringTable, "byte", native_string_byte);
     vm->addNativeToTable(stringTable, "char", native_string_char);
+    vm->addNativeToTable(stringTable, "find", native_string_find);
+    vm->addNativeToTable(stringTable, "gsub", native_string_gsub);
 }
+

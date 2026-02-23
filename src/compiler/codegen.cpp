@@ -70,6 +70,27 @@ void CodeGenerator::visitUnary(UnaryNode* node) {
 void CodeGenerator::visitBinary(BinaryNode* node) {
     setLine(node->line());
 
+    // Handle short-circuiting logical operators
+    if (node->op() == TokenType::AND) {
+        node->left()->accept(*this);
+        size_t endJump = emitJump(OpCode::OP_JUMP_IF_FALSE);
+        emitOpCode(OpCode::OP_POP); // Pop left value
+        node->right()->accept(*this);
+        patchJump(endJump);
+        return;
+    }
+    if (node->op() == TokenType::OR) {
+        node->left()->accept(*this);
+        // Jump to end if true (a or b -> if a is true, result is a)
+        size_t elseJump = emitJump(OpCode::OP_JUMP_IF_FALSE);
+        size_t endJump = emitJump(OpCode::OP_JUMP);
+        patchJump(elseJump);
+        emitOpCode(OpCode::OP_POP); // Pop left value (was falsey)
+        node->right()->accept(*this);
+        patchJump(endJump);
+        return;
+    }
+
     // Compile left operand
     node->left()->accept(*this);
 
@@ -130,17 +151,6 @@ void CodeGenerator::visitBinary(BinaryNode* node) {
 
         case TokenType::GREATER_EQUAL:
             emitOpCode(OpCode::OP_GREATER_EQUAL);
-            break;
-
-        case TokenType::AND:
-        case TokenType::OR:
-            // For MVP, treat as simple boolean operations
-            // TODO: Implement short-circuit evaluation in future
-            if (node->op() == TokenType::AND) {
-                // a and b: if both truthy, result is b, otherwise false
-                emitOpCode(OpCode::OP_NOT);
-                emitOpCode(OpCode::OP_NOT);
-            }
             break;
 
         default:
@@ -264,24 +274,48 @@ void CodeGenerator::visitMultipleLocalDeclStmt(MultipleLocalDeclStmtNode* node) 
     size_t varCount = names.size();
     size_t initCount = initializers.size();
 
-    // Strategy: Evaluate all initializers, push values on stack, then add locals
+    uint8_t oldRetCount = expectedRetCount_;
 
-    // 1. Evaluate all initializers (left-to-right)
-    for (size_t i = 0; i < initCount; i++) {
+    // 1. Evaluate all initializers except the last one
+    for (size_t i = 0; i < (initCount > 0 ? initCount - 1 : 0); i++) {
+        expectedRetCount_ = 1;
         initializers[i]->accept(*this);
     }
 
-    // 2. Pad with nil if fewer values than variables
-    for (size_t i = initCount; i < varCount; i++) {
-        emitOpCode(OpCode::OP_NIL);
+    // 2. Evaluate the last initializer with multires if needed
+    if (initCount > 0) {
+        if (varCount > initCount) {
+            // Last expression needs to provide multiple values
+            expectedRetCount_ = static_cast<uint8_t>(varCount - (initCount - 1));
+        } else {
+            expectedRetCount_ = 1;
+        }
+        initializers[initCount - 1]->accept(*this);
     }
 
-    // 3. Discard excess values if more values than variables
-    for (size_t i = varCount; i < initCount; i++) {
-        emitOpCode(OpCode::OP_POP);
+    expectedRetCount_ = oldRetCount;
+
+    // 3. Pad with nil if fewer values than variables
+    // If the last initializer was a call, it already pushed multiple values.
+    // If not, it only pushed 1.
+    if (initCount < varCount) {
+        auto* lastInit = initCount > 0 ? initializers[initCount - 1].get() : nullptr;
+        bool lastIsCall = lastInit && dynamic_cast<CallExprNode*>(lastInit);
+        
+        if (!lastIsCall) {
+            size_t valuesSoFar = initCount;
+            for (size_t i = valuesSoFar; i < varCount; i++) {
+                emitOpCode(OpCode::OP_NIL);
+            }
+        }
+    } else if (initCount > varCount) {
+        // 4. Discard excess values if more values than variables
+        for (size_t i = varCount; i < initCount; i++) {
+            emitOpCode(OpCode::OP_POP);
+        }
     }
 
-    // 4. Add local variables (values are already on stack in correct order)
+    // 5. Add local variables (values are already on stack in correct order)
     for (const auto& name : names) {
         addLocal(name);
     }
@@ -296,29 +330,46 @@ void CodeGenerator::visitMultipleAssignmentStmt(MultipleAssignmentStmtNode* node
     size_t varCount = names.size();
     size_t valCount = values.size();
 
-    // Strategy: Evaluate all RHS values, adjust count, then assign to LHS variables
+    uint8_t oldRetCount = expectedRetCount_;
 
-    // 1. Evaluate all values (left-to-right) and push on stack
-    for (const auto& value : values) {
-        value->accept(*this);
+    // 1. Evaluate all values except the last one
+    for (size_t i = 0; i < (valCount > 0 ? valCount - 1 : 0); i++) {
+        expectedRetCount_ = 1;
+        values[i]->accept(*this);
     }
 
-    // 2. Pad with nil if fewer values than variables
-    for (size_t i = valCount; i < varCount; i++) {
-        emitOpCode(OpCode::OP_NIL);
+    // 2. Evaluate the last value with multires if needed
+    if (valCount > 0) {
+        if (varCount > valCount) {
+            expectedRetCount_ = static_cast<uint8_t>(varCount - (valCount - 1));
+        } else {
+            expectedRetCount_ = 1;
+        }
+        values[valCount - 1]->accept(*this);
     }
 
-    // 3. Discard excess values if more values than variables
-    for (size_t i = varCount; i < valCount; i++) {
-        emitOpCode(OpCode::OP_POP);
+    expectedRetCount_ = oldRetCount;
+
+    // 3. Pad with nil or discard excess
+    if (valCount < varCount) {
+        auto* lastVal = valCount > 0 ? values[valCount - 1].get() : nullptr;
+        bool lastIsCall = lastVal && dynamic_cast<CallExprNode*>(lastVal);
+        
+        if (!lastIsCall) {
+            size_t valuesSoFar = valCount;
+            for (size_t i = valuesSoFar; i < varCount; i++) {
+                emitOpCode(OpCode::OP_NIL);
+            }
+        }
+    } else if (valCount > varCount) {
+        for (size_t i = varCount; i < valCount; i++) {
+            emitOpCode(OpCode::OP_POP);
+        }
     }
 
     // Now stack has exactly varCount values (bottom to top: v1, v2, ..., vN)
 
     // 4. Assign to variables in REVERSE order (pop from stack)
-    // Stack ordering: bottom=[var0 value], top=[varN-1 value]
-    // We need to assign from top to bottom
-
     for (int i = varCount - 1; i >= 0; i--) {
         const std::string& name = names[i];
 
@@ -429,9 +480,11 @@ void CodeGenerator::visitIfStmt(IfStmtNode* node) {
     emitOpCode(OpCode::OP_POP);  // Pop condition
 
     // Compile then branch
+    beginScope();
     for (const auto& stmt : node->thenBranch()) {
         stmt->accept(*this);
     }
+    endScope();
 
     // Jump over else branch
     size_t elseJump = emitJump(OpCode::OP_JUMP);
@@ -450,9 +503,11 @@ void CodeGenerator::visitIfStmt(IfStmtNode* node) {
         emitOpCode(OpCode::OP_POP);  // Pop condition
 
         // Compile elseif body
+        beginScope();
         for (const auto& stmt : elseIfBranch.body) {
             stmt->accept(*this);
         }
+        endScope();
 
         // Jump to end
         endJumps.push_back(emitJump(OpCode::OP_JUMP));
@@ -463,9 +518,11 @@ void CodeGenerator::visitIfStmt(IfStmtNode* node) {
     }
 
     // Compile else branch
+    beginScope();
     for (const auto& stmt : node->elseBranch()) {
         stmt->accept(*this);
     }
+    endScope();
 
     // Patch else jump
     patchJump(elseJump);
@@ -490,8 +547,7 @@ void CodeGenerator::visitWhileStmt(WhileStmtNode* node) {
     size_t exitJump = emitJump(OpCode::OP_JUMP_IF_FALSE);
     emitOpCode(OpCode::OP_POP);  // Pop condition
 
-    // Compile body in its own scope so locals declared inside the loop
-    // are cleaned up at the end of each iteration.
+    // Compile body in its own scope
     beginScope();
     for (const auto& stmt : node->body()) {
         stmt->accept(*this);
@@ -515,10 +571,12 @@ void CodeGenerator::visitRepeatStmt(RepeatStmtNode* node) {
 
     size_t loopStart = currentChunk()->size();
 
-    // Compile body
+    // Compile body in its own scope
+    beginScope();
     for (const auto& stmt : node->body()) {
         stmt->accept(*this);
     }
+    endScope();
 
     // Compile condition
     node->condition()->accept(*this);
@@ -618,9 +676,11 @@ void CodeGenerator::visitForStmt(ForStmtNode* node) {
     emitOpCode(OpCode::OP_POP);  // Pop condition
 
     // Compile body
+    beginScope();
     for (const auto& stmt : node->body()) {
         stmt->accept(*this);
     }
+    endScope();
 
     // Increment loop variable: var = var + step
     // Get var
@@ -778,9 +838,11 @@ void CodeGenerator::visitForInStmt(ForInStmtNode* node) {
     emitOpCode(OpCode::OP_POP); // Pop boolean result
 
     // Compile body
+    beginScope();
     for (const auto& stmt : node->body()) {
         stmt->accept(*this);
     }
+    endScope();
 
     // Loop back
     emitLoop(loopStart);

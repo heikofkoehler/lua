@@ -1,4 +1,7 @@
 #include "vm/vm.hpp"
+#include "compiler/lexer.hpp"
+#include "compiler/parser.hpp"
+#include "compiler/codegen.hpp"
 #include <iostream>
 #include <cmath>
 
@@ -14,6 +17,13 @@ VM::VM() : chunk_(nullptr), rootChunk_(nullptr), ip_(0), hadError_(false), stdli
     stack_.reserve(STACK_MAX);
     frames_.reserve(FRAMES_MAX);
     // Standard library will be initialized on first run() call
+}
+
+VM::~VM() {
+    reset(); // Clean up strings, tables, closures, etc.
+    for (auto* func : functions_) {
+        delete func;
+    }
 }
 
 void VM::reset() {
@@ -69,6 +79,11 @@ FunctionObject* VM::getFunction(size_t index) {
 }
 
 size_t VM::internString(const char* chars, size_t length) {
+    // Trigger GC if needed BEFORE allocation
+    if (bytesAllocated_ > nextGC_) {
+        collectGarbage();
+    }
+
     // Create temporary string to compute hash
     StringObject temp(chars, length);
     uint32_t hash = temp.hash();
@@ -84,6 +99,10 @@ size_t VM::internString(const char* chars, size_t length) {
     }
 
     // String doesn't exist, create and intern it
+    if (bytesAllocated_ > nextGC_) {
+        collectGarbage();
+    }
+
     StringObject* str = new StringObject(chars, length);
     addObject(str);  // Register with GC
     
@@ -105,11 +124,7 @@ size_t VM::internString(const char* chars, size_t length) {
     
     stringIndices_[hash] = index;
 
-    // Trigger GC if needed
     bytesAllocated_ += sizeof(StringObject) + length;
-    if (bytesAllocated_ > nextGC_) {
-        collectGarbage();
-    }
 
     return index;
 }
@@ -127,19 +142,21 @@ StringObject* VM::getString(size_t index) {
 }
 
 size_t VM::createTable() {
+    // Trigger GC if needed BEFORE allocation
+    if (bytesAllocated_ > nextGC_) {
+        collectGarbage();
+    }
+
     TableObject* table = new TableObject();
     addObject(table);  // Register with GC
     size_t index = tables_.size();
     tables_.push_back(table);
 
-    // Trigger GC if needed
     bytesAllocated_ += sizeof(TableObject);
-    if (bytesAllocated_ > nextGC_) {
-        collectGarbage();
-    }
 
     return index;
 }
+
 
 TableObject* VM::getTable(size_t index) {
     if (index >= tables_.size()) {
@@ -150,10 +167,17 @@ TableObject* VM::getTable(size_t index) {
 }
 
 size_t VM::createClosure(FunctionObject* function) {
+    if (bytesAllocated_ > nextGC_) {
+        collectGarbage();
+    }
+
     ClosureObject* closure = new ClosureObject(function, function->upvalueCount());
     addObject(closure);  // Register with GC
     size_t index = closures_.size();
     closures_.push_back(closure);
+
+    bytesAllocated_ += sizeof(ClosureObject) + sizeof(size_t) * function->upvalueCount();
+
     return index;
 }
 
@@ -178,6 +202,10 @@ size_t VM::captureUpvalue(size_t stackIndex) {
         }
     }
 
+    if (bytesAllocated_ > nextGC_) {
+        collectGarbage();
+    }
+
     // Create new upvalue
     UpvalueObject* upvalue = new UpvalueObject(stackIndex);
     addObject(upvalue);  // Register with GC
@@ -191,8 +219,11 @@ size_t VM::captureUpvalue(size_t stackIndex) {
     }
     openUpvalues_.insert(it, upvalue);
 
+    bytesAllocated_ += sizeof(UpvalueObject);
+
     return index;
 }
+
 
 UpvalueObject* VM::getUpvalue(size_t index) {
     if (index >= upvalues_.size()) {
@@ -334,27 +365,35 @@ const CallFrame& VM::currentFrame() const {
 }
 
 bool VM::run(const Chunk& chunk) {
+    // Save current state for recursive calls
+    const Chunk* oldChunk = chunk_;
+    const Chunk* oldRoot = rootChunk_;
+    size_t oldIP = ip_;
+    size_t oldFrameCount = frames_.size();
+
     chunk_ = &chunk;
-    rootChunk_ = &chunk;  // Save root chunk for function lookups
+    if (rootChunk_ == nullptr) {
+        rootChunk_ = &chunk;
+    }
     ip_ = 0;
     hadError_ = false;
 
     // Initialize standard library on first run (needs chunk for string pool)
     if (!stdlibInitialized_) {
+        stdlibInitialized_ = true; // Set before calling to avoid recursion
         initStandardLibrary();
-        stdlibInitialized_ = true;
     }
 
 #ifdef PRINT_CODE
     chunk.disassemble("script");
 #endif
 
-    // Push root call frame
+    // Push root call frame for this chunk
     CallFrame rootFrame;
     rootFrame.closure = nullptr;
     rootFrame.callerChunk = nullptr;
     rootFrame.ip = 0;
-    rootFrame.stackBase = 0;
+    rootFrame.stackBase = stack_.size(); // Use current stack size as base
     rootFrame.retCount = 0;
     rootFrame.varargCount = 0;
     rootFrame.varargBase = 0;
@@ -655,8 +694,8 @@ bool VM::run(const Chunk& chunk) {
                         // Runtime string from VM pool
                         str = getString(index);
                     } else {
-                        // Compile-time string from chunk pool
-                        str = rootChunk_->getString(index);
+                        // Use current chunk if possible, otherwise fall back to root
+                        str = chunk_ ? chunk_->getString(index) : rootChunk_->getString(index);
                     }
 
                     if (str) {
@@ -736,7 +775,9 @@ bool VM::run(const Chunk& chunk) {
             case OpCode::OP_CALL: {
                 uint8_t argCount = readByte();
                 uint8_t retCount = readByte();  // Number of return values to keep (0 = all)
-                callValue(argCount, retCount);
+                if (!callValue(argCount, retCount)) {
+                    return false;
+                }
                 break;
             }
 
@@ -753,11 +794,26 @@ bool VM::run(const Chunk& chunk) {
                 // Reverse so they're in correct order
                 std::reverse(returnValues.begin(), returnValues.end());
 
-                if (frames_.empty()) {
-                    // Returning from main script - shouldn't happen normally
+                if (frames_.size() == oldFrameCount + 1) {
+                    // Returning from script's root frame (in this run() call)
+                    // Pop all from current stack base
+                    size_t stackBase = currentFrame().stackBase;
+                    while (stack_.size() > stackBase) {
+                        pop();
+                    }
+                    
+                    // Push all return values onto stack for caller
                     for (const auto& value : returnValues) {
                         push(value);
                     }
+                    
+                    // Pop the root frame we added
+                    frames_.pop_back();
+                    
+                    // Restore previous state
+                    chunk_ = oldChunk;
+                    rootChunk_ = oldRoot;
+                    ip_ = oldIP;
                     return !hadError_;
                 }
 
@@ -1032,14 +1088,37 @@ bool VM::run(const Chunk& chunk) {
             }
 
             case OpCode::OP_RETURN:
+                // Clean up frames from this call
+                while (frames_.size() > oldFrameCount) {
+                    frames_.pop_back();
+                }
+                
+                // Restore previous state
+                chunk_ = oldChunk;
+                rootChunk_ = oldRoot;
+                ip_ = oldIP;
                 return !hadError_;
 
             default:
                 runtimeError("Unknown opcode");
+                // Clean up and restore even on error
+                while (frames_.size() > oldFrameCount) {
+                    frames_.pop_back();
+                }
+                chunk_ = oldChunk;
+                rootChunk_ = oldRoot;
+                ip_ = oldIP;
                 return false;
         }
 
         if (hadError_) {
+            // Clean up and restore even on error
+            while (frames_.size() > oldFrameCount) {
+                frames_.pop_back();
+            }
+            chunk_ = oldChunk;
+            rootChunk_ = oldRoot;
+            ip_ = oldIP;
             return false;
         }
     }
@@ -1130,11 +1209,29 @@ bool VM::callValue(int argCount, int retCount) {
         for (size_t i = 0; i < resultCount; i++) {
             results.push_back(pop());
         }
+        // Reverse so results[0] is the FIRST return value
+        std::reverse(results.begin(), results.end());
 
         pop(); // Pop function
 
-        for (auto it = results.rbegin(); it != results.rend(); ++it) {
-            push(*it);
+        // Adjust result count based on what caller expects
+        if (retCount > 0) {
+            size_t expected = static_cast<size_t>(retCount);
+            if (results.size() > expected) {
+                // Truncate
+                results.resize(expected);
+            } else if (results.size() < expected) {
+                // Pad with nil
+                while (results.size() < expected) {
+                    results.push_back(Value::nil());
+                }
+            }
+        }
+        // If retCount == 0, keep all results (multires context)
+
+        // Push results back in correct order
+        for (const auto& result : results) {
+            push(result);
         }
         return true;
     } else if (callee.isClosure()) {
@@ -1215,7 +1312,7 @@ bool VM::callValue(int argCount, int retCount) {
         }
     }
 
-    runtimeError("Attempt to call a " + callee.typeToString() + " value");
+    runtimeError("Attempt to call a " + callee.typeToString() + " value: " + callee.toString());
     return false;
 }
 
@@ -1301,7 +1398,8 @@ std::string VM::getStringValue(const Value& value) {
         if (value.isRuntimeString()) {
             str = getString(index);
         } else {
-            str = rootChunk_->getString(index);
+            // Use current chunk if possible, otherwise fall back to root
+            str = chunk_ ? chunk_->getString(index) : rootChunk_->getString(index);
         }
         return str ? str->chars() : "";
     }
@@ -1363,6 +1461,29 @@ void VM::traceExecution() {
 
     // Disassemble current instruction
     chunk_->disassembleInstruction(ip_);
+}
+
+bool VM::runSource(const std::string& source, const std::string& name) {
+    try {
+        Lexer lexer(source);
+        Parser parser(lexer);
+        auto program = parser.parse();
+        if (!program) return false;
+
+        CodeGenerator codegen;
+        auto chunk = codegen.generate(program.get());
+        if (!chunk) return false;
+
+        // Create a FunctionObject to own the Chunk and keep it alive in the VM's function table
+        FunctionObject* function = new FunctionObject(name, 0, std::move(chunk));
+        registerFunction(function);
+
+        // Run the chunk
+        return run(*function->chunk());
+    } catch (const std::exception& e) {
+        std::cerr << "Error in runSource (" << name << "): " << e.what() << std::endl;
+        return false;
+    }
 }
 
 // ============================================================================

@@ -39,10 +39,14 @@ using NativeFunction = bool (*)(VM* vm, int argCount);
 class VM {
 public:
     VM();
+    ~VM();
 
     // Execute a chunk of bytecode
     // Returns true if execution succeeded, false on error
     bool run(const Chunk& chunk);
+
+    // Execute Lua source code
+    bool runSource(const std::string& source, const std::string& name = "script");
 
     // Reset VM state
     void reset();

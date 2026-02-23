@@ -1,5 +1,12 @@
 #include "vm/vm.hpp"
+#include "compiler/lexer.hpp"
+#include "compiler/parser.hpp"
+#include "compiler/codegen.hpp"
+#include "value/function.hpp"
+#include "value/closure.hpp"
 #include <iostream>
+#include <fstream>
+#include <sstream>
 #include <thread>
 #include <chrono>
 
@@ -236,6 +243,81 @@ bool native_ipairs(VM* vm, int argCount) {
     return true;
 }
 
+bool native_error(VM* vm, int argCount) {
+    if (argCount < 1) {
+        vm->runtimeError("error expects at least 1 argument");
+        return false;
+    }
+    Value msg = vm->pop();
+    vm->runtimeError(vm->getStringValue(msg));
+    return false;
+}
+
+bool native_loadfile(VM* vm, int argCount) {
+    if (argCount != 1) {
+        vm->runtimeError("loadfile expects 1 argument");
+        return false;
+    }
+    Value pathVal = vm->pop();
+    if (!pathVal.isString() && !pathVal.isRuntimeString()) {
+        vm->runtimeError("loadfile expects string argument");
+        return false;
+    }
+
+    std::string path = vm->getStringValue(pathVal);
+
+    std::ifstream file(path);
+    if (!file.is_open()) {
+        vm->push(Value::nil());
+        size_t errIdx = vm->internString("Could not open file: " + path);
+        vm->push(Value::runtimeString(errIdx));
+        return true;
+    }
+
+    std::stringstream buffer;
+    buffer << file.rdbuf();
+    std::string source = buffer.str();
+
+    try {
+        Lexer lexer(source);
+        Parser parser(lexer);
+        auto program = parser.parse();
+        if (!program) {
+            vm->push(Value::nil());
+            size_t errIdx = vm->internString("Parse error in " + path);
+            vm->push(Value::runtimeString(errIdx));
+            return true;
+        }
+
+        CodeGenerator codegen;
+        auto chunk = codegen.generate(program.get());
+        if (!chunk) {
+            vm->push(Value::nil());
+            size_t errIdx = vm->internString("Code generation error in " + path);
+            vm->push(Value::runtimeString(errIdx));
+            return true;
+        }
+
+        // Create FunctionObject and Closure
+        FunctionObject* function = new FunctionObject(path, 0, std::move(chunk));
+        vm->registerFunction(function);
+        size_t closureIndex = vm->createClosure(function);
+        vm->push(Value::closure(closureIndex));
+        return true;
+
+    } catch (const CompileError& e) {
+        vm->push(Value::nil());
+        size_t errIdx = vm->internString(e.what());
+        vm->push(Value::runtimeString(errIdx));
+        return true;
+    } catch (const std::exception& e) {
+        vm->push(Value::nil());
+        size_t errIdx = vm->internString(e.what());
+        vm->push(Value::runtimeString(errIdx));
+        return true;
+    }
+}
+
 } // anonymous namespace
 
 void registerBaseLibrary(VM* vm) {
@@ -282,4 +364,47 @@ void registerBaseLibrary(VM* vm) {
     
     size_t ipairsIdx = vm->registerNativeFunction("ipairs", native_ipairs);
     vm->globals()["ipairs"] = Value::nativeFunction(ipairsIdx);
+
+    size_t errorIdx = vm->registerNativeFunction("error", native_error);
+    vm->globals()["error"] = Value::nativeFunction(errorIdx);
+
+    size_t loadfileIdx = vm->registerNativeFunction("loadfile", native_loadfile);
+    vm->globals()["loadfile"] = Value::nativeFunction(loadfileIdx);
+
+    // Initialize package table
+    size_t packageIdx = vm->createTable();
+    TableObject* package = vm->getTable(packageIdx);
+    vm->globals()["package"] = Value::table(packageIdx);
+
+    size_t loadedIdx = vm->createTable();
+    package->set(Value::runtimeString(vm->internString("loaded")), Value::table(loadedIdx));
+
+    package->set(Value::runtimeString(vm->internString("path")), Value::runtimeString(vm->internString("./?.lua;./?/init.lua")));
+
+    // Define require in Lua
+    const char* requireScript = 
+        "function require(modname)\n"
+        "    if package.loaded[modname] then return package.loaded[modname] end\n"
+        "    local errors = \"\"\n"
+        "    local path = package.path .. \";\"\n"
+        "    local start = 1\n"
+        "    while true do\n"
+        "        local sep = string.find(path, \";\", start)\n"
+        "        if not sep then break end\n"
+        "        local template = string.sub(path, start, sep - 1)\n"
+        "        local filename = string.gsub(template, \"?\", modname)\n"
+        "        local f, err = loadfile(filename)\n"
+        "        if f then\n"
+        "            local res = f()\n"
+        "            if res == nil then res = true end\n"
+        "            package.loaded[modname] = res\n"
+        "            return res\n"
+        "        end\n"
+        "        errors = errors .. \"\\n\\tno file '\" .. filename .. \"'\"\n"
+        "        start = sep + 1\n"
+        "    end\n"
+        "    error(\"module '\" .. modname .. \"' not found:\" .. errors)\n"
+        "end\n";
+
+    vm->runSource(requireScript, "require_init");
 }

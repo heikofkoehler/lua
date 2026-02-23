@@ -13,13 +13,7 @@ void VM::addObject(GCObject* object) {
 // Mark a single value (if it references a GC object)
 void VM::markValue(const Value& value) {
     // Mark objects based on value type
-    if (value.isString() && !value.isRuntimeString()) {
-        // Compile-time strings from chunk - mark the string
-        size_t idx = value.asStringIndex();
-        if (idx < rootChunk_->numStrings()) {
-            markObject(rootChunk_->getString(idx));
-        }
-    } else if (value.isRuntimeString()) {
+    if (value.isRuntimeString()) {
         // Runtime strings from VM pool
         size_t idx = value.asStringIndex();
         if (idx < strings_.size()) {
@@ -77,6 +71,17 @@ void VM::markObject(GCObject* object) {
 
         case GCObject::Type::CLOSURE: {
             ClosureObject* closure = static_cast<ClosureObject*>(object);
+            // Mark all strings in the function's chunk
+            if (closure->function() && closure->function()->chunk()) {
+                Chunk* chunk = closure->function()->chunk();
+                for (size_t i = 0; i < chunk->numStrings(); i++) {
+                    markObject(chunk->getString(i));
+                }
+                // Mark constants (which might be runtimeStrings)
+                for (const auto& constant : chunk->constants()) {
+                    markValue(constant);
+                }
+            }
             // Mark all upvalues
             for (size_t i = 0; i < closure->upvalueCount(); i++) {
                 size_t upvalueIdx = closure->getUpvalue(i);
@@ -108,6 +113,16 @@ void VM::markObject(GCObject* object) {
 
 // Mark all root objects
 void VM::markRoots() {
+    // Mark all strings and constants in root chunk
+    if (rootChunk_) {
+        for (size_t i = 0; i < rootChunk_->numStrings(); i++) {
+            markObject(rootChunk_->getString(i));
+        }
+        for (const auto& constant : rootChunk_->constants()) {
+            markValue(constant);
+        }
+    }
+
     // Mark values on the stack
     for (const Value& value : stack_) {
         markValue(value);
