@@ -153,6 +153,10 @@ public:
     bool isNativeFunction() const {
         return (bits_ & (QNAN | TAG_MASK)) == (QNAN | TAG_NATIVE_FUNCTION);
     }
+    
+    bool isFunction() const {
+        return isFunctionObject() || isClosure() || isNativeFunction();
+    }
 
     Type type() const {
         if (isNumber()) return Type::NUMBER;
@@ -275,6 +279,19 @@ public:
 
     // String representation
     std::string toString() const;
+    
+    // Type name representation
+    std::string typeToString() const {
+        if (isNumber()) return "number";
+        if (isBool()) return "boolean";
+        if (isNil()) return "nil";
+        if (isString()) return "string";
+        if (isTable()) return "table";
+        if (isFunctionObject() || isClosure() || isNativeFunction()) return "function";
+        if (isFile()) return "userdata"; // Lua calls file userdata usually
+        if (isSocket()) return "userdata";
+        return "unknown";
+    }
 
     // Print to stream
     void print(std::ostream& os) const;

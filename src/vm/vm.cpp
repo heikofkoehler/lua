@@ -78,7 +78,7 @@ size_t VM::internString(const char* chars, size_t length) {
     if (it != stringIndices_.end()) {
         size_t index = it->second;
         // Verify it's actually the same string (handle hash collisions)
-        if (strings_[index]->equals(chars, length)) {
+        if (strings_[index] && strings_[index]->equals(chars, length)) {
             return index;
         }
     }
@@ -86,8 +86,23 @@ size_t VM::internString(const char* chars, size_t length) {
     // String doesn't exist, create and intern it
     StringObject* str = new StringObject(chars, length);
     addObject(str);  // Register with GC
+    
+    // Try to reuse a freed slot first
     size_t index = strings_.size();
-    strings_.push_back(str);
+    bool reused = false;
+    for (size_t i = 0; i < strings_.size(); i++) {
+        if (strings_[i] == nullptr) {
+            strings_[i] = str;
+            index = i;
+            reused = true;
+            break;
+        }
+    }
+    
+    if (!reused) {
+        strings_.push_back(str);
+    }
+    
     stringIndices_[hash] = index;
 
     // Trigger GC if needed
@@ -270,11 +285,9 @@ NativeFunction VM::getNativeFunction(size_t index) {
 
 void VM::addNativeToTable(TableObject* table, const char* name, NativeFunction func) {
     size_t funcIndex = registerNativeFunction(name, func);
-    // Use chunk's string pool for keys so they match compile-time strings
-    // Note: We need to modify the chunk's string pool, so we cast away const
-    Chunk* mutableChunk = const_cast<Chunk*>(rootChunk_);
-    size_t nameIndex = mutableChunk->addString(name);
-    table->set(Value::string(nameIndex), Value::nativeFunction(funcIndex));
+    // Use VM's string pool for keys so they match runtime interned strings
+    size_t nameIndex = internString(name);
+    table->set(Value::runtimeString(nameIndex), Value::nativeFunction(funcIndex));
 }
 
 void VM::initStandardLibrary() {
@@ -441,55 +454,100 @@ bool VM::run(const Chunk& chunk) {
             case OpCode::OP_ADD: {
                 Value b = pop();
                 Value a = pop();
-                push(add(a, b));
+                if (a.isNumber() && b.isNumber()) {
+                    push(Value::number(a.asNumber() + b.asNumber()));
+                } else if (!callBinaryMetamethod(a, b, "__add")) {
+                    runtimeError("attempt to perform arithmetic on " + a.typeToString() + " and " + b.typeToString());
+                }
                 break;
             }
 
             case OpCode::OP_SUB: {
                 Value b = pop();
                 Value a = pop();
-                push(subtract(a, b));
+                if (a.isNumber() && b.isNumber()) {
+                    push(Value::number(a.asNumber() - b.asNumber()));
+                } else if (!callBinaryMetamethod(a, b, "__sub")) {
+                    runtimeError("attempt to perform arithmetic on " + a.typeToString() + " and " + b.typeToString());
+                }
                 break;
             }
 
             case OpCode::OP_MUL: {
                 Value b = pop();
                 Value a = pop();
-                push(multiply(a, b));
+                if (a.isNumber() && b.isNumber()) {
+                    push(Value::number(a.asNumber() * b.asNumber()));
+                } else if (!callBinaryMetamethod(a, b, "__mul")) {
+                    runtimeError("attempt to perform arithmetic on " + a.typeToString() + " and " + b.typeToString());
+                }
                 break;
             }
 
             case OpCode::OP_DIV: {
                 Value b = pop();
                 Value a = pop();
-                push(divide(a, b));
+                if (a.isNumber() && b.isNumber()) {
+                    double divisor = b.asNumber();
+                    if (divisor == 0.0) {
+                        runtimeError("Division by zero");
+                        push(Value::nil());
+                    } else {
+                        push(Value::number(a.asNumber() / divisor));
+                    }
+                } else if (!callBinaryMetamethod(a, b, "__div")) {
+                    runtimeError("attempt to perform arithmetic on " + a.typeToString() + " and " + b.typeToString());
+                }
                 break;
             }
 
             case OpCode::OP_MOD: {
                 Value b = pop();
                 Value a = pop();
-                push(modulo(a, b));
+                if (a.isNumber() && b.isNumber()) {
+                    push(Value::number(std::fmod(a.asNumber(), b.asNumber())));
+                } else if (!callBinaryMetamethod(a, b, "__mod")) {
+                    runtimeError("attempt to perform arithmetic on " + a.typeToString() + " and " + b.typeToString());
+                }
                 break;
             }
 
             case OpCode::OP_POW: {
                 Value b = pop();
                 Value a = pop();
-                push(power(a, b));
+                if (a.isNumber() && b.isNumber()) {
+                    push(Value::number(std::pow(a.asNumber(), b.asNumber())));
+                } else if (!callBinaryMetamethod(a, b, "__pow")) {
+                    runtimeError("attempt to perform arithmetic on " + a.typeToString() + " and " + b.typeToString());
+                }
                 break;
             }
 
             case OpCode::OP_CONCAT: {
                 Value b = pop();
                 Value a = pop();
-                push(concat(a, b));
+                if ((a.isString() || a.isNumber()) && (b.isString() || b.isNumber())) {
+                    push(concat(a, b));
+                } else if (!callBinaryMetamethod(a, b, "__concat")) {
+                    runtimeError("attempt to concatenate " + a.typeToString() + " and " + b.typeToString());
+                }
                 break;
             }
 
             case OpCode::OP_NEG: {
                 Value a = pop();
-                push(negate(a));
+                if (a.isNumber()) {
+                    push(Value::number(-a.asNumber()));
+                } else {
+                    Value func = getMetamethod(a, "__unm");
+                    if (!func.isNil()) {
+                        push(func);
+                        push(a);
+                        callValue(1, 1);
+                    } else {
+                        runtimeError("attempt to perform arithmetic on " + a.typeToString());
+                    }
+                }
                 break;
             }
 
@@ -502,35 +560,65 @@ bool VM::run(const Chunk& chunk) {
             case OpCode::OP_EQUAL: {
                 Value b = pop();
                 Value a = pop();
-                push(equal(a, b));
+                if (equal(a, b).asBool()) {
+                    push(Value::boolean(true));
+                } else if (a.isTable() && b.isTable() && callBinaryMetamethod(a, b, "__eq")) {
+                    // Metamethod called, result will be pushed
+                } else {
+                    push(Value::boolean(false));
+                }
                 break;
             }
 
             case OpCode::OP_LESS: {
                 Value b = pop();
                 Value a = pop();
-                push(less(a, b));
+                if (a.isNumber() && b.isNumber()) {
+                    push(Value::boolean(a.asNumber() < b.asNumber()));
+                } else if ((a.isString() || a.isRuntimeString()) && (b.isString() || b.isRuntimeString())) {
+                    push(Value::boolean(getStringValue(a) < getStringValue(b)));
+                } else if (!callBinaryMetamethod(a, b, "__lt")) {
+                    runtimeError("attempt to compare " + a.typeToString() + " and " + b.typeToString());
+                }
                 break;
             }
 
             case OpCode::OP_LESS_EQUAL: {
                 Value b = pop();
                 Value a = pop();
-                push(lessEqual(a, b));
+                if (a.isNumber() && b.isNumber()) {
+                    push(Value::boolean(a.asNumber() <= b.asNumber()));
+                } else if ((a.isString() || a.isRuntimeString()) && (b.isString() || b.isRuntimeString())) {
+                    push(Value::boolean(getStringValue(a) <= getStringValue(b)));
+                } else if (!callBinaryMetamethod(a, b, "__le")) {
+                    runtimeError("attempt to compare " + a.typeToString() + " and " + b.typeToString());
+                }
                 break;
             }
 
             case OpCode::OP_GREATER: {
                 Value b = pop();
                 Value a = pop();
-                push(Value::boolean(a.asNumber() > b.asNumber()));
+                if (a.isNumber() && b.isNumber()) {
+                    push(Value::boolean(a.asNumber() > b.asNumber()));
+                } else if ((a.isString() || a.isRuntimeString()) && (b.isString() || b.isRuntimeString())) {
+                    push(Value::boolean(getStringValue(a) > getStringValue(b)));
+                } else if (!callBinaryMetamethod(b, a, "__lt")) {
+                    runtimeError("attempt to compare " + a.typeToString() + " and " + b.typeToString());
+                }
                 break;
             }
 
             case OpCode::OP_GREATER_EQUAL: {
                 Value b = pop();
                 Value a = pop();
-                push(Value::boolean(a.asNumber() >= b.asNumber()));
+                if (a.isNumber() && b.isNumber()) {
+                    push(Value::boolean(a.asNumber() >= b.asNumber()));
+                } else if ((a.isString() || a.isRuntimeString()) && (b.isString() || b.isRuntimeString())) {
+                    push(Value::boolean(getStringValue(a) >= getStringValue(b)));
+                } else if (!callBinaryMetamethod(b, a, "__le")) {
+                    runtimeError("attempt to compare " + a.typeToString() + " and " + b.typeToString());
+                }
                 break;
             }
 
@@ -627,103 +715,7 @@ bool VM::run(const Chunk& chunk) {
             case OpCode::OP_CALL: {
                 uint8_t argCount = readByte();
                 uint8_t retCount = readByte();  // Number of return values to keep (0 = all)
-                Value callee = peek(argCount);
-
-                if (callee.isNativeFunction()) {
-                    // Native function call
-                    size_t funcIndex = callee.asNativeFunctionIndex();
-                    NativeFunction func = getNativeFunction(funcIndex);
-
-                    if (!func) {
-                        runtimeError("Invalid native function");
-                        break;
-                    }
-
-                    // Track stack size before calling
-                    // Stack: [..., func, arg1, arg2, ...]
-                    // funcIndex is at position: stack_.size() - argCount - 1
-                    size_t funcPosition = stack_.size() - argCount - 1;
-
-                    // Native function will pop arguments and push results
-                    if (!func(this, argCount)) {
-                        // Native function reported error (via runtimeError)
-                        break;
-                    }
-
-                    // After native call, stack is: [..., func, result1, result2, ...]
-                    // We need to remove the func value by shifting results down
-                    size_t resultCount = stack_.size() - funcPosition - 1;
-
-                    // Save results temporarily
-                    std::vector<Value> results;
-                    results.reserve(resultCount);
-                    for (size_t i = 0; i < resultCount; i++) {
-                        results.push_back(pop());
-                    }
-
-                    // Pop the function value
-                    pop();
-
-                    // Push results back in correct order
-                    for (auto it = results.rbegin(); it != results.rend(); ++it) {
-                        push(*it);
-                    }
-                } else if (callee.isClosure()) {
-                    // Get closure index from the value, then retrieve closure
-                    size_t closureIndex = callee.asClosureIndex();
-                    ClosureObject* closure = getClosure(closureIndex);
-
-                    if (!closure) {
-                        runtimeError("Invalid closure");
-                        break;
-                    }
-
-                    FunctionObject* function = closure->function();
-
-                    // Check argument count
-                    int arity = function->arity();
-                    bool hasVarargs = function->hasVarargs();
-
-                    if (!hasVarargs && argCount != arity) {
-                        runtimeError("Expected " + std::to_string(arity) +
-                                     " arguments but got " + std::to_string(argCount));
-                        break;
-                    } else if (hasVarargs && argCount < arity) {
-                        runtimeError("Expected at least " + std::to_string(arity) +
-                                     " arguments but got " + std::to_string(argCount));
-                        break;
-                    }
-
-                    if (frames_.size() >= FRAMES_MAX) {
-                        runtimeError("Stack overflow");
-                        break;
-                    }
-
-                    // Calculate varargs if function accepts them
-                    uint8_t varargCount = 0;
-                    size_t varargBase = 0;
-                    if (hasVarargs && argCount > arity) {
-                        varargCount = argCount - arity;
-                        varargBase = stack_.size() - varargCount;
-                    }
-
-                    // Create new call frame
-                    CallFrame frame;
-                    frame.closure = closure;
-                    frame.callerChunk = chunk_;  // Save current chunk
-                    frame.ip = ip_;  // Save current IP
-                    frame.stackBase = stack_.size() - argCount;
-                    frame.retCount = retCount;  // Store expected return count
-                    frame.varargCount = varargCount;
-                    frame.varargBase = varargBase;
-                    frames_.push_back(frame);
-
-                    // Switch to function's chunk
-                    chunk_ = function->chunk();
-                    ip_ = 0;
-                } else {
-                    runtimeError("Can only call functions and closures");
-                }
+                callValue(argCount, retCount);
                 break;
             }
 
@@ -813,7 +805,27 @@ bool VM::run(const Chunk& chunk) {
                 TableObject* table = getTable(tableIndex);
                 if (table) {
                     Value value = table->get(key);
-                    push(value);
+                    if (!value.isNil()) {
+                        push(value);
+                    } else {
+                        // Check __index
+                        Value indexMethod = getMetamethod(tableValue, "__index");
+                        if (!indexMethod.isNil()) {
+                            if (indexMethod.isFunction()) {
+                                push(indexMethod);
+                                push(tableValue);
+                                push(key);
+                                callValue(2, 1);
+                            } else if (indexMethod.isTable()) {
+                                TableObject* indexTable = getTable(indexMethod.asTableIndex());
+                                push(indexTable->get(key));
+                            } else {
+                                push(Value::nil());
+                            }
+                        } else {
+                            push(Value::nil());
+                        }
+                    }
                 } else {
                     push(Value::nil());
                 }
@@ -830,12 +842,26 @@ bool VM::run(const Chunk& chunk) {
                     break;
                 }
 
-                size_t tableIndex = tableValue.asTableIndex();
-                TableObject* table = getTable(tableIndex);
-                if (table) {
+                TableObject* table = getTable(tableValue.asTableIndex());
+                if (table->has(key)) {
                     table->set(key, value);
+                } else {
+                    Value newIndex = getMetamethod(tableValue, "__newindex");
+                    if (newIndex.isNil()) {
+                        table->set(key, value);
+                    } else if (newIndex.isFunction()) {
+                        push(newIndex);
+                        push(tableValue);
+                        push(key);
+                        push(value);
+                        callValue(3, 0);
+                    } else if (newIndex.isTable()) {
+                        TableObject* newIndexTable = getTable(newIndex.asTableIndex());
+                        newIndexTable->set(key, value);
+                    } else {
+                        table->set(key, value);
+                    }
                 }
-                // Note: SET_TABLE doesn't leave anything on stack
                 break;
             }
 
@@ -844,15 +870,26 @@ bool VM::run(const Chunk& chunk) {
                 Value modeVal = pop();
                 Value filenameVal = pop();
 
-                if (!modeVal.isString() || !filenameVal.isString()) {
+                if ((!modeVal.isString() && !modeVal.isRuntimeString()) || 
+                    (!filenameVal.isString() && !filenameVal.isRuntimeString())) {
                     runtimeError("io_open requires string arguments");
                     push(Value::nil());
                     break;
                 }
 
-                // Get actual strings from chunk's string pool
-                StringObject* filenameStr = rootChunk_->getString(filenameVal.asStringIndex());
-                StringObject* modeStr = rootChunk_->getString(modeVal.asStringIndex());
+                StringObject* filenameStr = nullptr;
+                if (filenameVal.isRuntimeString()) {
+                    filenameStr = getString(filenameVal.asStringIndex());
+                } else {
+                    filenameStr = rootChunk_->getString(filenameVal.asStringIndex());
+                }
+
+                StringObject* modeStr = nullptr;
+                if (modeVal.isRuntimeString()) {
+                    modeStr = getString(modeVal.asStringIndex());
+                } else {
+                    modeStr = rootChunk_->getString(modeVal.asStringIndex());
+                }
 
                 if (!filenameStr || !modeStr) {
                     runtimeError("Invalid string in io_open");
@@ -882,13 +919,19 @@ bool VM::run(const Chunk& chunk) {
                     break;
                 }
 
-                if (!dataVal.isString()) {
+                if (!dataVal.isString() && !dataVal.isRuntimeString()) {
                     runtimeError("io_write requires string data");
                     break;
                 }
 
                 FileObject* file = getFile(fileVal.asFileIndex());
-                StringObject* dataStr = rootChunk_->getString(dataVal.asStringIndex());
+                
+                StringObject* dataStr = nullptr;
+                if (dataVal.isRuntimeString()) {
+                    dataStr = getString(dataVal.asStringIndex());
+                } else {
+                    dataStr = rootChunk_->getString(dataVal.asStringIndex());
+                }
 
                 if (!file || !dataStr) {
                     runtimeError("Invalid file or string in io_write");
@@ -1012,7 +1055,163 @@ uint8_t VM::readByte() {
 
 Value VM::readConstant() {
     uint8_t index = readByte();
-    return chunk_->getConstant(index);
+    Value constant = chunk_->getConstant(index);
+    
+    // If it's a compile-time string, intern it to get a runtime string
+    // This ensures all strings in the VM use the same pool and can be compared by index/identity
+    if (constant.isString() && !constant.isRuntimeString()) {
+        StringObject* str = chunk_->getString(constant.asStringIndex());
+        size_t runtimeIdx = internString(str->chars(), str->length());
+        return Value::runtimeString(runtimeIdx);
+    }
+    
+    return constant;
+}
+
+Value VM::getMetamethod(const Value& obj, const std::string& method) {
+    if (obj.isTable()) {
+        TableObject* table = getTable(obj.asTableIndex());
+        Value mt = table->getMetatable();
+        if (!mt.isNil() && mt.isTable()) {
+            TableObject* meta = getTable(mt.asTableIndex());
+            // Create a string value for lookup
+            size_t idx = internString(method);
+            Value key = Value::runtimeString(idx);
+            return meta->get(key);
+        }
+    }
+    return Value::nil();
+}
+
+bool VM::callValue(int argCount, int retCount) {
+    Value callee = peek(argCount);
+
+    if (callee.isNativeFunction()) {
+        size_t funcIndex = callee.asNativeFunctionIndex();
+        NativeFunction func = getNativeFunction(funcIndex);
+
+        if (!func) {
+            runtimeError("Invalid native function");
+            return false;
+        }
+
+        size_t funcPosition = stack_.size() - argCount - 1;
+
+        if (!func(this, argCount)) {
+            return false;
+        }
+
+        // After native call, stack is: [..., func, result1, result2, ...]
+        size_t resultCount = stack_.size() - funcPosition - 1;
+
+        std::vector<Value> results;
+        results.reserve(resultCount);
+        for (size_t i = 0; i < resultCount; i++) {
+            results.push_back(pop());
+        }
+
+        pop(); // Pop function
+
+        for (auto it = results.rbegin(); it != results.rend(); ++it) {
+            push(*it);
+        }
+        return true;
+    } else if (callee.isClosure()) {
+        size_t closureIndex = callee.asClosureIndex();
+        ClosureObject* closure = getClosure(closureIndex);
+
+        if (!closure) {
+            runtimeError("Invalid closure");
+            return false;
+        }
+
+        FunctionObject* function = closure->function();
+        int arity = function->arity();
+        bool hasVarargs = function->hasVarargs();
+
+        if (!hasVarargs && argCount != arity) {
+            runtimeError("Expected " + std::to_string(arity) + " arguments but got " + std::to_string(argCount));
+            return false;
+        } else if (hasVarargs && argCount < arity) {
+            runtimeError("Expected at least " + std::to_string(arity) + " arguments but got " + std::to_string(argCount));
+            return false;
+        }
+
+        if (frames_.size() >= FRAMES_MAX) {
+            runtimeError("Stack overflow");
+            return false;
+        }
+
+        uint8_t varargCount = 0;
+        size_t varargBase = 0;
+        if (hasVarargs && argCount > arity) {
+            varargCount = argCount - arity;
+            varargBase = stack_.size() - varargCount;
+        }
+
+        CallFrame frame;
+        frame.closure = closure;
+        frame.callerChunk = chunk_;
+        frame.ip = ip_;
+        frame.stackBase = stack_.size() - argCount;
+        frame.retCount = retCount;
+        frame.varargCount = varargCount;
+        frame.varargBase = varargBase;
+        frames_.push_back(frame);
+
+        chunk_ = function->chunk();
+        ip_ = 0;
+        return true;
+    } else if (callee.isTable()) {
+        Value callMethod = getMetamethod(callee, "__call");
+        if (!callMethod.isNil()) {
+             // Insert callMethod before callee
+             // Stack: [..., callee, arg1, arg2...]
+             // Target: [..., callMethod, callee, arg1, arg2...]
+             
+             // We can just push callMethod, then rotate?
+             // Or simpler: verify stack depth.
+             // argCount is N.
+             // callee is at stack_.size() - 1 - argCount.
+             
+             // Insert logic:
+             // push(callMethod);
+             // Move to correct position?
+             // std::vector insert is O(N).
+             
+             // Let's just push callMethod and rotate everything above it up?
+             // Or use a temp vector to rebuild stack top.
+             
+             std::vector<Value> args;
+             for (int i=0; i < argCount; i++) args.push_back(pop());
+             Value func = pop(); // callee
+             
+             push(callMethod);
+             push(func);
+             for (auto it = args.rbegin(); it != args.rend(); ++it) push(*it);
+             
+             return callValue(argCount + 1, retCount);
+        }
+    }
+
+    runtimeError("Attempt to call a " + callee.typeToString() + " value");
+    return false;
+}
+
+bool VM::callBinaryMetamethod(const Value& a, const Value& b, const std::string& method) {
+    Value func = getMetamethod(a, method);
+    if (func.isNil()) {
+        func = getMetamethod(b, method);
+    }
+    
+    if (func.isNil()) {
+        return false;
+    }
+    
+    push(func);
+    push(a);
+    push(b);
+    return callValue(2, 1);
 }
 
 Value VM::add(const Value& a, const Value& b) {

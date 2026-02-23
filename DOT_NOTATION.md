@@ -96,9 +96,9 @@ OP_CALL(1)                  # Call function with 1 arg
 ## Examples
 
 See test files:
-- `examples/test_dot_notation.lua` - Basic dot notation tests
-- `examples/test_mixed_notation.lua` - Mixed bracket/dot usage
-- `examples/dot_notation_demo.lua` - Comprehensive feature demo
+- `tests/test_dot_notation.lua` - Basic dot notation tests
+- `tests/test_mixed_notation.lua` - Mixed bracket/dot usage
+- `tests/dot_notation_demo.lua` - Comprehensive feature demo
 
 ## Future Enhancements
 

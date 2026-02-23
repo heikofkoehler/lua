@@ -187,7 +187,6 @@ void registerMathLibrary(VM* vm, TableObject* mathTable) {
     vm->addNativeToTable(mathTable, "max", native_math_max);
 
     // Add math.pi constant
-    Chunk* chunk = const_cast<Chunk*>(vm->rootChunk());
-    size_t piIndex = chunk->addString("pi");
-    mathTable->set(Value::string(piIndex), Value::number(M_PI));
+    size_t piIndex = vm->internString("pi");
+    mathTable->set(Value::runtimeString(piIndex), Value::number(M_PI));
 }

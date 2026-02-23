@@ -45,6 +45,46 @@ bool native_collectgarbage(VM* vm, int /* argCount */) {
     return true;
 }
 
+bool native_setmetatable(VM* vm, int argCount) {
+    if (argCount != 2) {
+        vm->runtimeError("setmetatable expects 2 arguments");
+        return false;
+    }
+    Value metatable = vm->pop();
+    Value table = vm->pop();
+
+    if (!table.isTable()) {
+        vm->runtimeError("bad argument #1 to 'setmetatable' (table expected)");
+        return false;
+    }
+
+    if (!metatable.isNil() && !metatable.isTable()) {
+        vm->runtimeError("bad argument #2 to 'setmetatable' (nil or table expected)");
+        return false;
+    }
+
+    TableObject* t = vm->getTable(table.asTableIndex());
+    t->setMetatable(metatable);
+    vm->push(table);
+    return true;
+}
+
+bool native_getmetatable(VM* vm, int argCount) {
+    if (argCount != 1) {
+        vm->runtimeError("getmetatable expects 1 argument");
+        return false;
+    }
+    Value obj = vm->pop();
+
+    if (obj.isTable()) {
+        TableObject* t = vm->getTable(obj.asTableIndex());
+        vm->push(t->getMetatable());
+    } else {
+        vm->push(Value::nil());
+    }
+    return true;
+}
+
 } // anonymous namespace
 
 void registerBaseLibrary(VM* vm) {
@@ -57,4 +97,10 @@ void registerBaseLibrary(VM* vm) {
 
     size_t sleepIdx = vm->registerNativeFunction("sleep", native_sleep);
     vm->globals()["sleep"] = Value::nativeFunction(sleepIdx);
+
+    size_t setmtIdx = vm->registerNativeFunction("setmetatable", native_setmetatable);
+    vm->globals()["setmetatable"] = Value::nativeFunction(setmtIdx);
+
+    size_t getmtIdx = vm->registerNativeFunction("getmetatable", native_getmetatable);
+    vm->globals()["getmetatable"] = Value::nativeFunction(getmtIdx);
 }

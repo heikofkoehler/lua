@@ -130,9 +130,9 @@ The architecture supports unlimited future expansion:
 ## Testing
 
 Comprehensive tests created:
-- `examples/test_string_bracket.lua` - All string functions
-- `examples/test_table_bracket.lua` - All table functions
-- `examples/test_math_bracket.lua` - All math functions
-- `examples/stdlib_demo_simple.lua` - Complete demonstration
+- `tests/test_string_bracket.lua` - All string functions
+- `tests/test_table_bracket.lua` - All table functions
+- `tests/test_math_bracket.lua` - All math functions
+- `tests/stdlib_demo_simple.lua` - Complete demonstration
 
 All tests pass successfully with expected output.

@@ -13,7 +13,7 @@ void VM::addObject(GCObject* object) {
 // Mark a single value (if it references a GC object)
 void VM::markValue(const Value& value) {
     // Mark objects based on value type
-    if (value.isString()) {
+    if (value.isString() && !value.isRuntimeString()) {
         // Compile-time strings from chunk - mark the string
         size_t idx = value.asStringIndex();
         if (idx < rootChunk_->numStrings()) {
@@ -63,6 +63,10 @@ void VM::markObject(GCObject* object) {
 
         case GCObject::Type::TABLE: {
             TableObject* table = static_cast<TableObject*>(object);
+            // Mark metatable if present
+            if (!table->getMetatable().isNil()) {
+                markValue(table->getMetatable());
+            }
             // Mark all keys and values
             for (const auto& pair : table->data()) {
                 markValue(pair.first);   // Mark key
@@ -150,13 +154,25 @@ void VM::freeObject(GCObject* object) {
     switch (object->type()) {
         case GCObject::Type::STRING: {
             StringObject* str = static_cast<StringObject*>(object);
+            
             // Remove from string pool if it's there
+            size_t foundIndex = SIZE_MAX;
             for (size_t i = 0; i < strings_.size(); i++) {
                 if (strings_[i] == str) {
                     strings_[i] = nullptr;  // Leave gap for now
+                    foundIndex = i;
                     break;
                 }
             }
+            
+            // Remove from string indices map only if it points to this string
+            if (foundIndex != SIZE_MAX) {
+                auto it = stringIndices_.find(str->hash());
+                if (it != stringIndices_.end() && it->second == foundIndex) {
+                    stringIndices_.erase(it);
+                }
+            }
+            
             delete str;
             break;
         }

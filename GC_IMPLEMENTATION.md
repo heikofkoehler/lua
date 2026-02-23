@@ -173,8 +173,8 @@ Created comprehensive tests:
 - `src/vm/gc.hpp` - GCObject base class
 - `src/vm/gc.cpp` - markReferences() implementations
 - `src/vm/stdlib_base.cpp` - Base library with collectgarbage()
-- `examples/test_gc_simple.lua` - GC test
-- `examples/test_collectgarbage.lua` - Manual GC test
+- `tests/test_gc_simple.lua` - GC test
+- `tests/test_collectgarbage.lua` - Manual GC test
 
 **Modified Files:**
 - `src/value/string.hpp` - Inherit from GCObject

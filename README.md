@@ -9,6 +9,7 @@ A Lua implementation in C++ featuring a stack-based bytecode virtual machine wit
 - **NaN-boxing Values**: 64-bit value representation supporting nil, boolean, number, function, string, and table types
 - **Strings**:
   - **String Literals**: Double and single quoted strings
+  - **String Escape Sequences**: Full support for `\n`, `\t`, `\r`, `\\`, `\"`, `\'`, `\xXX` (hex), and `\ddd` (decimal)
   - **String Interning**: Automatic deduplication for memory efficiency
   - **Multi-line Support**: Strings can span multiple lines
 - **Tables (Hash Maps)**:
@@ -63,10 +64,16 @@ A Lua implementation in C++ featuring a stack-based bytecode virtual machine wit
   - **Math Library**: sqrt, abs, floor, ceil, sin, cos, tan, exp, log, min, max, pi
   - **Dot Notation**: Clean syntax like `string.len("hello")` and `math.sqrt(16)`
 - **REPL**: Interactive read-eval-print loop
-- **File Execution**: Run Lua scripts from files
+  - **File Execution**: Run Lua scripts from files
+- **Metatables**:
+  - **Meta-operations**: `setmetatable`, `getmetatable`
+  - **Arithmetic Metamethods**: `__add`, `__sub`, `__mul`, `__div`, `__mod`, `__pow`, `__unm`
+  - **Comparison Metamethods**: `__eq`, `__lt`, `__le`
+  - **Table Access**: `__index`, `__newindex`
+  - **Call**: `__call` (tables callable as functions)
+  - **Concatenation**: `__concat`
 
 ### Architecture
-
 ```
 Lua Source Code
     ↓
@@ -121,7 +128,7 @@ make
 ### Run a Lua File
 
 ```bash
-./lua examples/test.lua
+./lua tests/test.lua
 ```
 
 ### Interactive REPL
@@ -167,6 +174,16 @@ print(5 < 10)         -- true
 print(5 > 10)         -- false
 print(5 == 5)         -- true
 print(5 ~= 3)         -- true (Lua's not-equal operator)
+```
+
+### String Escape Sequences
+
+```lua
+print("Hello\nWorld")    -- Multi-line string
+print("Tab\tSeparated")  -- Tab character
+print("Backslash: \\")   -- Literal backslash
+print("\x41\x42\x43")     -- Hex: ABC
+print("\65\66\67")       -- Decimal: ABC
 ```
 
 ### Boolean and Nil
@@ -750,7 +767,7 @@ lua/
 │   │   ├── vm.hpp
 │   │   └── vm.cpp
 │   └── main.cpp                # Entry point
-├── examples/                   # Test scripts
+├── tests/                      # Test scripts
 │   ├── test.lua
 │   └── simple.lua
 └── build/                      # Build artifacts
@@ -884,16 +901,17 @@ Recursive descent with proper operator precedence:
 - ✅ Garbage collection (mark-and-sweep with automatic and manual triggering)
 - ✅ Native function system for C++ built-ins
 - ✅ Dot notation for table field access (`table.field`)
+- ✅ String escape sequences (`\n`, `\t`, etc.)
 
 ### Phase 5: Standard Library ✅ COMPLETE
-- ✅ Base library: `collectgarbage()`
+- ✅ Base library: `collectgarbage()`, `print()`, `sleep()`
+- ✅ Metatables: `setmetatable`, `getmetatable`
 - ✅ String library: `string.len`, `string.sub`, `string.upper`, `string.lower`, `string.reverse`, `string.byte`, `string.char`
 - ✅ Table library: `table.insert`, `table.remove`, `table.concat`
 - ✅ Math library: `math.sqrt`, `math.abs`, `math.floor`, `math.ceil`, `math.sin`, `math.cos`, `math.tan`, `math.exp`, `math.log`, `math.min`, `math.max`, `math.pi`
+- ✅ Metamethods: `__add`, `__sub`, `__mul`, `__div`, `__mod`, `__pow`, `__unm`, `__concat`, `__eq`, `__lt`, `__le`, `__index`, `__newindex`, `__call`
 
 ### Phase 6: Advanced Features
-- Metatables and metamethods
-- String escape sequences (\n, \t, etc.)
 - Module system (require/module)
 - Coroutines
 - Iterators for tables (pairs, ipairs)
@@ -903,7 +921,7 @@ Recursive descent with proper operator precedence:
 Run the test suite:
 ```bash
 cd build
-./lua ../examples/test.lua
+./lua ../tests/test.lua
 ```
 
 Expected output:

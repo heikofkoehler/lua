@@ -78,11 +78,16 @@ public:
         return map_;
     }
 
+    // Metatable operations
+    void setMetatable(const Value& mt) { metatable_ = mt; }
+    Value getMetatable() const { return metatable_; }
+
     // GC interface: mark all keys and values
     void markReferences() override;
 
 private:
     std::unordered_map<Value, Value, ValueHash, ValueEqual> map_;
+    Value metatable_ = Value::nil();
 };
 
 #endif // LUA_TABLE_HPP

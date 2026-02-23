@@ -127,6 +127,11 @@ private:
     Value less(const Value& a, const Value& b);
     Value lessEqual(const Value& a, const Value& b);
 
+    // Metamethod helper
+    Value getMetamethod(const Value& obj, const std::string& method);
+    bool callBinaryMetamethod(const Value& a, const Value& b, const std::string& method);
+    bool callValue(int argCount, int retCount);
+
     // Logical operations
     Value logicalNot(const Value& a);
 

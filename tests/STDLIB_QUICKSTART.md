@@ -115,7 +115,7 @@ print(pi)  -- 3.14159...
 
 ```bash
 cd build
-./lua ../examples/stdlib_demo_simple.lua
+./lua ../tests/stdlib_demo_simple.lua
 ```
 
 See also:
