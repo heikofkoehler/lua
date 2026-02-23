@@ -46,7 +46,18 @@ A Lua implementation in C++ featuring a stack-based bytecode virtual machine wit
   - **Repeat-Until**: Post-test loops
   - **For Loops**: Numeric for loops with step support, and generic for-in loops with iterators
   - **Break Statement**: Exit loops early
-- **Print Statement**: Built-in print() function
+  - **Logical Operators**: `and` and `or` with proper short-circuit evaluation
+- **Print Statement**: Built-in print() function with support for multiple arguments
+- **Module System**:
+  - **require(modname)**: Load and cache modules
+  - **loadfile(path)**: Compile Lua files into callable functions
+  - **package.path**: Customizable search path for modules
+  - **package.loaded**: Cache of already loaded modules to prevent redundant execution
+- **Coroutines**:
+  - **First-class Threads**: Coroutines as values that can be passed and stored
+  - **Yield/Resume**: Pause execution and transfer control back to resumer
+  - **Value Passing**: Pass values through resume and return them through yield
+  - **Status**: Track coroutine state (running, suspended, normal, dead)
 - **File I/O**:
   - **io_open(filename, mode)**: Open files in read, write, or append mode
   - **io_write(file, data)**: Write string data to files
@@ -59,9 +70,12 @@ A Lua implementation in C++ featuring a stack-based bytecode virtual machine wit
   - **Manual Control**: `collectgarbage()` function for explicit collection
   - **Comprehensive Coverage**: All object types (strings, tables, closures, upvalues, files)
 - **Standard Library**:
-  - **String Library**: len, sub, upper, lower, reverse, byte, char
-  - **Table Library**: insert, remove, concat
+  - **Base Library**: `collectgarbage`, `print`, `sleep`, `tostring`, `type`, `error`, `loadfile`, `require`
+  - **Coroutine Library**: `create`, `resume`, `yield`, `status`, `running`
+  - **String Library**: len, sub, upper, lower, reverse, byte, char, find, gsub
+  - **Table Library**: insert, remove, concat, pairs, ipairs, next
   - **Math Library**: sqrt, abs, floor, ceil, sin, cos, tan, exp, log, min, max, pi
+  - **Package Table**: `loaded`, `path`
   - **Dot Notation**: Clean syntax like `string.len("hello")` and `math.sqrt(16)`
 - **REPL**: Interactive read-eval-print loop
   - **File Execution**: Run Lua scripts from files
@@ -788,8 +802,9 @@ Uses **NaN-boxing** technique:
   - Table: TAG_TABLE (5) - stores table index
   - Closure: TAG_CLOSURE (6) - stores closure index (function + captured upvalues)
   - File: TAG_FILE (7) - stores file handle index
-  - Runtime String: TAG_RUNTIME_STRING (8) - stores runtime string index (from VM pool)
-  - Native Function: TAG_NATIVE_FUNCTION (9) - stores C++ function pointer index
+  - Runtime String: TAG_RUNTIME_STRING (9) - stores runtime string index (from VM pool)
+  - Native Function: TAG_NATIVE_FUNCTION (10) - stores C++ function pointer index
+  - Thread: TAG_THREAD (11) - stores coroutine object index
 - Fast type checking via bit operations
 - Objects stored as indices into pools for safe pointer management
 - No raw pointers in values (prevents corruption)
@@ -827,6 +842,7 @@ Uses **NaN-boxing** technique:
 | OP_IO_READ | Read from file: pop file handle, push contents |
 | OP_IO_CLOSE | Close file: pop file handle |
 | OP_GET_VARARG | Push all varargs from current frame (or nil if none) |
+| OP_YIELD | Yield from coroutine: pop N values and suspend |
 | OP_RETURN | End execution |
 
 ### Closures and Upvalues
@@ -854,9 +870,9 @@ Functions can return multiple values:
 - **Value adjustment**: Runtime pads with nil or truncates based on context
 
 Current implementation:
-- Function calls always request single value (retCount=1)
-- Extra return values are discarded at call site
-- Future: Multiple assignment, return value expansion in arguments
+- Function calls are context-aware (requesting N values)
+- Supports multiple assignments: `local a, b = func()`
+- Native functions honor `retCount` for precise stack management
 
 ### Parser
 
@@ -912,9 +928,15 @@ Recursive descent with proper operator precedence:
 - ✅ Metamethods: `__add`, `__sub`, `__mul`, `__div`, `__mod`, `__pow`, `__unm`, `__concat`, `__eq`, `__lt`, `__le`, `__index`, `__newindex`, `__call`
 - ✅ Iterators: `pairs`, `ipairs`, `next`
 
-### Phase 6: Advanced Features
-- Module system (require/module)
-- Coroutines
+### Phase 6: Advanced Features ✅ COMPLETE
+- ✅ Module system (require/package)
+- ✅ Coroutines (create/resume/yield)
+
+### Phase 7: Optimization & Robustness
+- JIT Compilation (optional)
+- Better error recovery in parser
+- Optimized table implementation (hybrid array/hash)
+- Metatables for all types
 
 ## Testing
 
