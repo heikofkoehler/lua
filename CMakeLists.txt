@@ -57,3 +57,11 @@ target_include_directories(lua PRIVATE ${CMAKE_SOURCE_DIR}/src)
 set_target_properties(lua PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}
 )
+
+# Custom test target
+add_custom_target(test
+    COMMAND ./run_all_tests.sh ../build/lua
+    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}/tests
+    DEPENDS lua
+    COMMENT "Running all Lua VM tests"
+)
