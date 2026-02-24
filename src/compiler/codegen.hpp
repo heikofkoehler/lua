@@ -67,6 +67,7 @@ private:
         std::vector<Upvalue> upvalues;
         int scopeDepth;
         int localCount;
+        uint8_t expectedRetCount;
         CompilerState* enclosing;  // Parent compiler (not owned)
     };
 

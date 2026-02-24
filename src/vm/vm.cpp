@@ -68,16 +68,12 @@ void VM::reset() {
         delete upvalue;
     }
     upvalues_.clear();
-    currentCoroutine_->openUpvalues.clear();
     // Clean up files (VM owns them)
     for (auto* file : files_) {
         delete file;
     }
     files_.clear();
-    currentCoroutine_->ip = 0;
     hadError_ = false;
-    currentCoroutine_->chunk = nullptr;
-    currentCoroutine_->rootChunk = nullptr;
 }
 
 size_t VM::registerFunction(FunctionObject* func) {
@@ -234,8 +230,7 @@ size_t VM::createCoroutine(ClosureObject* closure) {
             frame.ip = 0;
             frame.stackBase = 1;
             frame.retCount = 0;
-            frame.varargCount = 0;
-            frame.varargBase = 0;
+            // varargs is automatically empty
             co->frames.push_back(frame);
             
             co->chunk = closure->function()->chunk();
@@ -481,11 +476,16 @@ bool VM::run(const Chunk& chunk) {
     rootFrame.ip = 0;
     rootFrame.stackBase = currentCoroutine_->stack.size(); // Use current stack size as base
     rootFrame.retCount = 0;
-    rootFrame.varargCount = 0;
-    rootFrame.varargBase = 0;
+    // varargs is empty
     currentCoroutine_->frames.push_back(rootFrame);
 
     bool result = run();
+
+    if (currentCoroutine_->status == CoroutineObject::Status::SUSPENDED) {
+        // Coroutine yielded - do NOT restore state or pop frames!
+        // The state will be restored when resume() finishes and returns to resumer.
+        return result;
+    }
 
     // Restore previous state
     currentCoroutine_->chunk = oldChunk;
@@ -501,9 +501,6 @@ bool VM::run(const Chunk& chunk) {
 }
 
 bool VM::run() {
-    // Save current frame count to know when to return from this run() call
-    size_t startFrameCount = currentCoroutine_->frames.size();
-
     // Main execution loop
     while (true) {
 #ifdef TRACE_EXECUTION
@@ -564,6 +561,7 @@ bool VM::run() {
                 uint8_t slot = readByte();
                 // Add stackBase offset if inside a function
                 size_t actualSlot = currentCoroutine_->frames.empty() ? slot : (currentFrame().stackBase + slot);
+                std::cout << "DEBUG SET_LOCAL: slot=" << (int)slot << " actual=" << actualSlot << " val=" << peek(0) << std::endl;
                 currentCoroutine_->stack[actualSlot] = peek(0);
                 break;
             }
@@ -745,8 +743,11 @@ bool VM::run() {
                     push(Value::boolean(a.asNumber() <= b.asNumber()));
                 } else if ((a.isString() || a.isRuntimeString()) && (b.isString() || b.isRuntimeString())) {
                     push(Value::boolean(getStringValue(a) <= getStringValue(b)));
-                } else if (!callBinaryMetamethod(a, b, "__le")) {
-                    runtimeError("attempt to compare " + a.typeToString() + " and " + b.typeToString());
+                } else {
+                    std::cout << "DEBUG LE: a=" << a << " (bits=" << std::hex << a.bits() << std::dec << ") b=" << b << " (bits=" << std::hex << b.bits() << std::dec << ")" << std::endl;
+                    if (!callBinaryMetamethod(a, b, "__le")) {
+                        runtimeError("attempt to compare " + a.typeToString() + " and " + b.typeToString());
+                    }
                 }
                 break;
             }
@@ -879,49 +880,52 @@ bool VM::run() {
             case OpCode::OP_RETURN_VALUE: {
                 // Read the count of return values
                 uint8_t count = readByte();
+                size_t actualCount = count;
+                if (count == 0) {
+                    actualCount = currentCoroutine_->lastResultCount;
+                }
 
                 // Pop all return values from the stack (in reverse order)
                 std::vector<Value> returnValues;
-                returnValues.reserve(count);
-                for (int i = 0; i < count; i++) {
+                returnValues.reserve(actualCount);
+                for (size_t i = 0; i < actualCount; i++) {
                     returnValues.push_back(pop());
                 }
                 // Reverse so they're in correct order
                 std::reverse(returnValues.begin(), returnValues.end());
 
-                if (currentCoroutine_->frames.size() == startFrameCount) {
-                    // Returning from script's root frame (in this run() call)
-                    // Pop all from current stack base
+                // If it's the VERY LAST frame of the coroutine, do special root cleanup and return.
+                if (currentCoroutine_->frames.size() == 1) {
                     size_t stackBase = currentFrame().stackBase;
                     while (currentCoroutine_->stack.size() > stackBase) {
                         pop();
                     }
+                    if (stackBase > 0) pop(); // Pop closure
                     
-                    // Also pop the closure (at stackBase - 1) if it's there
-                    if (stackBase > 0) pop();
-
                     // Push results
+                    currentCoroutine_->lastResultCount = returnValues.size();
                     for (const auto& value : returnValues) {
                         push(value);
                     }
                     
-                    // Pop the root frame we added
                     currentCoroutine_->frames.pop_back();
-                    
+                    currentCoroutine_->status = CoroutineObject::Status::DEAD;
                     return !hadError_;
                 }
-
                 // Get the expected return count from the call frame
                 uint8_t expectedRetCount = currentFrame().retCount;
 
                 // Adjust return values based on what caller expects
-                if (expectedRetCount > 0 && returnValues.size() > expectedRetCount) {
-                    // Keep only the first expectedRetCount values
-                    returnValues.resize(expectedRetCount);
-                } else if (expectedRetCount > 0 && returnValues.size() < expectedRetCount) {
-                    // Pad with nils if we returned fewer than expected
-                    while (returnValues.size() < expectedRetCount) {
-                        returnValues.push_back(Value::nil());
+                if (expectedRetCount > 0) {
+                    size_t expected = static_cast<size_t>(expectedRetCount);
+                    if (returnValues.size() > expected) {
+                        // Keep only the first expected values
+                        returnValues.resize(expected);
+                    } else if (returnValues.size() < expected) {
+                        // Pad with nils if we returned fewer than expected
+                        while (returnValues.size() < expected) {
+                            returnValues.push_back(Value::nil());
+                        }
                     }
                 }
                 // If expectedRetCount == 0, keep all values (no adjustment)
@@ -1165,16 +1169,14 @@ bool VM::run() {
                 }
 
                 CallFrame& frame = currentFrame();
-                uint8_t varargCount = frame.varargCount;
-                size_t varargBase = frame.varargBase;
-
+                
                 // Push all varargs
-                for (uint8_t i = 0; i < varargCount; i++) {
-                    push(currentCoroutine_->stack[varargBase + i]);
+                for (size_t i = 0; i < frame.varargs.size(); i++) {
+                    push(frame.varargs[i]);
                 }
 
                 // If no varargs, push nil
-                if (varargCount == 0) {
+                if (frame.varargs.empty()) {
                     push(Value::nil());
                 }
 
@@ -1183,13 +1185,27 @@ bool VM::run() {
 
             case OpCode::OP_YIELD: {
                 uint8_t count = readByte();
+                uint8_t retCount = readByte();
+                
+                // std::cout << "DEBUG YIELD: count=" << (int)count << " retCount=" << (int)retCount << " stackSize=" << currentCoroutine_->stack.size() << std::endl;
+
+                // Pop yielded values and save them
+                currentCoroutine_->yieldedValues.clear();
+                for (int i = 0; i < count; i++) {
+                    currentCoroutine_->yieldedValues.push_back(pop());
+                }
+                // Reverse so they are in original order
+                std::reverse(currentCoroutine_->yieldedValues.begin(), currentCoroutine_->yieldedValues.end());
+
                 currentCoroutine_->status = CoroutineObject::Status::SUSPENDED;
                 currentCoroutine_->yieldCount = count;
+                currentCoroutine_->retCount = retCount;
                 return true; // Return to resumer
             }
 
             case OpCode::OP_RETURN:
-                if (currentCoroutine_->frames.size() <= startFrameCount) {
+                if (currentCoroutine_->frames.size() == 1) {
+                    currentCoroutine_->status = CoroutineObject::Status::DEAD;
                     return !hadError_;
                 }
                 // Internal returns are handled by OP_RETURN_VALUE
@@ -1221,6 +1237,7 @@ Value VM::pop() {
     }
     Value value = currentCoroutine_->stack.back();
     currentCoroutine_->stack.pop_back();
+    // std::cout << "DEBUG pop from " << currentCoroutine_ << " size now " << currentCoroutine_->stack.size() << std::endl;
     return value;
 }
 
@@ -1228,7 +1245,8 @@ Value VM::peek(size_t distance) const {
     if (distance >= currentCoroutine_->stack.size()) {
         return Value::nil();
     }
-    return currentCoroutine_->stack[currentCoroutine_->stack.size() - 1 - distance];
+    Value val = currentCoroutine_->stack[currentCoroutine_->stack.size() - 1 - distance];
+    return val;
 }
 
 uint8_t VM::readByte() {
@@ -1312,6 +1330,7 @@ bool VM::callValue(int argCount, int retCount) {
         // If retCount == 0, keep all results (multires context)
 
         // Push results back in correct order
+        currentCoroutine_->lastResultCount = results.size();
         for (const auto& result : results) {
             push(result);
         }
@@ -1342,11 +1361,21 @@ bool VM::callValue(int argCount, int retCount) {
             return false;
         }
 
-        uint8_t varargCount = 0;
-        size_t varargBase = 0;
-        if (hasVarargs && argCount > arity) {
-            varargCount = argCount - arity;
-            varargBase = currentCoroutine_->stack.size() - varargCount;
+        std::vector<Value> varargs;
+        if (argCount > arity) {
+            uint8_t extraCount = argCount - arity;
+            if (hasVarargs) {
+                for (int i = 0; i < extraCount; i++) {
+                    varargs.push_back(currentCoroutine_->stack.back());
+                    currentCoroutine_->stack.pop_back();
+                }
+                std::reverse(varargs.begin(), varargs.end());
+            } else {
+                for (int i = 0; i < extraCount; i++) {
+                    currentCoroutine_->stack.pop_back();
+                }
+            }
+            argCount = arity; // Adjust argCount so stackBase is correct
         }
 
         CallFrame frame;
@@ -1355,8 +1384,8 @@ bool VM::callValue(int argCount, int retCount) {
         frame.ip = currentCoroutine_->ip;
         frame.stackBase = currentCoroutine_->stack.size() - argCount;
         frame.retCount = retCount;
-        frame.varargCount = varargCount;
-        frame.varargBase = varargBase;
+        frame.varargs = std::move(varargs);
+        // std::cout << "DEBUG frame: closure=" << closureIndex << " base=" << frame.stackBase << " args=" << argCount << " size=" << currentCoroutine_->stack.size() << std::endl;
         currentCoroutine_->frames.push_back(frame);
 
         currentCoroutine_->chunk = function->chunk();
@@ -1529,6 +1558,14 @@ Value VM::logicalNot(const Value& a) {
 void VM::runtimeError(const std::string& message) {
     // Get line number from current instruction
     int line = currentCoroutine_->chunk->getLine(currentCoroutine_->ip - 1);
+    uint8_t op = currentCoroutine_->chunk->at(currentCoroutine_->ip - 1);
+    std::cout << "RUNTIME ERROR at line " << line << " (op " << (int)op << " " << opcodeName(static_cast<OpCode>(op)) << "): " << message << std::endl;
+    
+    std::cout << "Stack trace (bottom to top):" << std::endl;
+    for (size_t i = 0; i < currentCoroutine_->stack.size(); i++) {
+        std::cout << "  [" << i << "] " << currentCoroutine_->stack[i].typeToString() << ": " << currentCoroutine_->stack[i] << std::endl;
+    }
+
     Log::error(message, line);
     hadError_ = true;
 }
@@ -1555,6 +1592,10 @@ bool VM::runSource(const std::string& source, const std::string& name) {
         CodeGenerator codegen;
         auto chunk = codegen.generate(program.get());
         if (!chunk) return false;
+
+#ifdef PRINT_CODE
+        chunk->disassemble(name);
+#endif
 
         // Create a FunctionObject to own the Chunk and keep it alive in the VM's function table
         FunctionObject* function = new FunctionObject(name, 0, std::move(chunk));

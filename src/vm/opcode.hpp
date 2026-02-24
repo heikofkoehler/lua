@@ -71,7 +71,7 @@ enum class OpCode : uint8_t {
     // Varargs
     OP_GET_VARARG,  // Push all varargs onto stack [count: uint8_t]
 
-    OP_YIELD,       // Yield from coroutine [count: uint8_t]
+    OP_YIELD,       // Yield from coroutine [args: uint8_t, returns: uint8_t]
 
     OP_RETURN,      // Return from current chunk
 };

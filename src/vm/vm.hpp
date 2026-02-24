@@ -24,8 +24,7 @@ struct CallFrame {
     size_t ip;                  // Instruction pointer to return to
     size_t stackBase;           // Where this frame's locals start on value stack
     uint8_t retCount;           // Number of return values expected (0 = all, 1+ = that many)
-    uint8_t varargCount;        // Number of varargs passed to this function
-    size_t varargBase;          // Stack location where varargs start
+    std::vector<Value> varargs; // Varargs passed to this function
 };
 
 // Virtual Machine: Stack-based bytecode interpreter

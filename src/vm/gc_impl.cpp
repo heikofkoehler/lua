@@ -133,6 +133,10 @@ void VM::markObject(GCObject* object) {
             for (const auto& val : co->stack) {
                 markValue(val);
             }
+            // Mark yielded values
+            for (const auto& val : co->yieldedValues) {
+                markValue(val);
+            }
             // Mark closures in frames
             for (const auto& frame : co->frames) {
                 if (frame.closure) {

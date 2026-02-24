@@ -124,7 +124,7 @@ public:
     }
 
     bool isNumber() const {
-        return (bits_ & QNAN) != QNAN;
+        return (bits_ & 0x7FF0000000000000ULL) != 0x7FF0000000000000ULL;
     }
 
     bool isFunctionObject() const {
@@ -204,7 +204,7 @@ public:
             throw RuntimeError("Value is not a function");
         }
         // Extract function index (shift right by 4 to undo the encoding)
-        uint64_t index = (bits_ & 0x0000FFFFFFFFFFFFULL) >> 4;
+        uint64_t index = (bits_ & 0x0000FFFFFFFFFFF0ULL) >> 4;
         return static_cast<size_t>(index);
     }
 
@@ -213,7 +213,7 @@ public:
             throw RuntimeError("Value is not a string");
         }
         // Extract string index (shift right by 4 to undo the encoding)
-        uint64_t index = (bits_ & 0x0000FFFFFFFFFFFFULL) >> 4;
+        uint64_t index = (bits_ & 0x0000FFFFFFFFFFF0ULL) >> 4;
         return static_cast<size_t>(index);
     }
 
@@ -222,7 +222,7 @@ public:
             throw RuntimeError("Value is not a table");
         }
         // Extract table index (shift right by 4 to undo the encoding)
-        uint64_t index = (bits_ & 0x0000FFFFFFFFFFFFULL) >> 4;
+        uint64_t index = (bits_ & 0x0000FFFFFFFFFFF0ULL) >> 4;
         return static_cast<size_t>(index);
     }
 
@@ -231,7 +231,7 @@ public:
             throw RuntimeError("Value is not a closure");
         }
         // Extract closure index (shift right by 4 to undo the encoding)
-        uint64_t index = (bits_ & 0x0000FFFFFFFFFFFFULL) >> 4;
+        uint64_t index = (bits_ & 0x0000FFFFFFFFFFF0ULL) >> 4;
         return static_cast<size_t>(index);
     }
 
@@ -240,7 +240,7 @@ public:
             throw RuntimeError("Value is not a file");
         }
         // Extract file index (shift right by 4 to undo the encoding)
-        uint64_t index = (bits_ & 0x0000FFFFFFFFFFFFULL) >> 4;
+        uint64_t index = (bits_ & 0x0000FFFFFFFFFFF0ULL) >> 4;
         return static_cast<size_t>(index);
     }
 
@@ -249,7 +249,7 @@ public:
             throw RuntimeError("Value is not a socket");
         }
         // Extract socket index (shift right by 4 to undo the encoding)
-        uint64_t index = (bits_ & 0x0000FFFFFFFFFFFFULL) >> 4;
+        uint64_t index = (bits_ & 0x0000FFFFFFFFFFF0ULL) >> 4;
         return static_cast<size_t>(index);
     }
 
@@ -258,7 +258,7 @@ public:
             throw RuntimeError("Value is not a native function");
         }
         // Extract native function index (shift right by 4 to undo the encoding)
-        uint64_t index = (bits_ & 0x0000FFFFFFFFFFFFULL) >> 4;
+        uint64_t index = (bits_ & 0x0000FFFFFFFFFFF0ULL) >> 4;
         return static_cast<size_t>(index);
     }
 
@@ -266,14 +266,15 @@ public:
         if (!isThread()) {
             throw RuntimeError("Value is not a thread");
         }
-        uint64_t index = (bits_ & 0x0000FFFFFFFFFFFFULL) >> 4;
+        uint64_t index = (bits_ & 0x0000FFFFFFFFFFF0ULL) >> 4;
         return static_cast<size_t>(index);
     }
 
     // Equality
     bool operator==(const Value& other) const {
-        // Special handling for NaN
-        if (isNumber() && other.isNumber()) {
+        if (type() != other.type()) return false;
+        
+        if (isNumber()) {
             double a = asNumber();
             double b = other.asNumber();
             // NaN != NaN in Lua
@@ -306,7 +307,7 @@ public:
         if (isNil()) return "nil";
         if (isString()) return "string";
         if (isTable()) return "table";
-        if (isNativeFunction()) return "function";
+        if (isNativeFunction() || isClosure() || isFunctionObject()) return "function";
         if (isThread()) return "thread";
         if (isFile()) return "userdata"; // Lua calls file userdata usually
         if (isSocket()) return "userdata";
@@ -315,6 +316,24 @@ public:
 
     // Print to stream
     void print(std::ostream& os) const;
+
+    uint64_t bits() const { return bits_; }
+
+    void normalize() {
+        if ((bits_ & 0x7FF0000000000000ULL) == 0x7FF0000000000000ULL) {
+            // If it's a NaN, normalize it to a specific NaN bit pattern
+            // that is NOT in our tagged range.
+            // Our tagged range is [0xFFF1, 0xFFFF] in the top 16 bits.
+            // IEEE 754 NaNs are [0x7FF1, 0x7FFF] or [0xFFF1, 0xFFFF].
+            // Wait, our tags are in the LOW bits!
+            // That's much safer.
+            
+            // To be absolutely sure, let's normalize all NaNs to a single bit pattern.
+            if ((bits_ & 0x000FFFFFFFFFFFFFULL) != 0) {
+                bits_ = 0x7FF8000000000000ULL;
+            }
+        }
+    }
 
 private:
     uint64_t bits_;
@@ -332,7 +351,7 @@ private:
     static constexpr uint64_t TAG_RUNTIME_STRING = 9;  // Runtime string (from VM pool)
     static constexpr uint64_t TAG_NATIVE_FUNCTION = 10;  // Native function (C++ function pointer)
     static constexpr uint64_t TAG_THREAD = 11;           // Coroutine object
-    static constexpr uint64_t TAG_MASK = 15;  // Updated to 4 bits for more tags
+    static constexpr uint64_t TAG_MASK = 15;  // 4 bits
 };
 
 // Stream operator

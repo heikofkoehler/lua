@@ -22,7 +22,7 @@ public:
     CoroutineObject()
         : GCObject(GCObject::Type::COROUTINE), 
           ip(0), chunk(nullptr), rootChunk(nullptr), 
-          status(Status::SUSPENDED), yieldCount(0), caller(nullptr) {
+          status(Status::SUSPENDED), yieldCount(0), retCount(0), caller(nullptr) {
         stack.reserve(256);
         frames.reserve(64);
     }
@@ -36,6 +36,9 @@ public:
     std::vector<UpvalueObject*> openUpvalues;
     Status status;
     size_t yieldCount;
+    uint8_t retCount; // Number of values expected to be returned by yield
+    size_t lastResultCount; // Number of results from last multires call
+    std::vector<Value> yieldedValues;
     CoroutineObject* caller; // The coroutine that resumed this one
 
     // GC interface

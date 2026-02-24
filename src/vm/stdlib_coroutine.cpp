@@ -52,14 +52,51 @@ bool native_coroutine_resume(VM* vm, int argCount) {
     }
 
     // Push arguments to coroutine stack
+    size_t pushedCount = args.size();
     for (auto it = args.rbegin(); it != args.rend(); ++it) {
         co->stack.push_back(*it);
     }
 
-    // If this is the first resume, we might need to adjust CallFrame varargCount
-    if (co->frames.size() == 1 && co->frames[0].ip == 0) {
-        co->frames[0].varargCount = static_cast<uint8_t>(args.size());
-        co->frames[0].varargBase = co->stack.size() - args.size();
+    // If this is the first resume, we might need to adjust CallFrame varargs
+    if (co->ip == 0 && co->frames.size() == 1) {
+        FunctionObject* func = co->frames[0].closure->function();
+        int arity = func->arity();
+        bool hasVarargs = func->hasVarargs();
+        int argCount = static_cast<int>(args.size());
+
+        if (argCount < arity) {
+            for (int i = 0; i < arity - argCount; i++) {
+                co->stack.push_back(Value::nil());
+            }
+        } else if (argCount > arity) {
+            uint8_t extraCount = argCount - arity;
+            if (hasVarargs) {
+                for (int i = 0; i < extraCount; i++) {
+                    co->frames[0].varargs.push_back(co->stack.back());
+                    co->stack.pop_back();
+                }
+                std::reverse(co->frames[0].varargs.begin(), co->frames[0].varargs.end());
+            } else {
+                for (int i = 0; i < extraCount; i++) {
+                    co->stack.pop_back();
+                }
+            }
+        }
+    } else {
+        // Not first resume - we are resuming from a yield.
+        // We need to adjust the values we just pushed to match what the yield expected.
+        uint8_t expected = co->retCount;
+        if (expected > 0) {
+            if (pushedCount > expected) {
+                // Truncate
+                co->stack.resize(co->stack.size() - (pushedCount - expected));
+            } else if (pushedCount < expected) {
+                // Pad with nil
+                for (size_t i = 0; i < (size_t)expected - pushedCount; i++) {
+                    co->stack.push_back(Value::nil());
+                }
+            }
+        }
     }
 
     // Save current coroutine and switch
@@ -76,9 +113,6 @@ bool native_coroutine_resume(VM* vm, int argCount) {
     // Results are on co->stack
     
     // Switch back status
-    if (co->status == CoroutineObject::Status::RUNNING) {
-        co->status = CoroutineObject::Status::DEAD;
-    }
     if (caller) caller->status = CoroutineObject::Status::RUNNING;
 
     if (!success) {
@@ -96,20 +130,17 @@ bool native_coroutine_resume(VM* vm, int argCount) {
     
     // Transfer results from co->stack to caller->stack
     if (co->status == CoroutineObject::Status::SUSPENDED) {
-        // Yielded values
-        size_t count = co->yieldCount;
-        std::vector<Value> yielded;
-        for (size_t i = 0; i < count; i++) {
-            yielded.push_back(co->stack.back());
-            co->stack.pop_back();
+        // Yielded values are in yieldedValues
+        std::cout << "DEBUG resume SUSPENDED: transferring " << co->yieldedValues.size() << " values" << std::endl;
+        for (const auto& val : co->yieldedValues) {
+            vm->push(val);
         }
-        for (auto it = yielded.rbegin(); it != yielded.rend(); ++it) {
-            vm->push(*it);
-        }
+        co->yieldedValues.clear();
     } else {
         // Returned values
-        // Everything on co->stack are results
+        std::cout << "DEBUG resume DEAD: transferring " << co->stack.size() << " values" << std::endl;
         for (const auto& val : co->stack) {
+            std::cout << "  - " << val << std::endl;
             vm->push(val);
         }
         co->stack.clear();

@@ -45,12 +45,12 @@ public:
     // Access bytecode
     const std::vector<uint8_t>& code() const { return code_; }
     std::vector<uint8_t>& code() { return code_; }  // Non-const for patching jumps
-    uint8_t at(size_t offset) const { return code_.at(offset); }
+    uint8_t at(size_t offset) const { return code_[offset]; }
     size_t size() const { return code_.size(); }
 
     // Access constants
     const std::vector<Value>& constants() const { return constants_; }
-    const Value& getConstant(size_t index) const { return constants_.at(index); }
+    const Value& getConstant(size_t index) const { return constants_[index]; }
 
     // Get line number for instruction at offset
     int getLine(size_t offset) const;
@@ -73,6 +73,8 @@ private:
     size_t constantInstruction(const char* name, size_t offset) const;
     size_t jumpInstruction(const char* name, int sign, size_t offset) const;
     size_t byteInstruction(const char* name, size_t offset) const;
+    size_t callInstruction(const char* name, size_t offset) const;
+    size_t yieldInstruction(const char* name, size_t offset) const;
 };
 
 #endif // LUA_CHUNK_HPP

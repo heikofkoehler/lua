@@ -162,18 +162,21 @@ void CodeGenerator::visitBinary(BinaryNode* node) {
 void CodeGenerator::visitVariable(VariableExprNode* node) {
     setLine(node->line());
 
+    const std::string& name = node->name();
+
     // Three-level resolution: local → upvalue → global
 
     // 1. Try to resolve as local variable
-    int slot = resolveLocal(node->name());
+    int slot = resolveLocal(name);
     if (slot != -1) {
+        std::cout << "DEBUG codegen GET_LOCAL: " << name << " slot=" << slot << std::endl;
         emitOpCode(OpCode::OP_GET_LOCAL);
         emitByte(static_cast<uint8_t>(slot));
         return;
     }
 
     // 2. Try to resolve as upvalue (captured from enclosing scope)
-    int upvalue = resolveUpvalue(node->name());
+    int upvalue = resolveUpvalue(name);
     if (upvalue != -1) {
         emitOpCode(OpCode::OP_GET_UPVALUE);
         emitByte(static_cast<uint8_t>(upvalue));
@@ -296,16 +299,13 @@ void CodeGenerator::visitMultipleLocalDeclStmt(MultipleLocalDeclStmtNode* node) 
 
     expectedRetCount_ = oldRetCount;
 
-    // 3. Pad with nil if fewer values than variables
-    // If the last initializer was a call, it already pushed multiple values.
-    // If not, it only pushed 1.
+    // 3. Pad with nil if fewer values than variables (but not covered by multires)
     if (initCount < varCount) {
         auto* lastInit = initCount > 0 ? initializers[initCount - 1].get() : nullptr;
         bool lastIsCall = lastInit && dynamic_cast<CallExprNode*>(lastInit);
         
         if (!lastIsCall) {
-            size_t valuesSoFar = initCount;
-            for (size_t i = valuesSoFar; i < varCount; i++) {
+            for (size_t i = initCount; i < varCount; i++) {
                 emitOpCode(OpCode::OP_NIL);
             }
         }
@@ -357,8 +357,7 @@ void CodeGenerator::visitMultipleAssignmentStmt(MultipleAssignmentStmtNode* node
         bool lastIsCall = lastVal && dynamic_cast<CallExprNode*>(lastVal);
         
         if (!lastIsCall) {
-            size_t valuesSoFar = valCount;
-            for (size_t i = valuesSoFar; i < varCount; i++) {
+            for (size_t i = valCount; i < varCount; i++) {
                 emitOpCode(OpCode::OP_NIL);
             }
         }
@@ -606,8 +605,6 @@ void CodeGenerator::visitForStmt(ForStmtNode* node) {
     // Begin scope for loop variables (loop var + hidden limit/step locals)
     beginScope();
 
-    beginLoop();  // Start loop context for break statements
-
     // Evaluate start expression and create loop variable
     node->start()->accept(*this);
     addLocal(node->varName());
@@ -624,45 +621,36 @@ void CodeGenerator::visitForStmt(ForStmtNode* node) {
     }
     addLocal("(for step)");
 
-    size_t loopStart = currentChunk()->size();
+    beginLoop();  // Start loop context for break statements
 
-    // Determine which comparison to use based on step sign
-    // For positive step: var <= end
-    // For negative step: var >= end
+    size_t loopStart = currentChunk()->size();
 
     int varSlot = resolveLocal(node->varName());
     int endSlot = resolveLocal("(for limit)");
     int stepSlot = resolveLocal("(for step)");
 
-    // Get step
+    // Check step >= 0
     emitOpCode(OpCode::OP_GET_LOCAL);
     emitByte(static_cast<uint8_t>(stepSlot));
-
-    // Push 0
     emitConstant(Value::number(0.0));
-
-    // Check step >= 0
     emitOpCode(OpCode::OP_GREATER_EQUAL);
 
     // If step >= 0 (true), jump to positive comparison
     // If step < 0 (false), fall through to negative comparison
     size_t positiveJump = emitJump(OpCode::OP_JUMP_IF_FALSE);
-    emitOpCode(OpCode::OP_POP);  // Pop step >= 0 result
-
+    
     // Positive step path: check var <= end
+    emitOpCode(OpCode::OP_POP);  // Pop step >= 0 result (true)
     emitOpCode(OpCode::OP_GET_LOCAL);
     emitByte(static_cast<uint8_t>(varSlot));
     emitOpCode(OpCode::OP_GET_LOCAL);
     emitByte(static_cast<uint8_t>(endSlot));
     emitOpCode(OpCode::OP_LESS_EQUAL);
-
-    // Jump over negative path
     size_t skipNegative = emitJump(OpCode::OP_JUMP);
 
     // Negative step path: check var >= end
     patchJump(positiveJump);
-    emitOpCode(OpCode::OP_POP);  // Pop step >= 0 result
-
+    emitOpCode(OpCode::OP_POP);  // Pop step >= 0 result (false)
     emitOpCode(OpCode::OP_GET_LOCAL);
     emitByte(static_cast<uint8_t>(varSlot));
     emitOpCode(OpCode::OP_GET_LOCAL);
@@ -674,7 +662,7 @@ void CodeGenerator::visitForStmt(ForStmtNode* node) {
 
     // Exit loop if condition is false
     size_t exitJump = emitJump(OpCode::OP_JUMP_IF_FALSE);
-    emitOpCode(OpCode::OP_POP);  // Pop condition
+    emitOpCode(OpCode::OP_POP);  // Pop condition (true case)
 
     // Compile body
     beginScope();
@@ -705,13 +693,14 @@ void CodeGenerator::visitForStmt(ForStmtNode* node) {
 
     // Exit point
     patchJump(exitJump);
-    emitOpCode(OpCode::OP_POP);  // Pop condition
+    emitOpCode(OpCode::OP_POP);  // Pop condition (false)
 
     endLoop();  // End loop context and patch all break jumps
 
     // End scope (cleans up loop variable and hidden locals)
     endScope();
 }
+
 
 void CodeGenerator::visitForInStmt(ForInStmtNode* node) {
     setLine(node->line());
@@ -728,22 +717,17 @@ void CodeGenerator::visitForInStmt(ForInStmtNode* node) {
     
     // Save current expected return count and set to 3 for iterator init
     uint8_t oldRetCount = expectedRetCount_;
-    
-    // Check if iterator is a call
+    expectedRetCount_ = 3;
+    node->iterator()->accept(*this);
+    expectedRetCount_ = oldRetCount; // Restore
+
+    // Pad if not a call
     auto* callExpr = dynamic_cast<CallExprNode*>(node->iterator());
-    if (callExpr) {
-        expectedRetCount_ = 3;
-        node->iterator()->accept(*this);
-        // Stack has 3 values (or padded/truncated by OP_CALL)
-    } else {
-        expectedRetCount_ = 1; // Default
-        node->iterator()->accept(*this);
-        // Stack has 1 value. Push 2 nils for state and control
+    if (!callExpr) {
+        // Only 1 value was pushed. Push 2 nils for state and control
         emitOpCode(OpCode::OP_NIL);
         emitOpCode(OpCode::OP_NIL);
     }
-    
-    expectedRetCount_ = oldRetCount; // Restore
 
     // Store iterator state in hidden locals
     // Stack top is control, then state, then iterator
@@ -778,16 +762,15 @@ void CodeGenerator::visitForInStmt(ForInStmtNode* node) {
     emitOpCode(OpCode::OP_GET_LOCAL);
     emitByte(static_cast<uint8_t>(controlSlot));
 
-    // Call iterator(state, control)
-    emitOpCode(OpCode::OP_CALL);
-    emitByte(2);  // 2 arguments
-
-    
-    // We need varNames.size() return values
-    // But we need at least 1 (to check for nil)
-    // If varNames is empty (invalid?), we still need 1.
-    uint8_t retCount = varNames.empty() ? 1 : static_cast<uint8_t>(varNames.size());
-    emitByte(retCount); 
+        // Call iterator(state, control)
+        emitOpCode(OpCode::OP_CALL);
+        emitByte(2);  // 2 arguments
+        
+        // We need varNames.size() return values
+        // But we need at least 1 (to check for nil)
+        uint8_t retCount = varNames.empty() ? 1 : static_cast<uint8_t>(varNames.size());
+        emitByte(retCount); 
+     
 
     // Values are now on stack.
     // Top is varN, bottom is var1.
@@ -912,6 +895,11 @@ void CodeGenerator::visitCall(CallExprNode* node) {
                 throw CompileError("Too many arguments to yield", currentLine_);
             }
             emitByte(static_cast<uint8_t>(node->args().size()));
+            
+            uint8_t yieldRetCount = expectedRetCount_;
+            // If yield is used as an expression statement, expectedRetCount_ is 1 but it should be popped.
+            // Wait, visitExprStmt will pop 1. So we should ask for 1.
+            emitByte(yieldRetCount);
             return;
         }
     }
@@ -1034,6 +1022,10 @@ void CodeGenerator::visitFunctionDecl(FunctionDeclNode* node) {
 
     // Get compiled function chunk (don't call endScope - cleanup is handled by OP_RETURN_VALUE)
     auto functionChunk = std::move(chunk_);
+
+#ifdef PRINT_CODE
+    functionChunk->disassemble(node->name());
+#endif
 
     // capturedUpvalues contains the upvalues for the current function.
     // upvalues_ was populated during this function's body compilation via resolveUpvalue/
@@ -1287,6 +1279,7 @@ void CodeGenerator::pushCompilerState() {
     state.upvalues = std::move(upvalues_);
     state.scopeDepth = scopeDepth_;
     state.localCount = localCount_;
+    state.expectedRetCount = expectedRetCount_;
     state.enclosing = enclosingCompiler_;
 
     compilerStack_.push_back(std::move(state));
@@ -1300,6 +1293,7 @@ void CodeGenerator::pushCompilerState() {
     upvalues_.clear();
     scopeDepth_ = 0;
     localCount_ = 0;
+    expectedRetCount_ = 1; // Default for function body
 }
 
 void CodeGenerator::popCompilerState() {
@@ -1316,5 +1310,6 @@ void CodeGenerator::popCompilerState() {
     upvalues_ = std::move(state.upvalues);
     scopeDepth_ = state.scopeDepth;
     localCount_ = state.localCount;
+    expectedRetCount_ = state.expectedRetCount;
     enclosingCompiler_ = state.enclosing;
 }

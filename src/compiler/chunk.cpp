@@ -31,7 +31,7 @@ size_t Chunk::addIdentifier(const std::string& name) {
 }
 
 const std::string& Chunk::getIdentifier(size_t index) const {
-    return identifiers_.at(index);
+    return identifiers_[index];
 }
 
 size_t Chunk::addFunction(FunctionObject* func) {
@@ -170,10 +170,9 @@ size_t Chunk::disassembleInstruction(size_t offset) const {
         case OpCode::OP_CLOSURE:
             return constantInstruction("OP_CLOSURE", offset);
         case OpCode::OP_CALL:
-            // TODO: call instruction has 2 bytes (args, returns)
-            return byteInstruction("OP_CALL", offset);
+            return callInstruction("OP_CALL", offset);
         case OpCode::OP_RETURN_VALUE:
-            return simpleInstruction("OP_RETURN_VALUE", offset);
+            return byteInstruction("OP_RETURN_VALUE", offset);
 
         case OpCode::OP_NEW_TABLE:
             return simpleInstruction("OP_NEW_TABLE", offset);
@@ -183,7 +182,10 @@ size_t Chunk::disassembleInstruction(size_t offset) const {
             return simpleInstruction("OP_SET_TABLE", offset);
 
         case OpCode::OP_GET_VARARG:
-            return byteInstruction("OP_GET_VARARG", offset);
+            return simpleInstruction("OP_GET_VARARG", offset);
+
+        case OpCode::OP_YIELD:
+            return yieldInstruction("OP_YIELD", offset);
 
         case OpCode::OP_RETURN:
             return simpleInstruction("OP_RETURN", offset);
@@ -229,4 +231,22 @@ size_t Chunk::byteInstruction(const char* name, size_t offset) const {
 
     std::cout << std::endl;
     return offset + 2;
+}
+
+size_t Chunk::callInstruction(const char* name, size_t offset) const {
+    uint8_t argCount = code_[offset + 1];
+    uint8_t retCount = code_[offset + 2];
+    std::cout << std::left << std::setw(16) << name
+              << std::right << " args=" << static_cast<int>(argCount)
+              << " returns=" << static_cast<int>(retCount) << std::endl;
+    return offset + 3;
+}
+
+size_t Chunk::yieldInstruction(const char* name, size_t offset) const {
+    uint8_t count = code_[offset + 1];
+    uint8_t retCount = code_[offset + 2];
+    std::cout << std::left << std::setw(16) << name
+              << std::right << " count=" << static_cast<int>(count)
+              << " returns=" << static_cast<int>(retCount) << std::endl;
+    return offset + 3;
 }
