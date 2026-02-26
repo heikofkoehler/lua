@@ -50,6 +50,7 @@ public:
     
     // Execute a protected call
     bool pcall(int argCount);
+    bool xpcall(int argCount);
 
     // Execute Lua source code
     bool runSource(const std::string& source, const std::string& name = "script");

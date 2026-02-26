@@ -1375,6 +1375,100 @@ bool VM::pcall(int argCount) {
     return true;
 }
 
+bool VM::xpcall(int argCount) {
+    if (argCount < 1) {
+        runtimeError("xpcall expects at least 2 arguments (func, msgh)");
+        return false;
+    }
+
+    size_t prevFrames = currentCoroutine_->frames.size();
+    // Stack: [..., func, msgh, arg1, arg2, ...]
+    // argCount is number of args to func PLUS msgh
+    // Wait, Lua xpcall is: xpcall(f, msgh, ...)
+    // Our stack for native xpcall is: [..., xpcall_native, f, msgh, arg1, arg2, ...]
+    // argCount is (1 + 1 + N) = 2 + N.
+    
+    // Actually, in native_xpcall: argCount is 2 + N.
+    // Let's assume argCount here is the total number of arguments passed to xpcall (f, msgh, args).
+    
+    // First argument is f, second is msgh, rest are args to f.
+    // We want to call f with (argCount - 2) args.
+    
+    // Save error handler
+    Value msgh = peek(argCount - 2);
+    size_t stackSizeBefore = currentCoroutine_->stack.size() - argCount - 1;
+
+    bool prevPcall = inPcall_;
+    inPcall_ = true;
+    
+    // Shift arguments to call f: [f, arg1, arg2, ...]
+    // We need to remove msgh from the stack temporarily.
+    std::vector<Value> args;
+    for (int i = 0; i < argCount - 2; i++) {
+        args.push_back(pop());
+    }
+    pop(); // pop msgh
+    for (auto it = args.rbegin(); it != args.rend(); ++it) {
+        push(*it);
+    }
+    
+    // Now stack is: [..., f, arg1, arg2, ...]
+    bool success = callValue(argCount - 2, 0);
+    
+    if (success && currentCoroutine_->frames.size() > prevFrames) {
+        success = run(prevFrames);
+    }
+    
+    inPcall_ = prevPcall;
+
+    if (!success) {
+        // Runtime error occurred during execution
+        // Stack and frames need to be unwound
+        while (currentCoroutine_->frames.size() > prevFrames) {
+            currentCoroutine_->frames.pop_back();
+        }
+        
+        while (currentCoroutine_->stack.size() > stackSizeBefore) {
+            pop();
+        }
+        
+        // Push false, then call msgh(lastErrorMessage_)
+        push(Value::boolean(false));
+        
+        // Push msgh and call it
+        push(msgh);
+        push(Value::runtimeString(internString(lastErrorMessage_)));
+        
+        hadError_ = false; // Prepare to call error handler
+        if (callValue(1, 1)) {
+            // Error handler should return the new error object
+            // Results of callValue are already pushed
+        } else {
+            // Error in error handler!
+            push(Value::runtimeString(internString("error in error handler")));
+        }
+        
+        hadError_ = false; // Recovered (pcall/xpcall always return true to VM::run)
+    } else {
+        // Success.
+        size_t resultCount = currentCoroutine_->lastResultCount;
+        
+        std::vector<Value> results;
+        for (size_t i = 0; i < resultCount; i++) {
+            results.push_back(pop());
+        }
+        std::reverse(results.begin(), results.end());
+        
+        push(Value::boolean(true));
+        for (const auto& res : results) {
+            push(res);
+        }
+        currentCoroutine_->lastResultCount = resultCount + 1;
+    }
+    
+    return true;
+}
+
 bool VM::callValue(int argCount, int retCount) {
     Value callee = peek(argCount);
 

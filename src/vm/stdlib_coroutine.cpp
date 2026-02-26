@@ -208,8 +208,34 @@ bool native_coroutine_yield(VM* vm, int argCount) {
     return true; // Return to resumer (this causes VM::run to exit and return to VM::resumeCoroutine)
 }
 
-// coroutine.wrap is better implemented in Lua if possible, or using a special native closure
-// For now, let's skip wrap or implement it simply.
+/*
+// Helper for coroutine.wrap: the function that actually resumes the coroutine
+bool native_coroutine_wrap_helper(VM* vm, int argCount) {
+    UNUSED(argCount);
+    // The coroutine to resume is stored as upvalue 0 of the current closure
+    // Wait, native functions don't have upvalues in our VM yet!
+    // I need to check how native functions access their environment.
+    
+    // Oh, our VM only supports ClosureObject for Lua functions.
+    // NativeFunction is just a function pointer.
+    
+    vm->runtimeError("coroutine.wrap not fully implemented (requires native upvalues)");
+    return false;
+}
+*/
+
+bool native_coroutine_wrap(VM* vm, int argCount) {
+    if (argCount != 1) {
+        vm->runtimeError("coroutine.wrap expects 1 argument");
+        return false;
+    }
+    
+    // For now, let's implement it in a limited way or skip.
+    // Without native upvalues, it's hard to store the coroutine object.
+    
+    vm->runtimeError("coroutine.wrap not implemented yet");
+    return false;
+}
 
 } // anonymous namespace
 
@@ -219,4 +245,5 @@ void registerCoroutineLibrary(VM* vm, TableObject* coroutineTable) {
     vm->addNativeToTable(coroutineTable, "status", native_coroutine_status);
     vm->addNativeToTable(coroutineTable, "running", native_coroutine_running);
     vm->addNativeToTable(coroutineTable, "yield", native_coroutine_yield);
+    vm->addNativeToTable(coroutineTable, "wrap", native_coroutine_wrap);
 }

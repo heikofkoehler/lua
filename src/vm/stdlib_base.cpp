@@ -380,6 +380,20 @@ bool native_pcall(VM* vm, int argCount) {
     return vm->pcall(argCount - 1);
 }
 
+bool native_xpcall(VM* vm, int argCount) {
+    if (argCount < 2) {
+        vm->runtimeError("xpcall expects at least 2 arguments (f, msgh)");
+        return false;
+    }
+    
+    // Similarly to native_pcall:
+    // Stack: [..., xpcall_native, f, msgh, arg1, arg2, ...]
+    // Total argCount is the number of arguments (including f and msgh).
+    // So we call vm->xpcall with the same argCount!
+    
+    return vm->xpcall(argCount);
+}
+
 bool native_load(VM* vm, int argCount) {
     if (argCount < 1) {
         vm->runtimeError("load expects at least 1 argument");
@@ -425,6 +439,69 @@ bool native_load(VM* vm, int argCount) {
         vm->push(Value::nil());
         vm->push(Value::runtimeString(vm->internString(e.what())));
         return true;
+    }
+}
+
+bool native_select(VM* vm, int argCount) {
+    if (argCount < 1) {
+        vm->runtimeError("bad argument #1 to 'select' (number expected, got no value)");
+        return false;
+    }
+
+    Value indexVal = vm->peek(argCount - 1);
+    if (indexVal.isString()) {
+        std::string s = vm->getStringValue(indexVal);
+        if (s == "#") {
+            // Return number of arguments (excluding index itself)
+            double count = static_cast<double>(argCount - 1);
+            // Pop all args
+            for (int i = 0; i < argCount; i++) vm->pop();
+            vm->push(Value::number(count));
+            return true;
+        }
+    }
+
+    if (!indexVal.isNumber()) {
+        vm->runtimeError("bad argument #1 to 'select' (number expected)");
+        return false;
+    }
+
+    int n = static_cast<int>(indexVal.asNumber());
+    int total = argCount - 1;
+
+    if (n > 0) {
+        if (n > total) {
+            // Return nothing
+            for (int i = 0; i < argCount; i++) vm->pop();
+            return true;
+        }
+        
+        std::vector<Value> results;
+        for (int i = n - 1; i < total; i++) {
+            results.push_back(vm->peek(total - 1 - i));
+        }
+        
+        for (int i = 0; i < argCount; i++) vm->pop();
+        for (const auto& res : results) vm->push(res);
+        return true;
+    } else if (n < 0) {
+        n = total + n + 1;
+        if (n < 1) {
+            vm->runtimeError("bad argument #1 to 'select' (index out of range)");
+            return false;
+        }
+        
+        std::vector<Value> results;
+        for (int i = n - 1; i < total; i++) {
+            results.push_back(vm->peek(total - 1 - i));
+        }
+        
+        for (int i = 0; i < argCount; i++) vm->pop();
+        for (const auto& res : results) vm->push(res);
+        return true;
+    } else {
+        vm->runtimeError("bad argument #1 to 'select' (index out of range)");
+        return false;
     }
 }
 
@@ -578,6 +655,12 @@ void registerBaseLibrary(VM* vm) {
 
     size_t pcallIdx = vm->registerNativeFunction("pcall", native_pcall);
     vm->globals()["pcall"] = Value::nativeFunction(pcallIdx);
+
+    size_t xpcallIdx = vm->registerNativeFunction("xpcall", native_xpcall);
+    vm->globals()["xpcall"] = Value::nativeFunction(xpcallIdx);
+
+    size_t selectIdx = vm->registerNativeFunction("select", native_select);
+    vm->globals()["select"] = Value::nativeFunction(selectIdx);
 
     size_t tonumberIdx = vm->registerNativeFunction("tonumber", native_tonumber);
     vm->globals()["tonumber"] = Value::nativeFunction(tonumberIdx);
