@@ -253,6 +253,30 @@ bool native_error(VM* vm, int argCount) {
     return false;
 }
 
+bool native_assert(VM* vm, int argCount) {
+    if (argCount < 1) {
+        vm->runtimeError("bad argument #1 to 'assert' (value expected)");
+        return false;
+    }
+
+    // Peek the first argument (the value to check)
+    Value v = vm->peek(argCount - 1);
+
+    if (v.isNil() || (v.isBool() && !v.asBool())) {
+        std::string message = "assertion failed!";
+        if (argCount >= 2) {
+            Value msgVal = vm->peek(argCount - 2);
+            message = vm->getStringValue(msgVal);
+        }
+        vm->runtimeError(message);
+        return false;
+    }
+
+    // Success: Return all arguments.
+    // They are already on the stack, just leave them there.
+    return true;
+}
+
 bool native_loadfile(VM* vm, int argCount) {
     if (argCount != 1) {
         vm->runtimeError("loadfile expects 1 argument");
@@ -367,6 +391,9 @@ void registerBaseLibrary(VM* vm) {
 
     size_t errorIdx = vm->registerNativeFunction("error", native_error);
     vm->globals()["error"] = Value::nativeFunction(errorIdx);
+
+    size_t assertIdx = vm->registerNativeFunction("assert", native_assert);
+    vm->globals()["assert"] = Value::nativeFunction(assertIdx);
 
     size_t loadfileIdx = vm->registerNativeFunction("loadfile", native_loadfile);
     vm->globals()["loadfile"] = Value::nativeFunction(loadfileIdx);
