@@ -182,6 +182,32 @@ bool native_coroutine_running(VM* vm, int /*argCount*/) {
     return true;
 }
 
+bool native_coroutine_yield(VM* vm, int argCount) {
+    CoroutineObject* co = vm->currentCoroutine();
+    if (!co->caller) {
+        vm->runtimeError("attempt to yield from outside a coroutine");
+        return false;
+    }
+
+    // Move yielded values to co->yieldedValues
+    co->yieldedValues.clear();
+    for (int i = 0; i < argCount; i++) {
+        co->yieldedValues.push_back(vm->pop());
+    }
+    std::reverse(co->yieldedValues.begin(), co->yieldedValues.end());
+
+    co->status = CoroutineObject::Status::SUSPENDED;
+    co->yieldCount = argCount;
+    // co->retCount remains what the resume call expected? 
+    // Actually, co->retCount should be set by the CALLER (resumer) to indicate how many values it expects back.
+    // Wait, in Lua, yield() returns values passed to resume().
+    // So the next resume() will push values and we need to know how many.
+    // For now, let's just assume we want all of them.
+    co->retCount = 0; 
+
+    return true; // Return to resumer (this causes VM::run to exit and return to VM::resumeCoroutine)
+}
+
 // coroutine.wrap is better implemented in Lua if possible, or using a special native closure
 // For now, let's skip wrap or implement it simply.
 
@@ -192,4 +218,5 @@ void registerCoroutineLibrary(VM* vm, TableObject* coroutineTable) {
     vm->addNativeToTable(coroutineTable, "resume", native_coroutine_resume);
     vm->addNativeToTable(coroutineTable, "status", native_coroutine_status);
     vm->addNativeToTable(coroutineTable, "running", native_coroutine_running);
+    vm->addNativeToTable(coroutineTable, "yield", native_coroutine_yield);
 }

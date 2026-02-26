@@ -13,10 +13,9 @@ void registerSocketLibrary(VM* vm, TableObject* socketTable);
 void registerCoroutineLibrary(VM* vm, TableObject* coroutineTable);
 void registerBaseLibrary(VM* vm);
 
-VM::VM() : mainCoroutine_(nullptr), currentCoroutine_(nullptr),
-           hadError_(false), stdlibInitialized_(false),
-           gcObjects_(nullptr), bytesAllocated_(0), nextGC_(1024 * 1024), gcEnabled_(true) {
-    // Create main coroutine
+VM::VM() : mainCoroutine_(nullptr), currentCoroutine_(nullptr), 
+           hadError_(false), inPcall_(false), lastErrorMessage_(""), stdlibInitialized_(false),
+           gcObjects_(nullptr), bytesAllocated_(0), nextGC_(1024 * 1024), gcEnabled_(true) {    // Create main coroutine
     createCoroutine(nullptr);
     mainCoroutine_ = coroutines_.back();
     mainCoroutine_->status = CoroutineObject::Status::RUNNING;
@@ -414,6 +413,13 @@ void VM::initStandardLibrary() {
     TableObject* mathTable = getTable(mathTableIdx);
     registerMathLibrary(this, mathTable);
     globals_["math"] = Value::table(mathTableIdx);
+
+    // Create 'os' table
+    size_t osTableIdx = createTable();
+    TableObject* osTable = getTable(osTableIdx);
+    void registerOSLibrary(VM* vm, TableObject* osTable);
+    registerOSLibrary(this, osTable);
+    globals_["os"] = Value::table(osTableIdx);
 
     // Create 'socket' table
     size_t socketTableIdx = createTable();
@@ -1560,6 +1566,7 @@ Value VM::logicalNot(const Value& a) {
 }
 
 void VM::runtimeError(const std::string& message) {
+    lastErrorMessage_ = message;
     // Get line number from current instruction
     int line = currentCoroutine_->chunk->getLine(currentCoroutine_->ip - 1);
     uint8_t op = currentCoroutine_->chunk->at(currentCoroutine_->ip - 1);

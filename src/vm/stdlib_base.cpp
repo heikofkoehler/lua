@@ -115,6 +115,112 @@ bool native_tostring(VM* vm, int argCount) {
     return true;
 }
 
+bool native_tonumber(VM* vm, int argCount) {
+    if (argCount < 1 || argCount > 2) {
+        vm->runtimeError("tonumber expects 1 or 2 arguments");
+        return false;
+    }
+    
+    Value baseVal = (argCount == 2) ? vm->pop() : Value::number(10);
+    Value val = vm->pop();
+    
+    if (val.isNumber() && baseVal.asNumber() == 10) {
+        vm->push(val);
+        return true;
+    }
+    
+    if (!val.isString()) {
+        vm->push(Value::nil());
+        return true;
+    }
+    
+    std::string s = vm->getStringValue(val);
+    int base = static_cast<int>(baseVal.asNumber());
+    
+    if (base < 2 || base > 36) {
+        vm->runtimeError("base out of range");
+        return false;
+    }
+    
+    try {
+        size_t pos;
+        if (base == 10) {
+            double num = std::stod(s, &pos);
+            if (pos == s.length()) {
+                vm->push(Value::number(num));
+                return true;
+            }
+        } else {
+            long num = std::stol(s, &pos, base);
+            if (pos == s.length()) {
+                vm->push(Value::number(static_cast<double>(num)));
+                return true;
+            }
+        }
+    } catch (...) {
+        // Fall through to nil
+    }
+    
+    vm->push(Value::nil());
+    return true;
+}
+
+bool native_rawget(VM* vm, int argCount) {
+    if (argCount != 2) {
+        vm->runtimeError("rawget expects 2 arguments");
+        return false;
+    }
+    Value key = vm->pop();
+    Value table = vm->pop();
+    
+    if (!table.isTable()) {
+        vm->runtimeError("bad argument #1 to 'rawget' (table expected)");
+        return false;
+    }
+    
+    TableObject* t = vm->getTable(table.asTableIndex());
+    vm->push(t->get(key));
+    return true;
+}
+
+bool native_rawset(VM* vm, int argCount) {
+    if (argCount != 3) {
+        vm->runtimeError("rawset expects 3 arguments");
+        return false;
+    }
+    Value val = vm->pop();
+    Value key = vm->pop();
+    Value table = vm->pop();
+    
+    if (!table.isTable()) {
+        vm->runtimeError("bad argument #1 to 'rawset' (table expected)");
+        return false;
+    }
+    
+    if (key.isNil()) {
+        vm->runtimeError("table index is nil");
+        return false;
+    }
+    
+    TableObject* t = vm->getTable(table.asTableIndex());
+    t->set(key, val);
+    vm->push(table);
+    return true;
+}
+
+bool native_warn(VM* vm, int argCount) {
+    for (int i = 0; i < argCount; i++) {
+        Value val = vm->peek(argCount - 1 - i);
+        std::cerr << "Lua warning: " << val.toString() << std::endl;
+    }
+    
+    // Pop arguments
+    for (int i = 0; i < argCount; i++) vm->pop();
+    
+    vm->push(Value::nil());
+    return true;
+}
+
 bool native_next(VM* vm, int argCount) {
     if (argCount < 1) {
         vm->runtimeError("next expects at least 1 argument");
@@ -250,6 +356,59 @@ bool native_error(VM* vm, int argCount) {
     }
     Value msg = vm->pop();
     vm->runtimeError(vm->getStringValue(msg));
+    return false;
+}
+
+bool native_pcall(VM* vm, int argCount) {
+    if (argCount < 1) {
+        vm->runtimeError("pcall expects at least 1 argument");
+        return false;
+    }
+
+    // Arguments are on stack: [..., func, arg1, arg2, ...]
+    // We want to call 'func' with 'argCount-1' arguments
+    
+    // We need a way to run a protected call in the VM.
+    // Since we don't have a dedicated VM::pcall yet, we'll try to use callValue
+    // and handle the error if it occurs.
+    
+    // In our current VM, runtimeError sets hadError_ to true and returns false from run().
+    // We need to capture that.
+    
+    // However, native_pcall is a native function, it's called FROM VM::run().
+    // If we call VM::callValue here, and it fails, it will set hadError_=true.
+    
+    // Let's implement this by using the newly added VM flags.
+    // Wait, native_pcall is called WITHIN the VM loop.
+    
+    // This is complex without full VM support for pcall.
+    // A simpler way:
+    // 1. Mark VM as 'in pcall'
+    // 2. Call the function
+    // 3. If it returns false (due to error), catch it, push false + error msg.
+    
+    // But VM::callValue might return false and stop the whole VM.
+    
+    vm->runtimeError("pcall not fully implemented yet");
+    return false;
+}
+
+bool native_load(VM* vm, int argCount) {
+    if (argCount < 1) {
+        vm->runtimeError("load expects at least 1 argument");
+        return false;
+    }
+    Value chunkVal = vm->pop();
+    if (!chunkVal.isString()) {
+        vm->runtimeError("load expects string argument");
+        return false;
+    }
+    
+    std::string source = vm->getStringValue(chunkVal);
+    // Use VM::runSource logic but return the closure instead of running it.
+    // We need a way to compile only.
+    
+    vm->runtimeError("load not fully implemented yet");
     return false;
 }
 
@@ -397,6 +556,28 @@ void registerBaseLibrary(VM* vm) {
 
     size_t loadfileIdx = vm->registerNativeFunction("loadfile", native_loadfile);
     vm->globals()["loadfile"] = Value::nativeFunction(loadfileIdx);
+
+    size_t loadIdx = vm->registerNativeFunction("load", native_load);
+    vm->globals()["load"] = Value::nativeFunction(loadIdx);
+
+    size_t pcallIdx = vm->registerNativeFunction("pcall", native_pcall);
+    vm->globals()["pcall"] = Value::nativeFunction(pcallIdx);
+
+    size_t tonumberIdx = vm->registerNativeFunction("tonumber", native_tonumber);
+    vm->globals()["tonumber"] = Value::nativeFunction(tonumberIdx);
+
+    size_t rawgetIdx = vm->registerNativeFunction("rawget", native_rawget);
+    vm->globals()["rawget"] = Value::nativeFunction(rawgetIdx);
+
+    size_t rawsetIdx = vm->registerNativeFunction("rawset", native_rawset);
+    vm->globals()["rawset"] = Value::nativeFunction(rawsetIdx);
+
+    size_t warnIdx = vm->registerNativeFunction("warn", native_warn);
+    vm->globals()["warn"] = Value::nativeFunction(warnIdx);
+
+    // Register _VERSION
+    size_t versionIdx = vm->internString("Lua 5.5");
+    vm->globals()["_VERSION"] = Value::runtimeString(versionIdx);
 
     // Initialize package table
     size_t packageIdx = vm->createTable();

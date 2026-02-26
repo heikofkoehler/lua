@@ -174,10 +174,72 @@ bool native_table_concat(VM* vm, int argCount) {
     return true;
 }
 
+bool native_table_pack(VM* vm, int argCount) {
+    size_t tableIdx = vm->createTable();
+    TableObject* table = vm->getTable(tableIdx);
+    
+    // Arguments are on stack in order: [..., arg1, arg2, ..., argN]
+    // Peek and set them into the table
+    for (int i = 1; i <= argCount; i++) {
+        Value v = vm->peek(argCount - i);
+        table->set(Value::number(i), v);
+    }
+    
+    // Set field "n"
+    size_t nIdx = vm->internString("n");
+    table->set(Value::runtimeString(nIdx), Value::number(argCount));
+    
+    // Pop all arguments
+    for (int i = 0; i < argCount; i++) vm->pop();
+    
+    vm->push(Value::table(tableIdx));
+    return true;
+}
+
+bool native_table_unpack(VM* vm, int argCount) {
+    if (argCount < 1 || argCount > 3) {
+        vm->runtimeError("table.unpack expects 1 to 3 arguments");
+        return false;
+    }
+    
+    Value endVal = (argCount >= 3) ? vm->pop() : Value::nil();
+    Value startVal = (argCount >= 2) ? vm->pop() : Value::number(1);
+    Value tableVal = vm->pop();
+    
+    if (!tableVal.isTable()) {
+        vm->runtimeError("table.unpack expects table as first argument");
+        return false;
+    }
+    
+    TableObject* table = vm->getTable(tableVal.asTableIndex());
+    
+    int i = static_cast<int>(startVal.asNumber());
+    int j;
+    
+    if (endVal.isNil()) {
+        // Find length of table (numeric sequence)
+        j = 0;
+        while (!table->get(Value::number(j + 1)).isNil()) {
+            j++;
+        }
+    } else {
+        j = static_cast<int>(endVal.asNumber());
+    }
+    
+    // Push values onto stack
+    for (int k = i; k <= j; k++) {
+        vm->push(table->get(Value::number(k)));
+    }
+    
+    return true;
+}
+
 } // anonymous namespace
 
 void registerTableLibrary(VM* vm, TableObject* tableTable) {
     vm->addNativeToTable(tableTable, "insert", native_table_insert);
     vm->addNativeToTable(tableTable, "remove", native_table_remove);
     vm->addNativeToTable(tableTable, "concat", native_table_concat);
+    vm->addNativeToTable(tableTable, "pack", native_table_pack);
+    vm->addNativeToTable(tableTable, "unpack", native_table_unpack);
 }

@@ -154,6 +154,8 @@ private:
     CoroutineObject* mainCoroutine_;
     CoroutineObject* currentCoroutine_;
     bool hadError_;               // Error flag
+    bool inPcall_;                // Whether we are inside a protected call
+    std::string lastErrorMessage_; // Last runtime error message
     bool stdlibInitialized_;      // Whether standard library has been initialized
 
     // Garbage collection

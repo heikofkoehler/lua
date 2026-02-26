@@ -2,8 +2,74 @@
 #include "value/string.hpp"
 #include <algorithm>
 #include <cctype>
+#include <cstdio>
+#include <vector>
 
 namespace {
+
+bool native_string_format(VM* vm, int argCount) {
+    if (argCount < 1) {
+        vm->runtimeError("string.format expects at least 1 argument");
+        return false;
+    }
+
+    // Arguments are on stack: [..., format, arg1, arg2, ...]
+    // peek(argCount - 1) is format string
+    Value fmtVal = vm->peek(argCount - 1);
+    if (!fmtVal.isString()) {
+        vm->runtimeError("string.format expects string as first argument");
+        return false;
+    }
+
+    std::string fmt = vm->getStringValue(fmtVal);
+    std::string result;
+    int currentArg = argCount - 2; // Index into stack from top (0 is last arg)
+
+    for (size_t i = 0; i < fmt.length(); i++) {
+        if (fmt[i] == '%' && i + 1 < fmt.length() && fmt[i+1] != '%') {
+            i++;
+            char spec = fmt[i];
+            
+            if (currentArg < 0) {
+                vm->runtimeError("bad argument to 'format' (no value)");
+                return false;
+            }
+            
+            Value val = vm->peek(currentArg--);
+            char buffer[1024];
+
+            switch (spec) {
+                case 's':
+                    snprintf(buffer, sizeof(buffer), "%s", vm->getStringValue(val).c_str());
+                    break;
+                case 'd':
+                    snprintf(buffer, sizeof(buffer), "%d", static_cast<int>(val.asNumber()));
+                    break;
+                case 'f':
+                    snprintf(buffer, sizeof(buffer), "%f", val.asNumber());
+                    break;
+                case 'x':
+                    snprintf(buffer, sizeof(buffer), "%x", static_cast<int>(val.asNumber()));
+                    break;
+                default:
+                    snprintf(buffer, sizeof(buffer), "%%%c", spec);
+                    break;
+            }
+            result += buffer;
+        } else if (fmt[i] == '%' && i + 1 < fmt.length() && fmt[i+1] == '%') {
+            result += '%';
+            i++;
+        } else {
+            result += fmt[i];
+        }
+    }
+
+    // Pop arguments
+    for (int i = 0; i < argCount; i++) vm->pop();
+
+    vm->push(Value::runtimeString(vm->internString(result)));
+    return true;
+}
 
 bool native_string_len(VM* vm, int argCount) {
     if (argCount != 1) {
@@ -268,5 +334,6 @@ void registerStringLibrary(VM* vm, TableObject* stringTable) {
     vm->addNativeToTable(stringTable, "char", native_string_char);
     vm->addNativeToTable(stringTable, "find", native_string_find);
     vm->addNativeToTable(stringTable, "gsub", native_string_gsub);
+    vm->addNativeToTable(stringTable, "format", native_string_format);
 }
 
