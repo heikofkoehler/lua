@@ -561,7 +561,9 @@ bool VM::run() {
                 uint8_t slot = readByte();
                 // Add stackBase offset if inside a function
                 size_t actualSlot = currentCoroutine_->frames.empty() ? slot : (currentFrame().stackBase + slot);
+#ifdef DEBUG
                 std::cout << "DEBUG SET_LOCAL: slot=" << (int)slot << " actual=" << actualSlot << " val=" << peek(0) << std::endl;
+#endif
                 currentCoroutine_->stack[actualSlot] = peek(0);
                 break;
             }
@@ -744,7 +746,9 @@ bool VM::run() {
                 } else if ((a.isString() || a.isRuntimeString()) && (b.isString() || b.isRuntimeString())) {
                     push(Value::boolean(getStringValue(a) <= getStringValue(b)));
                 } else {
+#ifdef DEBUG
                     std::cout << "DEBUG LE: a=" << a << " (bits=" << std::hex << a.bits() << std::dec << ") b=" << b << " (bits=" << std::hex << b.bits() << std::dec << ")" << std::endl;
+#endif
                     if (!callBinaryMetamethod(a, b, "__le")) {
                         runtimeError("attempt to compare " + a.typeToString() + " and " + b.typeToString());
                     }

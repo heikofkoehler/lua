@@ -169,7 +169,9 @@ void CodeGenerator::visitVariable(VariableExprNode* node) {
     // 1. Try to resolve as local variable
     int slot = resolveLocal(name);
     if (slot != -1) {
+#ifdef DEBUG
         std::cout << "DEBUG codegen GET_LOCAL: " << name << " slot=" << slot << std::endl;
+#endif
         emitOpCode(OpCode::OP_GET_LOCAL);
         emitByte(static_cast<uint8_t>(slot));
         return;

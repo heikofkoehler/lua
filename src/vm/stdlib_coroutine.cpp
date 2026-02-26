@@ -131,16 +131,22 @@ bool native_coroutine_resume(VM* vm, int argCount) {
     // Transfer results from co->stack to caller->stack
     if (co->status == CoroutineObject::Status::SUSPENDED) {
         // Yielded values are in yieldedValues
+#ifdef DEBUG
         std::cout << "DEBUG resume SUSPENDED: transferring " << co->yieldedValues.size() << " values" << std::endl;
+#endif
         for (const auto& val : co->yieldedValues) {
             vm->push(val);
         }
         co->yieldedValues.clear();
     } else {
         // Returned values
+#ifdef DEBUG
         std::cout << "DEBUG resume DEAD: transferring " << co->stack.size() << " values" << std::endl;
+#endif
         for (const auto& val : co->stack) {
+#ifdef DEBUG
             std::cout << "  - " << val << std::endl;
+#endif
             vm->push(val);
         }
         co->stack.clear();

@@ -14,8 +14,18 @@ else()
 endif()
 
 # Debug flags
+option(DEBUG "Enable general debug output" OFF)
+option(DEBUG_LOG_GC "Enable garbage collector logging" OFF)
 option(DEBUG_TRACE_EXECUTION "Enable VM execution tracing" OFF)
 option(DEBUG_PRINT_CODE "Enable bytecode disassembly" OFF)
+
+if(DEBUG)
+    add_compile_definitions(DEBUG)
+endif()
+
+if(DEBUG_LOG_GC)
+    add_compile_definitions(DEBUG_LOG_GC)
+endif()
 
 if(DEBUG_TRACE_EXECUTION)
     add_compile_definitions(DEBUG_TRACE_EXECUTION)
