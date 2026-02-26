@@ -507,6 +507,10 @@ bool VM::run(const Chunk& chunk) {
 }
 
 bool VM::run() {
+    return run(0);
+}
+
+bool VM::run(size_t targetFrameCount) {
     // Main execution loop
     while (true) {
 #ifdef TRACE_EXECUTION
@@ -922,6 +926,7 @@ bool VM::run() {
                     currentCoroutine_->status = CoroutineObject::Status::DEAD;
                     return !hadError_;
                 }
+                
                 // Get the expected return count from the call frame
                 uint8_t expectedRetCount = currentFrame().retCount;
 
@@ -966,6 +971,11 @@ bool VM::run() {
                 // Push all return values (replaces where function was)
                 for (const auto& value : returnValues) {
                     push(value);
+                }
+                
+                // Check if we hit the target frame count (for pcall/load)
+                if (targetFrameCount > 0 && currentCoroutine_->frames.size() <= targetFrameCount) {
+                    return !hadError_;
                 }
                 break;
             }
@@ -1218,6 +1228,13 @@ bool VM::run() {
                     currentCoroutine_->status = CoroutineObject::Status::DEAD;
                     return !hadError_;
                 }
+                if (targetFrameCount > 0 && currentCoroutine_->frames.size() <= targetFrameCount + 1) {
+                    // Similar to OP_RETURN_VALUE, if we hit the target frame count.
+                    // But OP_RETURN usually means returning from a chunk without return values.
+                    // This is handled by returning nil if needed, but the compiler usually emits OP_NIL then OP_RETURN_VALUE.
+                    // We'll just return from the loop here.
+                    return !hadError_;
+                }
                 // Internal returns are handled by OP_RETURN_VALUE
                 break;
 
@@ -1291,6 +1308,71 @@ Value VM::getMetamethod(const Value& obj, const std::string& method) {
         }
     }
     return Value::nil();
+}
+
+bool VM::pcall(int argCount) {
+    size_t prevFrames = currentCoroutine_->frames.size();
+    size_t stackSizeBefore = currentCoroutine_->stack.size() - argCount - 1;
+
+    bool prevPcall = inPcall_;
+    inPcall_ = true;
+    
+    // callValue pops argCount and the function, and sets up a new frame if closure
+    bool success = callValue(argCount, 0); // 0 means return all results
+    
+    if (!success) {
+        // Error during call setup (e.g. invalid function, or error in native func)
+        // Clean up stack
+        while (currentCoroutine_->stack.size() > stackSizeBefore) {
+            pop();
+        }
+        push(Value::boolean(false));
+        push(Value::runtimeString(internString(lastErrorMessage_)));
+        hadError_ = false; // Recovered
+        inPcall_ = prevPcall;
+        return true;
+    }
+    
+    // If it was a closure, a new frame was pushed. We need to run it until it pops.
+    if (currentCoroutine_->frames.size() > prevFrames) {
+        success = run(prevFrames);
+    }
+    
+    inPcall_ = prevPcall;
+
+    if (!success) {
+        // Runtime error occurred during execution
+        // Stack and frames need to be unwound
+        while (currentCoroutine_->frames.size() > prevFrames) {
+            currentCoroutine_->frames.pop_back();
+        }
+        
+        while (currentCoroutine_->stack.size() > stackSizeBefore) {
+            pop();
+        }
+        
+        push(Value::boolean(false));
+        push(Value::runtimeString(internString(lastErrorMessage_)));
+        hadError_ = false; // Recovered
+    } else {
+        // Success. The results are on the stack.
+        // We need to push `true` before the results.
+        size_t resultCount = currentCoroutine_->lastResultCount;
+        
+        std::vector<Value> results;
+        for (size_t i = 0; i < resultCount; i++) {
+            results.push_back(pop());
+        }
+        std::reverse(results.begin(), results.end());
+        
+        push(Value::boolean(true));
+        for (const auto& res : results) {
+            push(res);
+        }
+        currentCoroutine_->lastResultCount = resultCount + 1;
+    }
+    
+    return true;
 }
 
 bool VM::callValue(int argCount, int retCount) {
@@ -1567,6 +1649,13 @@ Value VM::logicalNot(const Value& a) {
 
 void VM::runtimeError(const std::string& message) {
     lastErrorMessage_ = message;
+    hadError_ = true;
+
+    if (inPcall_) {
+        // Do not print anything, just record the error
+        return;
+    }
+
     // Get line number from current instruction
     int line = currentCoroutine_->chunk->getLine(currentCoroutine_->ip - 1);
     uint8_t op = currentCoroutine_->chunk->at(currentCoroutine_->ip - 1);

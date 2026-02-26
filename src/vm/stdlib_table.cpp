@@ -234,6 +234,92 @@ bool native_table_unpack(VM* vm, int argCount) {
     return true;
 }
 
+bool native_table_sort(VM* vm, int argCount) {
+    if (argCount < 1 || argCount > 2) {
+        vm->runtimeError("table.sort expects 1 or 2 arguments");
+        return false;
+    }
+
+    Value compVal = (argCount == 2) ? vm->pop() : Value::nil();
+    Value tableVal = vm->pop();
+
+    if (!tableVal.isTable()) {
+        vm->runtimeError("table.sort expects table as first argument");
+        return false;
+    }
+
+    TableObject* table = vm->getTable(tableVal.asTableIndex());
+
+    // Find length of table
+    int n = 0;
+    while (!table->get(Value::number(n + 1)).isNil()) {
+        n++;
+    }
+
+    if (n <= 1) {
+        vm->push(Value::nil());
+        return true; // Nothing to sort
+    }
+
+    // Extract elements into a vector
+    std::vector<Value> elements;
+    elements.reserve(n);
+    for (int i = 1; i <= n; i++) {
+        elements.push_back(table->get(Value::number(i)));
+    }
+
+    // Sort the vector
+    bool sortError = false;
+    std::sort(elements.begin(), elements.end(), [&](const Value& a, const Value& b) {
+        if (sortError) return false;
+
+        if (compVal.isNil()) {
+            // Default comparison: a < b
+            if (a.isNumber() && b.isNumber()) {
+                return a.asNumber() < b.asNumber();
+            } else if ((a.isString() || a.isRuntimeString()) && (b.isString() || b.isRuntimeString())) {
+                return vm->getStringValue(a) < vm->getStringValue(b);
+            } else {
+                vm->runtimeError("attempt to compare uncomparable types in table.sort");
+                sortError = true;
+                return false;
+            }
+        } else {
+            // Call custom comparison function
+            vm->push(compVal);
+            vm->push(a);
+            vm->push(b);
+            
+            // Need to execute the function
+            size_t prevFrames = vm->currentCoroutine()->frames.size();
+            if (!vm->callValue(2, 1)) {
+                sortError = true;
+                return false;
+            }
+            
+            if (vm->currentCoroutine()->frames.size() > prevFrames) {
+                if (!vm->run(prevFrames)) {
+                    sortError = true;
+                    return false;
+                }
+            }
+            
+            Value result = vm->pop();
+            return result.isTruthy();
+        }
+    });
+
+    if (sortError) return false;
+
+    // Put elements back into table
+    for (int i = 1; i <= n; i++) {
+        table->set(Value::number(i), elements[i - 1]);
+    }
+
+    vm->push(Value::nil());
+    return true;
+}
+
 } // anonymous namespace
 
 void registerTableLibrary(VM* vm, TableObject* tableTable) {
@@ -242,4 +328,5 @@ void registerTableLibrary(VM* vm, TableObject* tableTable) {
     vm->addNativeToTable(tableTable, "concat", native_table_concat);
     vm->addNativeToTable(tableTable, "pack", native_table_pack);
     vm->addNativeToTable(tableTable, "unpack", native_table_unpack);
+    vm->addNativeToTable(tableTable, "sort", native_table_sort);
 }

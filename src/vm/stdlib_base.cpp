@@ -365,32 +365,19 @@ bool native_pcall(VM* vm, int argCount) {
         return false;
     }
 
-    // Arguments are on stack: [..., func, arg1, arg2, ...]
-    // We want to call 'func' with 'argCount-1' arguments
+    // Arguments are on stack: [..., pcall_native, func, arg1, arg2, ...]
+    // We want to call 'func' with 'argCount-1' arguments.
+    // However, vm->pcall expects the stack to be: [..., func, arg1, arg2, ...]
+    // and it will pop them. BUT pcall_native must stay at its original position
+    // because callValue for native functions expects it there!
     
-    // We need a way to run a protected call in the VM.
-    // Since we don't have a dedicated VM::pcall yet, we'll try to use callValue
-    // and handle the error if it occurs.
+    // We can just leave pcall_native alone, and the stack already has [func, arg1, arg2]
+    // above it! We don't need to shift anything!
+    // The top 'argCount' elements ARE 'func, arg1, arg2, ...'
+    // pcall_native is just BELOW them, at peek(argCount).
+    // So we just call vm->pcall(argCount - 1)!
     
-    // In our current VM, runtimeError sets hadError_ to true and returns false from run().
-    // We need to capture that.
-    
-    // However, native_pcall is a native function, it's called FROM VM::run().
-    // If we call VM::callValue here, and it fails, it will set hadError_=true.
-    
-    // Let's implement this by using the newly added VM flags.
-    // Wait, native_pcall is called WITHIN the VM loop.
-    
-    // This is complex without full VM support for pcall.
-    // A simpler way:
-    // 1. Mark VM as 'in pcall'
-    // 2. Call the function
-    // 3. If it returns false (due to error), catch it, push false + error msg.
-    
-    // But VM::callValue might return false and stop the whole VM.
-    
-    vm->runtimeError("pcall not fully implemented yet");
-    return false;
+    return vm->pcall(argCount - 1);
 }
 
 bool native_load(VM* vm, int argCount) {
@@ -399,17 +386,46 @@ bool native_load(VM* vm, int argCount) {
         return false;
     }
     Value chunkVal = vm->pop();
-    if (!chunkVal.isString()) {
+    if (!chunkVal.isString() && !chunkVal.isRuntimeString()) {
         vm->runtimeError("load expects string argument");
         return false;
     }
     
     std::string source = vm->getStringValue(chunkVal);
-    // Use VM::runSource logic but return the closure instead of running it.
-    // We need a way to compile only.
     
-    vm->runtimeError("load not fully implemented yet");
-    return false;
+    try {
+        Lexer lexer(source);
+        Parser parser(lexer);
+        auto program = parser.parse();
+        if (!program) {
+            vm->push(Value::nil());
+            vm->push(Value::runtimeString(vm->internString("parse error")));
+            return true;
+        }
+
+        CodeGenerator codegen;
+        auto chunk = codegen.generate(program.get());
+        if (!chunk) {
+            vm->push(Value::nil());
+            vm->push(Value::runtimeString(vm->internString("code generation error")));
+            return true;
+        }
+
+        FunctionObject* function = new FunctionObject("load", 0, std::move(chunk));
+        vm->registerFunction(function);
+        size_t closureIndex = vm->createClosure(function);
+        vm->push(Value::closure(closureIndex));
+        return true;
+
+    } catch (const CompileError& e) {
+        vm->push(Value::nil());
+        vm->push(Value::runtimeString(vm->internString(e.what())));
+        return true;
+    } catch (const std::exception& e) {
+        vm->push(Value::nil());
+        vm->push(Value::runtimeString(vm->internString(e.what())));
+        return true;
+    }
 }
 
 bool native_assert(VM* vm, int argCount) {

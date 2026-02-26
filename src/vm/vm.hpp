@@ -25,6 +25,7 @@ struct CallFrame {
     size_t stackBase;           // Where this frame's locals start on value stack
     uint8_t retCount;           // Number of return values expected (0 = all, 1+ = that many)
     std::vector<Value> varargs; // Varargs passed to this function
+    bool isPcall = false;       // TRUE if this frame is a pcall boundary
 };
 
 // Virtual Machine: Stack-based bytecode interpreter
@@ -45,6 +46,10 @@ public:
     // Returns true if execution succeeded, false on error
     bool run(const Chunk& chunk);
     bool run();
+    bool run(size_t targetFrameCount);
+    
+    // Execute a protected call
+    bool pcall(int argCount);
 
     // Execute Lua source code
     bool runSource(const std::string& source, const std::string& name = "script");
