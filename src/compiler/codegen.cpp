@@ -197,8 +197,9 @@ void CodeGenerator::visitVariable(VariableExprNode* node) {
 void CodeGenerator::visitVararg(VarargExprNode* node) {
     setLine(node->line());
 
-    // Emit opcode to get all varargs
+    // Emit opcode to get varargs with expected count
     emitOpCode(OpCode::OP_GET_VARARG);
+    emitByte(expectedRetCount_);
 }
 
 void CodeGenerator::visitPrintStmt(PrintStmtNode* node) {
@@ -909,27 +910,38 @@ void CodeGenerator::visitCall(CallExprNode* node) {
     // Compile the callee expression (evaluates to a function on the stack)
     // Save current expected return count
     uint8_t oldRetCount = expectedRetCount_;
-    expectedRetCount_ = 1; // Arguments expect 1 value
     
-    node->callee()->accept(*this);
-
     // Compile arguments and push onto stack
-    for (const auto& arg : node->args()) {
-        arg->accept(*this);
+    const auto& args = node->args();
+    bool isLastMultires = false;
+    
+    for (size_t i = 0; i < args.size(); i++) {
+        bool canBeMultires = (dynamic_cast<CallExprNode*>(args[i].get()) != nullptr) ||
+                             (dynamic_cast<VarargExprNode*>(args[i].get()) != nullptr) ||
+                             (dynamic_cast<IndexExprNode*>(args[i].get()) != nullptr); // Index might be native call
+        
+        if (i == args.size() - 1 && canBeMultires) {
+            expectedRetCount_ = 0; // Last argument can be multires
+            isLastMultires = true;
+        } else {
+            expectedRetCount_ = 1;
+        }
+        args[i]->accept(*this);
     }
     
     // Restore expected return count for OP_CALL
     expectedRetCount_ = oldRetCount;
 
-    // Emit call instruction with argument count and return count
-    size_t argCount = node->args().size();
-    if (argCount > UINT8_MAX) {
-        throw CompileError("Too many arguments in function call", currentLine_);
+    // Emit call instruction
+    if (isLastMultires) {
+        emitOpCode(OpCode::OP_CALL_MULTI);
+        emitByte(static_cast<uint8_t>(args.size() - 1)); // Number of FIXED args
+        emitByte(expectedRetCount_);
+    } else {
+        emitOpCode(OpCode::OP_CALL);
+        emitByte(static_cast<uint8_t>(args.size()));
+        emitByte(expectedRetCount_);
     }
-    emitOpCode(OpCode::OP_CALL);
-    emitByte(static_cast<uint8_t>(argCount));
-    // Use expectedRetCount_
-    emitByte(expectedRetCount_);
 }
 
 void CodeGenerator::visitTableConstructor(TableConstructorNode* node) {
@@ -943,27 +955,47 @@ void CodeGenerator::visitTableConstructor(TableConstructorNode* node) {
 
     int arrayIndex = 1;  // Lua arrays start at 1
 
-    for (const auto& entry : node->entries()) {
+    const auto& entries = node->entries();
+    for (size_t i = 0; i < entries.size(); i++) {
+        const auto& entry = entries[i];
         // Duplicate the table reference for OP_SET_TABLE
         // Stack: [table] -> [table, table]
         emitOpCode(OpCode::OP_DUP);
 
         // Compile key
         if (entry.key == nullptr) {
+            bool canBeMultires = (dynamic_cast<CallExprNode*>(entry.value.get()) != nullptr) ||
+                                 (dynamic_cast<VarargExprNode*>(entry.value.get()) != nullptr) ||
+                                 (dynamic_cast<IndexExprNode*>(entry.value.get()) != nullptr);
+            bool isLast = (i == entries.size() - 1);
+
             // Array-style entry: use implicit numeric index
-            emitConstant(Value::number(arrayIndex++));
+            emitConstant(Value::number(arrayIndex));
+            
+            uint8_t oldRetCount = expectedRetCount_;
+            if (isLast && canBeMultires) {
+                expectedRetCount_ = 0; // Multires
+                entry.value->accept(*this);
+                expectedRetCount_ = oldRetCount;
+                emitOpCode(OpCode::OP_SET_TABLE_MULTI);
+            } else {
+                expectedRetCount_ = 1;
+                entry.value->accept(*this);
+                expectedRetCount_ = oldRetCount;
+                emitOpCode(OpCode::OP_SET_TABLE);
+                arrayIndex++;
+            }
         } else {
             // Record-style or computed key
             entry.key->accept(*this);
+            
+            uint8_t oldRetCount = expectedRetCount_;
+            expectedRetCount_ = 1;
+            entry.value->accept(*this);
+            expectedRetCount_ = oldRetCount;
+            
+            emitOpCode(OpCode::OP_SET_TABLE);
         }
-
-        // Compile value
-        entry.value->accept(*this);
-
-        // Set table[key] = value
-        // Stack before: [table, table, key, value]
-        // Stack after: [table]
-        emitOpCode(OpCode::OP_SET_TABLE);
     }
 
     // Table is left on stack as the result of the constructor expression
@@ -1001,71 +1033,8 @@ void CodeGenerator::visitIndexAssignmentStmt(IndexAssignmentStmtNode* node) {
 void CodeGenerator::visitFunctionDecl(FunctionDeclNode* node) {
     setLine(node->line());
 
-    // Save current compiler state and start new function compilation
-    pushCompilerState();
-
-    // Begin scope for function body
-    beginScope();
-
-    // Add parameters as locals (they occupy slots 0, 1, 2, ...)
-    for (const auto& param : node->params()) {
-        addLocal(param);
-    }
-
-    // Compile function body
-    for (const auto& stmt : node->body()) {
-        stmt->accept(*this);
-    }
-
-    // Emit implicit return nil at end (if no explicit return)
-    emitOpCode(OpCode::OP_NIL);
-    emitOpCode(OpCode::OP_RETURN_VALUE);
-    emitByte(1);  // Return count: 1 value (nil)
-
-    // Get compiled function chunk (don't call endScope - cleanup is handled by OP_RETURN_VALUE)
-    auto functionChunk = std::move(chunk_);
-
-#ifdef PRINT_CODE
-    functionChunk->disassemble(node->name());
-#endif
-
-    // capturedUpvalues contains the upvalues for the current function.
-    // upvalues_ was populated during this function's body compilation via resolveUpvalue/
-    // resolveUpvalueHelper. After popCompilerState(), the parent's upvalues_ will be restored
-    // (including any entries added by resolveUpvalueHelper for grandparent captures).
-    std::vector<Upvalue> capturedUpvalues = upvalues_;
-
-    // Restore outer compiler state
-    popCompilerState();
-
-    // Create FunctionObject with upvalue count and varargs flag
-    auto func = new FunctionObject(
-        node->name(),
-        node->params().size(),
-        std::move(functionChunk),
-        capturedUpvalues.size(),
-        node->hasVarargs()
-    );
-
-    // Add function to chunk's function pool and get its index
-    size_t funcIndex = currentChunk()->addFunction(func);
-
-    // Store function index in constant pool as a Value
-    Value funcValue = Value::function(funcIndex);
-    size_t constantIndex = currentChunk()->addConstant(funcValue);
-    if (constantIndex > UINT8_MAX) {
-        throw CompileError("Too many constants in one chunk", currentLine_);
-    }
-
-    // Emit code to load function and store as global
-    emitOpCode(OpCode::OP_CLOSURE);
-    emitByte(static_cast<uint8_t>(constantIndex));
-
-    // Emit upvalue descriptors (for runtime closure creation)
-    for (const Upvalue& uv : capturedUpvalues) {
-        emitByte(uv.isLocal ? 1 : 0);  // 1 = local, 0 = upvalue
-        emitByte(uv.index);
-    }
+    // Compile function and emit OP_CLOSURE
+    compileFunction(node->name(), node->params(), node->body(), node->hasVarargs());
 
     // Store in global variable
     size_t nameIndex = currentChunk()->addIdentifier(node->name());
@@ -1079,6 +1048,79 @@ void CodeGenerator::visitFunctionDecl(FunctionDeclNode* node) {
     emitOpCode(OpCode::OP_POP);
 }
 
+void CodeGenerator::visitFunctionExpr(FunctionExprNode* node) {
+    setLine(node->line());
+    
+    // Compile function and emit OP_CLOSURE (leaves closure on stack)
+    compileFunction("anonymous", node->params(), node->body(), node->hasVarargs());
+}
+
+void CodeGenerator::compileFunction(const std::string& name, const std::vector<std::string>& params,
+                                   const std::vector<std::unique_ptr<StmtNode>>& body, bool hasVarargs) {
+    // Save current compiler state and start new function compilation
+    pushCompilerState();
+
+    // Begin scope for function body
+    beginScope();
+
+    // Add parameters as locals (they occupy slots 0, 1, 2, ...)
+    for (const auto& param : params) {
+        addLocal(param);
+    }
+
+    // Compile function body
+    for (const auto& stmt : body) {
+        stmt->accept(*this);
+    }
+
+    // Emit implicit return nil at end (if no explicit return)
+    emitOpCode(OpCode::OP_NIL);
+    emitOpCode(OpCode::OP_RETURN_VALUE);
+    emitByte(1);  // Return count: 1 value (nil)
+
+    // Get compiled function chunk (don't call endScope - cleanup is handled by OP_RETURN_VALUE)
+    auto functionChunk = std::move(chunk_);
+
+#ifdef PRINT_CODE
+    functionChunk->disassemble(name);
+#endif
+
+    // capturedUpvalues contains the upvalues for the current function.
+    std::vector<Upvalue> capturedUpvalues = upvalues_;
+
+    // Restore outer compiler state
+    popCompilerState();
+
+    // Create FunctionObject with upvalue count and varargs flag
+    auto func = new FunctionObject(
+        name,
+        params.size(),
+        std::move(functionChunk),
+        capturedUpvalues.size(),
+        hasVarargs
+    );
+
+    // Add function to chunk's function pool and get its index
+    size_t funcIndex = currentChunk()->addFunction(func);
+
+    // Store function index in constant pool as a Value
+    Value funcValue = Value::function(funcIndex);
+    size_t constantIndex = currentChunk()->addConstant(funcValue);
+    if (constantIndex > UINT8_MAX) {
+        throw CompileError("Too many constants in one chunk", currentLine_);
+    }
+
+    // Emit code to load function
+    emitOpCode(OpCode::OP_CLOSURE);
+    emitByte(static_cast<uint8_t>(constantIndex));
+
+    // Emit upvalue descriptors (for runtime closure creation)
+    for (const Upvalue& uv : capturedUpvalues) {
+        emitByte(uv.isLocal ? 1 : 0);  // 1 = local, 0 = upvalue
+        emitByte(uv.index);
+    }
+}
+
 void CodeGenerator::visitReturn(ReturnStmtNode* node) {
     setLine(node->line());
 
@@ -1090,18 +1132,32 @@ void CodeGenerator::visitReturn(ReturnStmtNode* node) {
         emitOpCode(OpCode::OP_RETURN_VALUE);
         emitByte(1);  // Returning 1 value (nil)
     } else {
-        // Compile each return value
-        for (const auto& value : values) {
-            value->accept(*this);
+        bool isLastMultires = false;
+        const auto& args = values;
+        for (size_t i = 0; i < args.size(); i++) {
+            bool canBeMultires = (dynamic_cast<CallExprNode*>(args[i].get()) != nullptr) ||
+                                 (dynamic_cast<VarargExprNode*>(args[i].get()) != nullptr) ||
+                                 (dynamic_cast<IndexExprNode*>(args[i].get()) != nullptr);
+            
+            uint8_t oldRetCount = expectedRetCount_;
+            if (i == args.size() - 1 && canBeMultires) {
+                expectedRetCount_ = 0; // All results
+                isLastMultires = true;
+            } else {
+                expectedRetCount_ = 1;
+            }
+            args[i]->accept(*this);
+            expectedRetCount_ = oldRetCount;
         }
 
         // Emit return instruction with count
         emitOpCode(OpCode::OP_RETURN_VALUE);
-        size_t count = values.size();
-        if (count > UINT8_MAX) {
-            throw CompileError("Too many return values", currentLine_);
+        if (isLastMultires) {
+            emitByte(0); // 0 means use lastResultCount
+        } else {
+            size_t count = values.size();
+            emitByte(static_cast<uint8_t>(count));
         }
-        emitByte(static_cast<uint8_t>(count));
     }
 }
 

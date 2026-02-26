@@ -171,6 +171,8 @@ size_t Chunk::disassembleInstruction(size_t offset) const {
             return constantInstruction("OP_CLOSURE", offset);
         case OpCode::OP_CALL:
             return callInstruction("OP_CALL", offset);
+        case OpCode::OP_CALL_MULTI:
+            return callInstruction("OP_CALL_MULTI", offset);
         case OpCode::OP_RETURN_VALUE:
             return byteInstruction("OP_RETURN_VALUE", offset);
 
@@ -180,9 +182,11 @@ size_t Chunk::disassembleInstruction(size_t offset) const {
             return simpleInstruction("OP_GET_TABLE", offset);
         case OpCode::OP_SET_TABLE:
             return simpleInstruction("OP_SET_TABLE", offset);
+        case OpCode::OP_SET_TABLE_MULTI:
+            return simpleInstruction("OP_SET_TABLE_MULTI", offset);
 
         case OpCode::OP_GET_VARARG:
-            return simpleInstruction("OP_GET_VARARG", offset);
+            return byteInstruction("OP_GET_VARARG", offset);
 
         case OpCode::OP_YIELD:
             return yieldInstruction("OP_YIELD", offset);

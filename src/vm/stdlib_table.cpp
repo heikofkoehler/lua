@@ -227,9 +227,12 @@ bool native_table_unpack(VM* vm, int argCount) {
     }
     
     // Push values onto stack
+    int count = 0;
     for (int k = i; k <= j; k++) {
         vm->push(table->get(Value::number(k)));
+        count++;
     }
+    vm->currentCoroutine()->lastResultCount = count;
     
     return true;
 }

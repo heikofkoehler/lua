@@ -40,6 +40,7 @@ public:
     void visitForStmt(ForStmtNode* node) override;
     void visitForInStmt(ForInStmtNode* node) override;
     void visitFunctionDecl(FunctionDeclNode* node) override;
+    void visitFunctionExpr(FunctionExprNode* node) override;
     void visitReturn(ReturnStmtNode* node) override;
     void visitBreak(BreakStmtNode* node) override;
     void visitProgram(ProgramNode* node) override;
@@ -110,6 +111,10 @@ private:
     // Compiler state management
     void pushCompilerState();
     void popCompilerState();
+
+    // Helper for function compilation (shared by named and anonymous functions)
+    void compileFunction(const std::string& name, const std::vector<std::string>& params,
+                        const std::vector<std::unique_ptr<StmtNode>>& body, bool hasVarargs);
 
     // Loop context management for break statements
     void beginLoop();

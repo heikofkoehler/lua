@@ -52,6 +52,13 @@ private:
     std::unique_ptr<StmtNode> returnStatement();
     std::unique_ptr<StmtNode> breakStatement();
 
+    struct FunctionBody {
+        std::vector<std::string> params;
+        std::vector<std::unique_ptr<StmtNode>> body;
+        bool hasVarargs;
+    };
+    FunctionBody parseFunctionBody(const std::string& context);
+
     std::unique_ptr<ExprNode> expression();
     std::unique_ptr<ExprNode> logicalOr();
     std::unique_ptr<ExprNode> logicalAnd();

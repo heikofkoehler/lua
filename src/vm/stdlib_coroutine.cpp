@@ -134,21 +134,25 @@ bool native_coroutine_resume(VM* vm, int argCount) {
 #ifdef DEBUG
         std::cout << "DEBUG resume SUSPENDED: transferring " << co->yieldedValues.size() << " values" << std::endl;
 #endif
+        size_t count = co->yieldedValues.size();
         for (const auto& val : co->yieldedValues) {
             vm->push(val);
         }
+        vm->currentCoroutine()->lastResultCount = count + 1;
         co->yieldedValues.clear();
     } else {
         // Returned values
 #ifdef DEBUG
         std::cout << "DEBUG resume DEAD: transferring " << co->stack.size() << " values" << std::endl;
 #endif
+        size_t count = co->stack.size();
         for (const auto& val : co->stack) {
 #ifdef DEBUG
             std::cout << "  - " << val << std::endl;
 #endif
             vm->push(val);
         }
+        vm->currentCoroutine()->lastResultCount = count + 1;
         co->stack.clear();
     }
 
@@ -208,35 +212,6 @@ bool native_coroutine_yield(VM* vm, int argCount) {
     return true; // Return to resumer (this causes VM::run to exit and return to VM::resumeCoroutine)
 }
 
-/*
-// Helper for coroutine.wrap: the function that actually resumes the coroutine
-bool native_coroutine_wrap_helper(VM* vm, int argCount) {
-    UNUSED(argCount);
-    // The coroutine to resume is stored as upvalue 0 of the current closure
-    // Wait, native functions don't have upvalues in our VM yet!
-    // I need to check how native functions access their environment.
-    
-    // Oh, our VM only supports ClosureObject for Lua functions.
-    // NativeFunction is just a function pointer.
-    
-    vm->runtimeError("coroutine.wrap not fully implemented (requires native upvalues)");
-    return false;
-}
-*/
-
-bool native_coroutine_wrap(VM* vm, int argCount) {
-    if (argCount != 1) {
-        vm->runtimeError("coroutine.wrap expects 1 argument");
-        return false;
-    }
-    
-    // For now, let's implement it in a limited way or skip.
-    // Without native upvalues, it's hard to store the coroutine object.
-    
-    vm->runtimeError("coroutine.wrap not implemented yet");
-    return false;
-}
-
 } // anonymous namespace
 
 void registerCoroutineLibrary(VM* vm, TableObject* coroutineTable) {
@@ -245,5 +220,4 @@ void registerCoroutineLibrary(VM* vm, TableObject* coroutineTable) {
     vm->addNativeToTable(coroutineTable, "status", native_coroutine_status);
     vm->addNativeToTable(coroutineTable, "running", native_coroutine_running);
     vm->addNativeToTable(coroutineTable, "yield", native_coroutine_yield);
-    vm->addNativeToTable(coroutineTable, "wrap", native_coroutine_wrap);
 }

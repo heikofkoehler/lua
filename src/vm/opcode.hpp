@@ -54,13 +54,15 @@ enum class OpCode : uint8_t {
 
     // Functions
     OP_CLOSURE,     // Load function constant [index: uint8_t]
-    OP_CALL,        // Call function [arg_count: uint8_t]
-    OP_RETURN_VALUE, // Return with value from function
+    OP_CALL,          // call function [arg_count: uint8_t, ret_count: uint8_t]
+    OP_CALL_MULTI,    // call with variable args (last arg was multires) [fixed_arg_count: uint8_t, ret_count: uint8_t]
+    OP_RETURN_VALUE,  // return with values from function [count: uint8_t] (0 means all from lastResultCount)
 
     // Tables
     OP_NEW_TABLE,   // Create new table, push onto stack
     OP_GET_TABLE,   // Get table[key]: pop key, pop table, push value
     OP_SET_TABLE,   // Set table[key] = value: pop value, pop key, pop table
+    OP_SET_TABLE_MULTI, // Set table[key] = lastResultCount values (for table constructors)
 
     // File I/O
     OP_IO_OPEN,     // Open file: pop mode, pop filename, push file handle (or nil)
@@ -69,7 +71,7 @@ enum class OpCode : uint8_t {
     OP_IO_CLOSE,    // Close file: pop file handle
 
     // Varargs
-    OP_GET_VARARG,  // Push all varargs onto stack [count: uint8_t]
+    OP_GET_VARARG,  // Push varargs onto stack [ret_count: uint8_t] (0 means all)
 
     OP_YIELD,       // Yield from coroutine [args: uint8_t, returns: uint8_t]
 
@@ -112,10 +114,12 @@ inline const char* opcodeName(OpCode op) {
         case OpCode::OP_LOOP:          return "OP_LOOP";
         case OpCode::OP_CLOSURE:       return "OP_CLOSURE";
         case OpCode::OP_CALL:          return "OP_CALL";
+        case OpCode::OP_CALL_MULTI:    return "OP_CALL_MULTI";
         case OpCode::OP_RETURN_VALUE:  return "OP_RETURN_VALUE";
         case OpCode::OP_NEW_TABLE:     return "OP_NEW_TABLE";
         case OpCode::OP_GET_TABLE:     return "OP_GET_TABLE";
         case OpCode::OP_SET_TABLE:     return "OP_SET_TABLE";
+        case OpCode::OP_SET_TABLE_MULTI: return "OP_SET_TABLE_MULTI";
         case OpCode::OP_IO_OPEN:       return "OP_IO_OPEN";
         case OpCode::OP_IO_WRITE:      return "OP_IO_WRITE";
         case OpCode::OP_IO_READ:       return "OP_IO_READ";

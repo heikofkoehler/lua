@@ -450,25 +450,31 @@ std::unique_ptr<StmtNode> Parser::functionDeclaration() {
     std::string name = current_.lexeme;
     advance();
 
-    // Parse parameter list
-    consume(TokenType::LEFT_PAREN, "Expected '(' after function name");
+    FunctionBody fb = parseFunctionBody("after function name");
 
-    std::vector<std::string> params;
-    bool hasVarargs = false;
+    return std::make_unique<FunctionDeclNode>(name, std::move(fb.params), std::move(fb.body), fb.hasVarargs, line);
+}
+
+Parser::FunctionBody Parser::parseFunctionBody(const std::string& context) {
+    // Parse parameter list
+    consume(TokenType::LEFT_PAREN, "Expected '(' " + context);
+
+    FunctionBody fb;
+    fb.hasVarargs = false;
 
     if (!check(TokenType::RIGHT_PAREN)) {
         do {
             // Check for varargs (...)
             if (match(TokenType::DOT_DOT_DOT)) {
-                hasVarargs = true;
+                fb.hasVarargs = true;
                 break;  // ... must be last parameter
             }
 
             if (!check(TokenType::IDENTIFIER)) {
                 errorAtCurrent("Expected parameter name");
-                return nullptr;
+                break;
             }
-            params.push_back(current_.lexeme);
+            fb.params.push_back(current_.lexeme);
             advance();
         } while (match(TokenType::COMMA));
     }
@@ -476,14 +482,13 @@ std::unique_ptr<StmtNode> Parser::functionDeclaration() {
     consume(TokenType::RIGHT_PAREN, "Expected ')' after parameters");
 
     // Parse body
-    std::vector<std::unique_ptr<StmtNode>> body;
     while (!check(TokenType::END) && !isAtEnd()) {
-        body.push_back(statement());
+        fb.body.push_back(statement());
     }
 
     consume(TokenType::END, "Expected 'end' after function body");
 
-    return std::make_unique<FunctionDeclNode>(name, std::move(params), std::move(body), hasVarargs, line);
+    return fb;
 }
 
 std::unique_ptr<StmtNode> Parser::returnStatement() {
@@ -759,6 +764,12 @@ std::unique_ptr<ExprNode> Parser::primary() {
     if (match(TokenType::IDENTIFIER)) {
         std::string name = previous_.lexeme;
         return std::make_unique<VariableExprNode>(name, line);
+    }
+
+    // Anonymous function
+    if (match(TokenType::FUNCTION)) {
+        FunctionBody fb = parseFunctionBody("for anonymous function");
+        return std::make_unique<FunctionExprNode>(std::move(fb.params), std::move(fb.body), fb.hasVarargs, line);
     }
 
     // Grouping

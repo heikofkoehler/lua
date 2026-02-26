@@ -432,6 +432,23 @@ void VM::initStandardLibrary() {
     TableObject* coroutineTable = getTable(coroutineTableIdx);
     registerCoroutineLibrary(this, coroutineTable);
     globals_["coroutine"] = Value::table(coroutineTableIdx);
+
+    // Define coroutine.wrap in Lua
+    const char* wrapScript = 
+        "function __coroutine_wrap(f)\n"
+        "    local co = coroutine.create(f)\n"
+        "    return function(...)\n"
+        "        local res = table.pack(coroutine.resume(co, ...))\n"
+        "        if not res[1] then\n"
+        "            error(res[2])\n"
+        "        end\n"
+        "        return table.unpack(res, 2, res.n)\n"
+        "    end\n"
+        "end\n"
+        "coroutine.wrap = __coroutine_wrap\n"
+        "__coroutine_wrap = nil\n";
+
+    runSource(wrapScript, "coroutine_wrap_init");
 }
 
 CallFrame& VM::currentFrame() {
@@ -891,6 +908,17 @@ bool VM::run(size_t targetFrameCount) {
                 break;
             }
 
+            case OpCode::OP_CALL_MULTI: {
+                uint8_t fixedArgCount = readByte();
+                uint8_t retCount = readByte();
+                // actual argCount = fixedArgs + lastResultCount
+                int actualArgCount = static_cast<int>(fixedArgCount) + static_cast<int>(currentCoroutine_->lastResultCount);
+                if (!callValue(actualArgCount, retCount)) {
+                    return false;
+                }
+                break;
+            }
+
             case OpCode::OP_RETURN_VALUE: {
                 // Read the count of return values
                 uint8_t count = readByte();
@@ -1182,24 +1210,63 @@ bool VM::run(size_t targetFrameCount) {
             }
 
             case OpCode::OP_GET_VARARG: {
-                // Push all varargs onto the stack
+                uint8_t retCount = readByte();
+                // Push varargs onto the stack
                 if (currentCoroutine_->frames.empty()) {
                     runtimeError("Cannot access varargs outside of a function");
                     break;
                 }
 
                 CallFrame& frame = currentFrame();
+                const auto& varargs = frame.varargs;
                 
-                // Push all varargs
-                for (size_t i = 0; i < frame.varargs.size(); i++) {
-                    push(frame.varargs[i]);
+                if (retCount == 0) {
+                    // Push all varargs
+                    for (size_t i = 0; i < varargs.size(); i++) {
+                        push(varargs[i]);
+                    }
+                    currentCoroutine_->lastResultCount = varargs.size();
+                } else {
+                    // Push exactly retCount values
+                    for (int i = 0; i < (int)retCount; i++) {
+                        if (i < (int)varargs.size()) {
+                            push(varargs[i]);
+                        } else {
+                            push(Value::nil());
+                        }
+                    }
+                    currentCoroutine_->lastResultCount = retCount;
                 }
+                break;
+            }
 
-                // If no varargs, push nil
-                if (frame.varargs.empty()) {
-                    push(Value::nil());
+            case OpCode::OP_SET_TABLE_MULTI: {
+                // Stack: [..., table, key_base, val1, val2, ..., valN]
+                // key_base is the FIRST numeric key to start with.
+                // N is lastResultCount.
+                size_t n = currentCoroutine_->lastResultCount;
+                
+                std::vector<Value> values;
+                values.reserve(n);
+                for (size_t i = 0; i < n; i++) {
+                    values.push_back(pop());
                 }
-
+                std::reverse(values.begin(), values.end());
+                
+                Value keyBaseVal = pop();
+                Value tableValue = pop();
+                
+                if (!tableValue.isTable()) {
+                    runtimeError("Attempt to index a non-table value");
+                    break;
+                }
+                
+                TableObject* table = getTable(tableValue.asTableIndex());
+                double keyBase = keyBaseVal.asNumber();
+                
+                for (size_t i = 0; i < n; i++) {
+                    table->set(Value::number(keyBase + i), values[i]);
+                }
                 break;
             }
 
@@ -1576,6 +1643,7 @@ bool VM::callValue(int argCount, int retCount) {
 
         currentCoroutine_->chunk = function->chunk();
         currentCoroutine_->ip = 0;
+        currentCoroutine_->lastResultCount = 0; // Initialize for new frame
         return true;
     } else if (callee.isTable()) {
         Value callMethod = getMetamethod(callee, "__call");
