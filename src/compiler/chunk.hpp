@@ -59,6 +59,10 @@ public:
     void disassemble(const std::string& name) const;
     size_t disassembleInstruction(size_t offset) const;
 
+    // Serialization
+    void serialize(std::ostream& os) const;
+    static std::unique_ptr<Chunk> deserialize(std::istream& is);
+
 private:
     std::vector<uint8_t> code_;        // Bytecode instructions
     std::vector<Value> constants_;     // Constant pool

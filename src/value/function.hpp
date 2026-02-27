@@ -22,6 +22,10 @@ public:
     int upvalueCount() const { return upvalueCount_; }
     bool hasVarargs() const { return hasVarargs_; }
 
+    // Serialization
+    void serialize(std::ostream& os) const;
+    static std::unique_ptr<FunctionObject> deserialize(std::istream& is);
+
 private:
     std::string name_;
     int arity_;

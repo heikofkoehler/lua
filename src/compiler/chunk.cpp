@@ -61,6 +61,7 @@ size_t Chunk::addString(const std::string& str) {
     return index;
 }
 
+StringObject* getString(size_t index);
 StringObject* Chunk::getString(size_t index) const {
     if (index >= strings_.size()) {
         return nullptr;
@@ -253,4 +254,106 @@ size_t Chunk::yieldInstruction(const char* name, size_t offset) const {
               << std::right << " count=" << static_cast<int>(count)
               << " returns=" << static_cast<int>(retCount) << std::endl;
     return offset + 3;
+}
+
+void Chunk::serialize(std::ostream& os) const {
+    // Magic number
+    os.write("LUA\x01", 4);
+    
+    // Bytecode
+    uint32_t codeSize = static_cast<uint32_t>(code_.size());
+    os.write(reinterpret_cast<const char*>(&codeSize), sizeof(codeSize));
+    os.write(reinterpret_cast<const char*>(code_.data()), codeSize);
+    
+    // Lines
+    uint32_t linesSize = static_cast<uint32_t>(lines_.size());
+    os.write(reinterpret_cast<const char*>(&linesSize), sizeof(linesSize));
+    os.write(reinterpret_cast<const char*>(lines_.data()), linesSize * sizeof(int));
+    
+    // Identifiers
+    uint32_t idCount = static_cast<uint32_t>(identifiers_.size());
+    os.write(reinterpret_cast<const char*>(&idCount), sizeof(idCount));
+    for (const auto& id : identifiers_) {
+        uint32_t len = static_cast<uint32_t>(id.length());
+        os.write(reinterpret_cast<const char*>(&len), sizeof(len));
+        os.write(id.c_str(), len);
+    }
+    
+    // Constants (this will recursively serialize functions)
+    uint32_t constCount = static_cast<uint32_t>(constants_.size());
+    os.write(reinterpret_cast<const char*>(&constCount), sizeof(constCount));
+    for (const auto& constant : constants_) {
+        constant.serialize(os, this);
+    }
+}
+
+std::unique_ptr<Chunk> Chunk::deserialize(std::istream& is) {
+    char magic[4];
+    is.read(magic, 4);
+    if (std::memcmp(magic, "LUA\x01", 4) != 0) {
+        throw std::runtime_error("Invalid bytecode format");
+    }
+    
+    auto chunk = std::make_unique<Chunk>();
+    
+    // Bytecode
+    uint32_t codeSize;
+    is.read(reinterpret_cast<char*>(&codeSize), sizeof(codeSize));
+    chunk->code_.resize(codeSize);
+    is.read(reinterpret_cast<char*>(chunk->code_.data()), codeSize);
+    
+    // Lines
+    uint32_t linesSize;
+    is.read(reinterpret_cast<char*>(&linesSize), sizeof(linesSize));
+    chunk->lines_.resize(linesSize);
+    is.read(reinterpret_cast<char*>(chunk->lines_.data()), linesSize * sizeof(int));
+    
+    // Identifiers
+    uint32_t idCount;
+    is.read(reinterpret_cast<char*>(&idCount), sizeof(idCount));
+    for (uint32_t i = 0; i < idCount; i++) {
+        uint32_t len;
+        is.read(reinterpret_cast<char*>(&len), sizeof(len));
+        std::string id(len, '\0');
+        is.read(&id[0], len);
+        chunk->identifiers_.push_back(id);
+    }
+    
+    // Constants
+    uint32_t constCount;
+    is.read(reinterpret_cast<char*>(&constCount), sizeof(constCount));
+    for (uint32_t i = 0; i < constCount; i++) {
+        chunk->constants_.push_back(Value::deserialize(is, chunk.get()));
+    }
+    
+    return chunk;
+}
+
+void FunctionObject::serialize(std::ostream& os) const {
+    uint32_t nameLen = static_cast<uint32_t>(name_.length());
+    os.write(reinterpret_cast<const char*>(&nameLen), sizeof(nameLen));
+    os.write(name_.c_str(), nameLen);
+    
+    os.write(reinterpret_cast<const char*>(&arity_), sizeof(arity_));
+    os.write(reinterpret_cast<const char*>(&upvalueCount_), sizeof(upvalueCount_));
+    uint8_t varargs = hasVarargs_ ? 1 : 0;
+    os.write(reinterpret_cast<const char*>(&varargs), sizeof(varargs));
+    
+    chunk_->serialize(os);
+}
+
+std::unique_ptr<FunctionObject> FunctionObject::deserialize(std::istream& is) {
+    uint32_t nameLen;
+    is.read(reinterpret_cast<char*>(&nameLen), sizeof(nameLen));
+    std::string name(nameLen, '\0');
+    is.read(&name[0], nameLen);
+    
+    int arity, upvalueCount;
+    is.read(reinterpret_cast<char*>(&arity), sizeof(arity));
+    is.read(reinterpret_cast<char*>(&upvalueCount), sizeof(upvalueCount));
+    uint8_t varargs;
+    is.read(reinterpret_cast<char*>(&varargs), sizeof(varargs));
+    
+    auto chunk = Chunk::deserialize(is);
+    return std::make_unique<FunctionObject>(name, arity, std::move(chunk), upvalueCount, varargs != 0);
 }

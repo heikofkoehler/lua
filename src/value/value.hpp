@@ -7,6 +7,7 @@
 
 // Forward declaration
 class FunctionObject;
+class Chunk;
 
 // NaN-boxing implementation
 // Uses 64-bit representation to store all value types efficiently
@@ -316,6 +317,10 @@ public:
 
     // Print to stream
     void print(std::ostream& os) const;
+
+    // Serialization
+    void serialize(std::ostream& os, const Chunk* chunk) const;
+    static Value deserialize(std::istream& is, Chunk* chunk);
 
     uint64_t bits() const { return bits_; }
 
