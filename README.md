@@ -77,8 +77,13 @@ A Lua implementation in C++ featuring a stack-based bytecode virtual machine wit
   - **Math Library**: sqrt, abs, floor, ceil, sin, cos, tan, exp, log, min, max, pi
   - **Package Table**: `loaded`, `path`
   - **Dot Notation**: Clean syntax like `string.len("hello")` and `math.sqrt(16)`
+- **Bytecode Serialization**:
+  - **Compilation**: Compile Lua source to binary `.luac` files
+  - **Deserialization**: Load and execute pre-compiled bytecode directly
+  - **Portability**: All function metadata, constants, and line numbers preserved in binary format
 - **REPL**: Interactive read-eval-print loop
   - **File Execution**: Run Lua scripts from files
+  - **Tracing**: `-v` flag to print stack and instructions during execution
 - **Metatables**:
   - **Meta-operations**: `setmetatable`, `getmetatable`
   - **Arithmetic Metamethods**: `__add`, `__sub`, `__mul`, `__div`, `__mod`, `__pow`, `__unm`
@@ -89,23 +94,25 @@ A Lua implementation in C++ featuring a stack-based bytecode virtual machine wit
 
 ### Architecture
 ```
-Lua Source Code
-    ↓
-Lexer (tokenization)
-    ↓
-Token Stream
-    ↓
-Parser (recursive descent)
-    ↓
-Abstract Syntax Tree (AST)
-    ↓
-Code Generator
-    ↓
-Bytecode Chunk
-    ↓
-VM Execution (stack-based)
-    ↓
-Output
+    Lua Source Code
+          ↓
+    Lexer (tokenization)
+          ↓
+    Token Stream
+          ↓
+    Parser (recursive descent)
+          ↓
+    Abstract Syntax Tree (AST)
+          ↓
+    Code Generator
+          ↓
+    Bytecode Chunk  ←─── Deserialize (Binary .luac)
+          ↓
+    Serialize (Binary .luac)
+          ↓
+    VM Execution (stack-based)
+          ↓
+    Output
 ```
 
 ## Building
@@ -150,6 +157,34 @@ make
 ```bash
 ./lua
 ```
+
+### Command-Line Options
+
+- `-v`, `--verbose`: Print every instruction executed (execution trace).
+- `-h`, `--help`: Print help message with available options.
+- `-c`, `--compile`: Compile source file to bytecode without executing.
+- `-o`, `--output <file>`: Specify output file for compiled bytecode (default: `out.luac`).
+- `-b`, `--bytecode`: Execute the input file as pre-compiled bytecode.
+
+### Bytecode Compilation & Execution
+
+You can compile a Lua script into a binary bytecode file for faster loading or to hide source code:
+
+```bash
+# Compile script.lua to script.luac
+./lua -c -o script.luac script.lua
+
+# Execute the pre-compiled bytecode
+./lua -b script.luac
+```
+
+You can also combine flags to compile and execute a script in one go while saving the bytecode:
+
+```bash
+./lua -o script.luac script.lua
+```
+
+### Interactive REPL
 
 Then type Lua expressions:
 ```
