@@ -55,6 +55,7 @@ set(SOURCES
     src/vm/stdlib_os.cpp
     src/vm/stdlib_socket.cpp
     src/vm/stdlib_coroutine.cpp
+    src/vm/stdlib_debug.cpp
     src/value/socket.cpp
 )
 

@@ -433,6 +433,13 @@ void VM::initStandardLibrary() {
     registerCoroutineLibrary(this, coroutineTable);
     globals_["coroutine"] = Value::table(coroutineTableIdx);
 
+    // Create 'debug' table
+    size_t debugTableIdx = createTable();
+    TableObject* debugTable = getTable(debugTableIdx);
+    void registerDebugLibrary(VM* vm, TableObject* debugTable);
+    registerDebugLibrary(this, debugTable);
+    globals_["debug"] = Value::table(debugTableIdx);
+
     // Define coroutine.wrap in Lua
     const char* wrapScript = 
         "function __coroutine_wrap(f)\n"
