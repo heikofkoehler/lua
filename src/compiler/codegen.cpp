@@ -910,8 +910,7 @@ void CodeGenerator::visitCall(CallExprNode* node) {
     
     for (size_t i = 0; i < args.size(); i++) {
         bool canBeMultires = (dynamic_cast<CallExprNode*>(args[i].get()) != nullptr) ||
-                             (dynamic_cast<VarargExprNode*>(args[i].get()) != nullptr) ||
-                             (dynamic_cast<IndexExprNode*>(args[i].get()) != nullptr); // Index might be native call
+                             (dynamic_cast<VarargExprNode*>(args[i].get()) != nullptr);
         
         if (i == args.size() - 1 && canBeMultires) {
             expectedRetCount_ = 0; // Last argument can be multires
@@ -958,8 +957,7 @@ void CodeGenerator::visitTableConstructor(TableConstructorNode* node) {
         // Compile key
         if (entry.key == nullptr) {
             bool canBeMultires = (dynamic_cast<CallExprNode*>(entry.value.get()) != nullptr) ||
-                                 (dynamic_cast<VarargExprNode*>(entry.value.get()) != nullptr) ||
-                                 (dynamic_cast<IndexExprNode*>(entry.value.get()) != nullptr);
+                                 (dynamic_cast<VarargExprNode*>(entry.value.get()) != nullptr);
             bool isLast = (i == entries.size() - 1);
 
             // Array-style entry: use implicit numeric index
@@ -1129,8 +1127,7 @@ void CodeGenerator::visitReturn(ReturnStmtNode* node) {
         const auto& args = values;
         for (size_t i = 0; i < args.size(); i++) {
             bool canBeMultires = (dynamic_cast<CallExprNode*>(args[i].get()) != nullptr) ||
-                                 (dynamic_cast<VarargExprNode*>(args[i].get()) != nullptr) ||
-                                 (dynamic_cast<IndexExprNode*>(args[i].get()) != nullptr);
+                                 (dynamic_cast<VarargExprNode*>(args[i].get()) != nullptr);
             
             uint8_t oldRetCount = expectedRetCount_;
             if (i == args.size() - 1 && canBeMultires) {

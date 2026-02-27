@@ -22,7 +22,7 @@ public:
     CoroutineObject()
         : GCObject(GCObject::Type::COROUTINE), 
           ip(0), chunk(nullptr), rootChunk(nullptr), 
-          status(Status::SUSPENDED), yieldCount(0), retCount(0), caller(nullptr) {
+          status(Status::SUSPENDED), yieldCount(0), retCount(0), lastResultCount(0), caller(nullptr) {
         stack.reserve(256);
         frames.reserve(64);
     }

@@ -60,10 +60,11 @@ bool run(const std::string& source, VM& vm) {
 }
 
 // Run file
-int runFile(const std::string& path) {
+int runFile(const std::string& path, bool verbose) {
     try {
         std::string source = readFile(path);
         VM vm;
+        vm.setTraceExecution(verbose);
 
         if (!run(source, vm)) {
             return 1;
@@ -77,8 +78,9 @@ int runFile(const std::string& path) {
 }
 
 // Interactive REPL
-void repl() {
+void repl(bool verbose) {
     VM vm;
+    vm.setTraceExecution(verbose);
     std::string line;
 
     std::cout << "Lua VM (MVP) - Type 'exit' to quit" << std::endl;
@@ -114,21 +116,48 @@ void repl() {
 
 // Print usage
 void printUsage(const char* program) {
-    std::cerr << "Usage: " << program << " [script]" << std::endl;
+    std::cerr << "Usage: " << program << " [options] [script]" << std::endl;
+    std::cerr << "  Options:" << std::endl;
+    std::cerr << "    -v, --verbose    Print every instruction executed" << std::endl;
+    std::cerr << "    -h, --help       Print this help message" << std::endl;
     std::cerr << "  Run without arguments to start REPL" << std::endl;
 }
 
 int main(int argc, char* argv[]) {
-    if (argc == 1) {
-        // No arguments - start REPL
-        repl();
+    bool verbose = false;
+    std::string scriptPath = "";
+    bool stopFlags = false;
+
+    for (int i = 1; i < argc; i++) {
+        std::string arg = argv[i];
+        if (!stopFlags && (arg == "-v" || arg == "--verbose")) {
+            verbose = true;
+        } else if (!stopFlags && (arg == "-h" || arg == "--help")) {
+            printUsage(argv[0]);
+            return 0;
+        } else if (!stopFlags && arg == "--") {
+            stopFlags = true;
+        } else if (!stopFlags && arg[0] == '-') {
+            std::cerr << "Unknown option: " << arg << std::endl;
+            printUsage(argv[0]);
+            return 1;
+        } else {
+            if (scriptPath.empty()) {
+                scriptPath = arg;
+            } else {
+                std::cerr << "Too many arguments" << std::endl;
+                printUsage(argv[0]);
+                return 1;
+            }
+        }
+    }
+
+    if (scriptPath.empty()) {
+        // No script - start REPL
+        repl(verbose);
         return 0;
-    } else if (argc == 2) {
-        // Run file
-        return runFile(argv[1]);
     } else {
-        // Invalid arguments
-        printUsage(argv[0]);
-        return 1;
+        // Run file
+        return runFile(scriptPath, verbose);
     }
 }

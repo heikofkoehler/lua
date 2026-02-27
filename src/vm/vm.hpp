@@ -110,6 +110,10 @@ public:
     // Root chunk access (for native functions to access compile-time strings)
     const Chunk* rootChunk() const { return currentCoroutine_->rootChunk; }
 
+    // Trace execution
+    void setTraceExecution(bool enable) { traceExecution_ = enable; }
+    bool getTraceExecution() const { return traceExecution_; }
+
     // Public stack operations (for native functions to use)
     void push(const Value& value);
     Value pop();
@@ -158,6 +162,7 @@ private:
     Value logicalNot(const Value& a);
 
     // Execution state
+    bool traceExecution_ = false;  // Whether to print every instruction
     std::vector<CoroutineObject*> coroutines_; // Coroutine pool (owns objects)
     CoroutineObject* mainCoroutine_;
     CoroutineObject* currentCoroutine_;

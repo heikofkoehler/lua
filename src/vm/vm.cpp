@@ -13,7 +13,13 @@ void registerSocketLibrary(VM* vm, TableObject* socketTable);
 void registerCoroutineLibrary(VM* vm, TableObject* coroutineTable);
 void registerBaseLibrary(VM* vm);
 
-VM::VM() : mainCoroutine_(nullptr), currentCoroutine_(nullptr), 
+VM::VM() : 
+#ifdef TRACE_EXECUTION
+           traceExecution_(true), 
+#else
+           traceExecution_(false), 
+#endif
+           mainCoroutine_(nullptr), currentCoroutine_(nullptr), 
            hadError_(false), inPcall_(false), lastErrorMessage_(""), stdlibInitialized_(false),
            gcObjects_(nullptr), bytesAllocated_(0), nextGC_(1024 * 1024), gcEnabled_(true) {    // Create main coroutine
     createCoroutine(nullptr);
@@ -558,9 +564,9 @@ bool VM::run() {
 bool VM::run(size_t targetFrameCount) {
     // Main execution loop
     while (true) {
-#ifdef TRACE_EXECUTION
-        traceExecution();
-#endif
+        if (traceExecution_) {
+            traceExecution();
+        }
 
         uint8_t instruction = readByte();
         OpCode op = static_cast<OpCode>(instruction);
