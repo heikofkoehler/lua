@@ -911,6 +911,9 @@ void CodeGenerator::visitCall(CallExprNode* node) {
     // Save current expected return count
     uint8_t oldRetCount = expectedRetCount_;
     
+    expectedRetCount_ = 1; // The callee itself expects 1 result
+    node->callee()->accept(*this);
+    
     // Compile arguments and push onto stack
     const auto& args = node->args();
     bool isLastMultires = false;

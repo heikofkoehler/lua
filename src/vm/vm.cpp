@@ -996,6 +996,9 @@ bool VM::run(size_t targetFrameCount) {
                 currentCoroutine_->chunk = returnChunk;
                 currentCoroutine_->ip = returnIP;
 
+                // Set lastResultCount before pushing so it matches the number of returned values
+                currentCoroutine_->lastResultCount = returnValues.size();
+
                 // Push all return values (replaces where function was)
                 for (const auto& value : returnValues) {
                     push(value);
