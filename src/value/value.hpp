@@ -124,7 +124,7 @@ public:
     }
 
     bool isNumber() const {
-        return (bits_ & 0x7FF0000000000000ULL) != 0x7FF0000000000000ULL;
+        return (bits_ & QNAN) != QNAN;
     }
 
     bool isFunctionObject() const {

@@ -202,16 +202,6 @@ void CodeGenerator::visitVararg(VarargExprNode* node) {
     emitByte(expectedRetCount_);
 }
 
-void CodeGenerator::visitPrintStmt(PrintStmtNode* node) {
-    setLine(node->line());
-
-    // Compile each expression and emit print instruction
-    for (const auto& arg : node->args()) {
-        arg->accept(*this);
-        emitOpCode(OpCode::OP_PRINT);
-    }
-}
-
 void CodeGenerator::visitExprStmt(ExprStmtNode* node) {
     setLine(node->line());
 

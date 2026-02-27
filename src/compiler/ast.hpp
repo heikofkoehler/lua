@@ -204,20 +204,6 @@ protected:
     explicit StmtNode(int line) : ASTNode(line) {}
 };
 
-// Print statement: print(expr1, expr2, ...)
-class PrintStmtNode : public StmtNode {
-public:
-    PrintStmtNode(std::vector<std::unique_ptr<ExprNode>> args, int line)
-        : StmtNode(line), args_(std::move(args)) {}
-
-    void accept(ASTVisitor& visitor) override;
-
-    const std::vector<std::unique_ptr<ExprNode>>& args() const { return args_; }
-
-private:
-    std::vector<std::unique_ptr<ExprNode>> args_;
-};
-
 // Expression statement: evaluate expression and discard result
 class ExprStmtNode : public StmtNode {
 public:
@@ -524,13 +510,11 @@ public:
     virtual void visitVararg(VarargExprNode* node) = 0;
     virtual void visitCall(CallExprNode* node) = 0;
         virtual void visitTableConstructor(TableConstructorNode* node) = 0;
-        virtual void visitIndexExpr(IndexExprNode* node) = 0;
-        virtual void visitFunctionExpr(FunctionExprNode* node) = 0;
-    
-        virtual void visitPrintStmt(PrintStmtNode* node) = 0;
-        virtual void visitExprStmt(ExprStmtNode* node) = 0;
-    virtual void visitAssignmentStmt(AssignmentStmtNode* node) = 0;
-    virtual void visitIndexAssignmentStmt(IndexAssignmentStmtNode* node) = 0;
+            virtual void visitIndexExpr(IndexExprNode* node) = 0;
+            virtual void visitFunctionExpr(FunctionExprNode* node) = 0;
+        
+            virtual void visitExprStmt(ExprStmtNode* node) = 0;
+            virtual void visitAssignmentStmt(AssignmentStmtNode* node) = 0;    virtual void visitIndexAssignmentStmt(IndexAssignmentStmtNode* node) = 0;
     virtual void visitLocalDeclStmt(LocalDeclStmtNode* node) = 0;
     virtual void visitMultipleLocalDeclStmt(MultipleLocalDeclStmtNode* node) = 0;
     virtual void visitMultipleAssignmentStmt(MultipleAssignmentStmtNode* node) = 0;
@@ -584,10 +568,6 @@ inline void IndexExprNode::accept(ASTVisitor& visitor) {
 
 inline void FunctionExprNode::accept(ASTVisitor& visitor) {
     visitor.visitFunctionExpr(this);
-}
-
-inline void PrintStmtNode::accept(ASTVisitor& visitor) {
-    visitor.visitPrintStmt(this);
 }
 
 inline void ExprStmtNode::accept(ASTVisitor& visitor) {

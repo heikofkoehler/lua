@@ -104,7 +104,6 @@ void Parser::synchronize() {
             case TokenType::FOR:
             case TokenType::IF:
             case TokenType::WHILE:
-            case TokenType::PRINT:
             case TokenType::RETURN:
                 return;
             default:
@@ -116,9 +115,6 @@ void Parser::synchronize() {
 }
 
 std::unique_ptr<StmtNode> Parser::statement() {
-    if (match(TokenType::PRINT)) {
-        return printStatement();
-    }
     if (match(TokenType::LOCAL)) {
         return localDeclaration();
     }
@@ -152,22 +148,6 @@ std::unique_ptr<StmtNode> Parser::statement() {
     }
 
     return expressionStatement();
-}
-
-std::unique_ptr<StmtNode> Parser::printStatement() {
-    int line = previous_.line;
-    consume(TokenType::LEFT_PAREN, "Expected '(' after 'print'");
-    
-    std::vector<std::unique_ptr<ExprNode>> args;
-    if (!check(TokenType::RIGHT_PAREN)) {
-        do {
-            args.push_back(expression());
-        } while (match(TokenType::COMMA));
-    }
-    
-    consume(TokenType::RIGHT_PAREN, "Expected ')' after arguments");
-
-    return std::make_unique<PrintStmtNode>(std::move(args), line);
 }
 
 std::unique_ptr<StmtNode> Parser::expressionStatement() {

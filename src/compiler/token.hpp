@@ -30,7 +30,7 @@ enum class TokenType {
     END, FALSE, FOR, FUNCTION, IF,
     IN, LOCAL, NIL, NOT, OR,
     REPEAT, RETURN, THEN, TRUE, UNTIL,
-    WHILE, PRINT,
+    WHILE,
 
     // Special
     EOF_TOKEN, ERROR
@@ -104,7 +104,6 @@ inline const char* tokenTypeName(TokenType type) {
         case TokenType::TRUE: return "TRUE";
         case TokenType::UNTIL: return "UNTIL";
         case TokenType::WHILE: return "WHILE";
-        case TokenType::PRINT: return "PRINT";
         case TokenType::EOF_TOKEN: return "EOF";
         case TokenType::ERROR: return "ERROR";
         default: return "UNKNOWN";

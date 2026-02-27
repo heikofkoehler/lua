@@ -3,6 +3,8 @@
 #include "value/table.hpp"
 #include "value/string.hpp"
 #include <string>
+#include <vector>
+#include <algorithm>
 
 namespace {
 
@@ -17,15 +19,15 @@ bool native_table_insert(VM* vm, int argCount) {
     Value tableVal;
 
     if (argCount == 2) {
-        // table.insert(t, value) - append to end
-        valueVal = vm->pop();
-        tableVal = vm->pop();
+        // table.insert(t, value)
+        valueVal = vm->peek(0);
+        tableVal = vm->peek(1);
         posVal = Value::nil();
     } else {
-        // table.insert(t, pos, value) - insert at position
-        valueVal = vm->pop();
-        posVal = vm->pop();
-        tableVal = vm->pop();
+        // table.insert(t, pos, value)
+        valueVal = vm->peek(0);
+        posVal = vm->peek(1);
+        tableVal = vm->peek(2);
     }
 
     if (!tableVal.isTable()) {
@@ -36,36 +38,31 @@ bool native_table_insert(VM* vm, int argCount) {
     TableObject* table = vm->getTable(tableVal.asTableIndex());
 
     if (posVal.isNil()) {
-        // Append: find next numeric index
         int n = 1;
         while (!table->get(Value::number(n)).isNil()) {
             n++;
         }
         table->set(Value::number(n), valueVal);
     } else {
-        // Insert at position: shift elements
         if (!posVal.isNumber()) {
             vm->runtimeError("table.insert position must be a number");
             return false;
         }
         int pos = static_cast<int>(posVal.asNumber());
 
-        // Find table length
         int n = 1;
         while (!table->get(Value::number(n)).isNil()) {
             n++;
         }
 
-        // Shift elements from pos to end
         for (int i = n; i >= pos; i--) {
             table->set(Value::number(i + 1), table->get(Value::number(i)));
         }
-
-        // Insert new value
         table->set(Value::number(pos), valueVal);
     }
 
-    vm->push(Value::nil());  // table.insert returns nothing
+    for (int i = 0; i < argCount; i++) vm->pop();
+    vm->push(Value::nil());
     return true;
 }
 
@@ -75,8 +72,8 @@ bool native_table_remove(VM* vm, int argCount) {
         return false;
     }
 
-    Value posVal = (argCount == 2) ? vm->pop() : Value::nil();
-    Value tableVal = vm->pop();
+    Value posVal = (argCount == 2) ? vm->peek(0) : Value::nil();
+    Value tableVal = vm->peek(argCount - 1);
 
     if (!tableVal.isTable()) {
         vm->runtimeError("table.remove expects table as first argument");
@@ -85,30 +82,24 @@ bool native_table_remove(VM* vm, int argCount) {
 
     TableObject* table = vm->getTable(tableVal.asTableIndex());
 
-    // Find table length
     int n = 1;
     while (!table->get(Value::number(n)).isNil()) {
         n++;
     }
-    n--;  // Length is one less than first nil index
+    n--;
 
     int pos = posVal.isNil() ? n : static_cast<int>(posVal.asNumber());
 
-    if (pos < 1 || pos > n) {
-        vm->push(Value::nil());
-        return true;
+    Value removed = Value::nil();
+    if (pos >= 1 && pos <= n) {
+        removed = table->get(Value::number(pos));
+        for (int i = pos; i < n; i++) {
+            table->set(Value::number(i), table->get(Value::number(i + 1)));
+        }
+        table->set(Value::number(n), Value::nil());
     }
 
-    Value removed = table->get(Value::number(pos));
-
-    // Shift elements down
-    for (int i = pos; i < n; i++) {
-        table->set(Value::number(i), table->get(Value::number(i + 1)));
-    }
-
-    // Remove last element
-    table->set(Value::number(n), Value::nil());
-
+    for (int i = 0; i < argCount; i++) vm->pop();
     vm->push(removed);
     return true;
 }
@@ -119,16 +110,8 @@ bool native_table_concat(VM* vm, int argCount) {
         return false;
     }
 
-    Value sepVal;
-    if (argCount == 2) {
-        sepVal = vm->pop();
-    } else {
-        // Use empty string from chunk's string pool
-        Chunk* chunk = const_cast<Chunk*>(vm->rootChunk());
-        size_t emptyIdx = chunk->addString("");
-        sepVal = Value::string(emptyIdx);
-    }
-    Value tableVal = vm->pop();
+    Value sepVal = (argCount == 2) ? vm->peek(0) : Value::nil();
+    Value tableVal = vm->peek(argCount - 1);
 
     if (!tableVal.isTable()) {
         vm->runtimeError("table.concat expects table as first argument");
@@ -136,13 +119,7 @@ bool native_table_concat(VM* vm, int argCount) {
     }
 
     TableObject* table = vm->getTable(tableVal.asTableIndex());
-
-    StringObject* sepStr = nullptr;
-    if (sepVal.isRuntimeString()) {
-        sepStr = vm->getString(sepVal.asStringIndex());
-    } else if (sepVal.isString()) {
-        sepStr = vm->rootChunk()->getString(sepVal.asStringIndex());
-    }
+    std::string sep = sepVal.isNil() ? "" : vm->getStringValue(sepVal);
 
     std::string result;
     int i = 1;
@@ -150,26 +127,12 @@ bool native_table_concat(VM* vm, int argCount) {
         Value val = table->get(Value::number(i));
         if (val.isNil()) break;
 
-        if (i > 1 && sepStr) {
-            result.append(sepStr->chars(), sepStr->length());
-        }
-
-        // Convert value to string
-        if (val.isRuntimeString()) {
-            StringObject* str = vm->getString(val.asStringIndex());
-            result.append(str->chars(), str->length());
-        } else if (val.isString()) {
-            StringObject* str = vm->rootChunk()->getString(val.asStringIndex());
-            result.append(str->chars(), str->length());
-        } else if (val.isNumber()) {
-            result.append(std::to_string(val.asNumber()));
-        } else {
-            result.append(val.toString());
-        }
-
+        if (i > 1) result += sep;
+        result += vm->getStringValue(val);
         i++;
     }
 
+    for (int i = 0; i < argCount; i++) vm->pop();
     vm->push(Value::runtimeString(vm->internString(result)));
     return true;
 }
@@ -178,20 +141,15 @@ bool native_table_pack(VM* vm, int argCount) {
     size_t tableIdx = vm->createTable();
     TableObject* table = vm->getTable(tableIdx);
     
-    // Arguments are on stack in order: [..., arg1, arg2, ..., argN]
-    // Peek and set them into the table
     for (int i = 1; i <= argCount; i++) {
         Value v = vm->peek(argCount - i);
         table->set(Value::number(i), v);
     }
     
-    // Set field "n"
     size_t nIdx = vm->internString("n");
     table->set(Value::runtimeString(nIdx), Value::number(argCount));
     
-    // Pop all arguments
     for (int i = 0; i < argCount; i++) vm->pop();
-    
     vm->push(Value::table(tableIdx));
     return true;
 }
@@ -202,9 +160,9 @@ bool native_table_unpack(VM* vm, int argCount) {
         return false;
     }
     
-    Value endVal = (argCount >= 3) ? vm->pop() : Value::nil();
-    Value startVal = (argCount >= 2) ? vm->pop() : Value::number(1);
-    Value tableVal = vm->pop();
+    Value endVal = (argCount >= 3) ? vm->peek(0) : Value::nil();
+    Value startVal = (argCount >= 2) ? vm->peek(argCount - 2) : Value::number(1);
+    Value tableVal = vm->peek(argCount - 1);
     
     if (!tableVal.isTable()) {
         vm->runtimeError("table.unpack expects table as first argument");
@@ -217,7 +175,6 @@ bool native_table_unpack(VM* vm, int argCount) {
     int j;
     
     if (endVal.isNil()) {
-        // Find length of table (numeric sequence)
         j = 0;
         while (!table->get(Value::number(j + 1)).isNil()) {
             j++;
@@ -226,13 +183,17 @@ bool native_table_unpack(VM* vm, int argCount) {
         j = static_cast<int>(endVal.asNumber());
     }
     
-    // Push values onto stack
-    int count = 0;
+    std::vector<Value> results;
     for (int k = i; k <= j; k++) {
-        vm->push(table->get(Value::number(k)));
-        count++;
+        results.push_back(table->get(Value::number(k)));
     }
-    vm->currentCoroutine()->lastResultCount = count;
+    
+    for (int k = 0; k < argCount; k++) vm->pop();
+    
+    for (const auto& res : results) {
+        vm->push(res);
+    }
+    vm->currentCoroutine()->lastResultCount = results.size();
     
     return true;
 }
@@ -243,8 +204,8 @@ bool native_table_sort(VM* vm, int argCount) {
         return false;
     }
 
-    Value compVal = (argCount == 2) ? vm->pop() : Value::nil();
-    Value tableVal = vm->pop();
+    Value compVal = (argCount == 2) ? vm->peek(0) : Value::nil();
+    Value tableVal = vm->peek(argCount - 1);
 
     if (!tableVal.isTable()) {
         vm->runtimeError("table.sort expects table as first argument");
@@ -253,34 +214,31 @@ bool native_table_sort(VM* vm, int argCount) {
 
     TableObject* table = vm->getTable(tableVal.asTableIndex());
 
-    // Find length of table
     int n = 0;
     while (!table->get(Value::number(n + 1)).isNil()) {
         n++;
     }
 
     if (n <= 1) {
+        for(int i=0; i<argCount; i++) vm->pop();
         vm->push(Value::nil());
-        return true; // Nothing to sort
+        return true;
     }
 
-    // Extract elements into a vector
     std::vector<Value> elements;
     elements.reserve(n);
     for (int i = 1; i <= n; i++) {
         elements.push_back(table->get(Value::number(i)));
     }
 
-    // Sort the vector
     bool sortError = false;
     std::sort(elements.begin(), elements.end(), [&](const Value& a, const Value& b) {
         if (sortError) return false;
 
         if (compVal.isNil()) {
-            // Default comparison: a < b
             if (a.isNumber() && b.isNumber()) {
                 return a.asNumber() < b.asNumber();
-            } else if ((a.isString() || a.isRuntimeString()) && (b.isString() || b.isRuntimeString())) {
+            } else if (a.isString() && b.isString()) {
                 return vm->getStringValue(a) < vm->getStringValue(b);
             } else {
                 vm->runtimeError("attempt to compare uncomparable types in table.sort");
@@ -288,12 +246,10 @@ bool native_table_sort(VM* vm, int argCount) {
                 return false;
             }
         } else {
-            // Call custom comparison function
             vm->push(compVal);
             vm->push(a);
             vm->push(b);
             
-            // Need to execute the function
             size_t prevFrames = vm->currentCoroutine()->frames.size();
             if (!vm->callValue(2, 1)) {
                 sortError = true;
@@ -314,11 +270,11 @@ bool native_table_sort(VM* vm, int argCount) {
 
     if (sortError) return false;
 
-    // Put elements back into table
     for (int i = 1; i <= n; i++) {
         table->set(Value::number(i), elements[i - 1]);
     }
 
+    for(int i=0; i<argCount; i++) vm->pop();
     vm->push(Value::nil());
     return true;
 }

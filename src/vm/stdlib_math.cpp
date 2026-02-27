@@ -13,12 +13,14 @@ bool native_math_sqrt(VM* vm, int argCount) {
         vm->runtimeError("math.sqrt expects 1 argument");
         return false;
     }
-    Value val = vm->pop();
+    Value val = vm->peek(0);
     if (!val.isNumber()) {
         vm->runtimeError("math.sqrt expects number argument");
         return false;
     }
-    vm->push(Value::number(std::sqrt(val.asNumber())));
+    double res = std::sqrt(val.asNumber());
+    vm->pop();
+    vm->push(Value::number(res));
     return true;
 }
 
@@ -27,12 +29,14 @@ bool native_math_abs(VM* vm, int argCount) {
         vm->runtimeError("math.abs expects 1 argument");
         return false;
     }
-    Value val = vm->pop();
+    Value val = vm->peek(0);
     if (!val.isNumber()) {
         vm->runtimeError("math.abs expects number argument");
         return false;
     }
-    vm->push(Value::number(std::abs(val.asNumber())));
+    double res = std::abs(val.asNumber());
+    vm->pop();
+    vm->push(Value::number(res));
     return true;
 }
 
@@ -41,12 +45,14 @@ bool native_math_floor(VM* vm, int argCount) {
         vm->runtimeError("math.floor expects 1 argument");
         return false;
     }
-    Value val = vm->pop();
+    Value val = vm->peek(0);
     if (!val.isNumber()) {
         vm->runtimeError("math.floor expects number argument");
         return false;
     }
-    vm->push(Value::number(std::floor(val.asNumber())));
+    double res = std::floor(val.asNumber());
+    vm->pop();
+    vm->push(Value::number(res));
     return true;
 }
 
@@ -55,12 +61,14 @@ bool native_math_ceil(VM* vm, int argCount) {
         vm->runtimeError("math.ceil expects 1 argument");
         return false;
     }
-    Value val = vm->pop();
+    Value val = vm->peek(0);
     if (!val.isNumber()) {
         vm->runtimeError("math.ceil expects number argument");
         return false;
     }
-    vm->push(Value::number(std::ceil(val.asNumber())));
+    double res = std::ceil(val.asNumber());
+    vm->pop();
+    vm->push(Value::number(res));
     return true;
 }
 
@@ -69,12 +77,14 @@ bool native_math_sin(VM* vm, int argCount) {
         vm->runtimeError("math.sin expects 1 argument");
         return false;
     }
-    Value val = vm->pop();
+    Value val = vm->peek(0);
     if (!val.isNumber()) {
         vm->runtimeError("math.sin expects number argument");
         return false;
     }
-    vm->push(Value::number(std::sin(val.asNumber())));
+    double res = std::sin(val.asNumber());
+    vm->pop();
+    vm->push(Value::number(res));
     return true;
 }
 
@@ -83,12 +93,14 @@ bool native_math_cos(VM* vm, int argCount) {
         vm->runtimeError("math.cos expects 1 argument");
         return false;
     }
-    Value val = vm->pop();
+    Value val = vm->peek(0);
     if (!val.isNumber()) {
         vm->runtimeError("math.cos expects number argument");
         return false;
     }
-    vm->push(Value::number(std::cos(val.asNumber())));
+    double res = std::cos(val.asNumber());
+    vm->pop();
+    vm->push(Value::number(res));
     return true;
 }
 
@@ -97,12 +109,14 @@ bool native_math_tan(VM* vm, int argCount) {
         vm->runtimeError("math.tan expects 1 argument");
         return false;
     }
-    Value val = vm->pop();
+    Value val = vm->peek(0);
     if (!val.isNumber()) {
         vm->runtimeError("math.tan expects number argument");
         return false;
     }
-    vm->push(Value::number(std::tan(val.asNumber())));
+    double res = std::tan(val.asNumber());
+    vm->pop();
+    vm->push(Value::number(res));
     return true;
 }
 
@@ -111,12 +125,14 @@ bool native_math_exp(VM* vm, int argCount) {
         vm->runtimeError("math.exp expects 1 argument");
         return false;
     }
-    Value val = vm->pop();
+    Value val = vm->peek(0);
     if (!val.isNumber()) {
         vm->runtimeError("math.exp expects number argument");
         return false;
     }
-    vm->push(Value::number(std::exp(val.asNumber())));
+    double res = std::exp(val.asNumber());
+    vm->pop();
+    vm->push(Value::number(res));
     return true;
 }
 
@@ -125,12 +141,14 @@ bool native_math_log(VM* vm, int argCount) {
         vm->runtimeError("math.log expects 1 argument");
         return false;
     }
-    Value val = vm->pop();
+    Value val = vm->peek(0);
     if (!val.isNumber()) {
         vm->runtimeError("math.log expects number argument");
         return false;
     }
-    vm->push(Value::number(std::log(val.asNumber())));
+    double res = std::log(val.asNumber());
+    vm->pop();
+    vm->push(Value::number(res));
     return true;
 }
 
@@ -142,7 +160,7 @@ bool native_math_min(VM* vm, int argCount) {
 
     double minVal = INFINITY;
     for (int i = 0; i < argCount; i++) {
-        Value val = vm->pop();
+        Value val = vm->peek(i);
         if (!val.isNumber()) {
             vm->runtimeError("math.min expects number arguments");
             return false;
@@ -150,6 +168,7 @@ bool native_math_min(VM* vm, int argCount) {
         minVal = std::min(minVal, val.asNumber());
     }
 
+    for(int i=0; i<argCount; i++) vm->pop();
     vm->push(Value::number(minVal));
     return true;
 }
@@ -162,7 +181,7 @@ bool native_math_max(VM* vm, int argCount) {
 
     double maxVal = -INFINITY;
     for (int i = 0; i < argCount; i++) {
-        Value val = vm->pop();
+        Value val = vm->peek(i);
         if (!val.isNumber()) {
             vm->runtimeError("math.max expects number arguments");
             return false;
@@ -170,16 +189,18 @@ bool native_math_max(VM* vm, int argCount) {
         maxVal = std::max(maxVal, val.asNumber());
     }
 
+    for(int i=0; i<argCount; i++) vm->pop();
     vm->push(Value::number(maxVal));
     return true;
 }
 
 bool native_math_random(VM* vm, int argCount) {
+    Value result = Value::nil();
     if (argCount == 0) {
         std::uniform_real_distribution<double> dist(0.0, 1.0);
-        vm->push(Value::number(dist(rng)));
+        result = Value::number(dist(rng));
     } else if (argCount == 1) {
-        Value nVal = vm->pop();
+        Value nVal = vm->peek(0);
         if (!nVal.isNumber()) {
             vm->runtimeError("math.random expects number argument");
             return false;
@@ -190,10 +211,10 @@ bool native_math_random(VM* vm, int argCount) {
             return false;
         }
         std::uniform_int_distribution<int> dist(1, n);
-        vm->push(Value::number(dist(rng)));
+        result = Value::number(dist(rng));
     } else if (argCount == 2) {
-        Value mVal = vm->pop();
-        Value nVal = vm->pop();
+        Value mVal = vm->peek(0);
+        Value nVal = vm->peek(1);
         if (!nVal.isNumber() || !mVal.isNumber()) {
             vm->runtimeError("math.random expects number arguments");
             return false;
@@ -205,41 +226,32 @@ bool native_math_random(VM* vm, int argCount) {
             return false;
         }
         std::uniform_int_distribution<int> dist(n, m);
-        vm->push(Value::number(dist(rng)));
+        result = Value::number(dist(rng));
     } else {
         vm->runtimeError("math.random expects 0, 1, or 2 arguments");
         return false;
     }
+    
+    for(int i=0; i<argCount; i++) vm->pop();
+    vm->push(result);
     return true;
 }
 
 bool native_math_randomseed(VM* vm, int argCount) {
     if (argCount == 0) {
         rng.seed(std::random_device{}());
-        vm->push(Value::nil());
+        vm->push(Value::number(0));
+        vm->push(Value::number(0));
         return true;
     }
     
-    // Supports Lua 5.4+ randomseed(x, y) if needed, but 5.5 tests use it.
-    // For now, just use the first argument.
     Value seedVal = vm->peek(argCount - 1);
     if (seedVal.isNumber()) {
         rng.seed(static_cast<uint32_t>(seedVal.asNumber()));
     }
     
-    // Return the seed(s) as per Lua 5.4+? 
-    // all.lua does: local random_x, random_y = math.randomseed()
-    // If called with no args, it should return the seeds used.
-    
-    // Let's just return nil for now or 0 if no args to satisfy the assignment.
-    if (argCount == 0) {
-        vm->push(Value::number(0));
-        vm->push(Value::number(0));
-    } else {
-        // Pop args
-        for(int i=0; i<argCount; i++) vm->pop();
-        vm->push(Value::nil());
-    }
+    for(int i=0; i<argCount; i++) vm->pop();
+    vm->push(Value::nil());
     
     return true;
 }
@@ -264,4 +276,8 @@ void registerMathLibrary(VM* vm, TableObject* mathTable) {
     // Add math.pi constant
     size_t piIndex = vm->internString("pi");
     mathTable->set(Value::runtimeString(piIndex), Value::number(M_PI));
+
+    // Add math.huge constant
+    size_t hugeIndex = vm->internString("huge");
+    mathTable->set(Value::runtimeString(hugeIndex), Value::number(HUGE_VAL));
 }

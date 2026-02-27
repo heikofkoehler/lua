@@ -91,6 +91,7 @@ public:
 
     // File operations
     size_t openFile(const std::string& filename, const std::string& mode);
+    size_t registerFile(FileObject* file);
     FileObject* getFile(size_t index);
     void closeFile(size_t index);
 
@@ -122,6 +123,7 @@ public:
     CoroutineObject* currentCoroutine() { return currentCoroutine_; }
 
     // Garbage collection
+    size_t bytesAllocated() const { return bytesAllocated_; }
     void collectGarbage();
     void markRoots();
     void markValue(const Value& value);

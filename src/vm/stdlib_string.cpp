@@ -13,8 +13,6 @@ bool native_string_format(VM* vm, int argCount) {
         return false;
     }
 
-    // Arguments are on stack: [..., format, arg1, arg2, ...]
-    // peek(argCount - 1) is format string
     Value fmtVal = vm->peek(argCount - 1);
     if (!fmtVal.isString()) {
         vm->runtimeError("string.format expects string as first argument");
@@ -23,19 +21,20 @@ bool native_string_format(VM* vm, int argCount) {
 
     std::string fmt = vm->getStringValue(fmtVal);
     std::string result;
-    int currentArg = argCount - 2; // Index into stack from top (0 is last arg)
+    int argIndex = 0; // index of the argument to use (0 = first arg AFTER format)
 
     for (size_t i = 0; i < fmt.length(); i++) {
         if (fmt[i] == '%' && i + 1 < fmt.length() && fmt[i+1] != '%') {
             i++;
             char spec = fmt[i];
             
-            if (currentArg < 0) {
+            if (argIndex >= argCount - 1) {
                 vm->runtimeError("bad argument to 'format' (no value)");
                 return false;
             }
             
-            Value val = vm->peek(currentArg--);
+            Value val = vm->peek(argCount - 2 - argIndex);
+            argIndex++;
             char buffer[1024];
 
             switch (spec) {
@@ -64,9 +63,7 @@ bool native_string_format(VM* vm, int argCount) {
         }
     }
 
-    // Pop arguments
     for (int i = 0; i < argCount; i++) vm->pop();
-
     vm->push(Value::runtimeString(vm->internString(result)));
     return true;
 }
@@ -76,16 +73,15 @@ bool native_string_len(VM* vm, int argCount) {
         vm->runtimeError("string.len expects 1 argument");
         return false;
     }
-    Value strVal = vm->pop();
-    if (!strVal.isString() && !strVal.isRuntimeString()) {
+    Value strVal = vm->peek(0);
+    if (!strVal.isString()) {
         vm->runtimeError("string.len expects string argument");
         return false;
     }
-    // Check runtime string first (isString() returns true for both types)
-    StringObject* str = strVal.isRuntimeString()
-        ? vm->getString(strVal.asStringIndex())
-        : vm->rootChunk()->getString(strVal.asStringIndex());
-    vm->push(Value::number(str->length()));
+    
+    size_t len = vm->getStringValue(strVal).length();
+    vm->pop();
+    vm->push(Value::number(static_cast<double>(len)));
     return true;
 }
 
@@ -95,11 +91,11 @@ bool native_string_sub(VM* vm, int argCount) {
         return false;
     }
 
-    Value endVal = (argCount == 3) ? vm->pop() : Value::nil();
-    Value startVal = vm->pop();
-    Value strVal = vm->pop();
+    Value endVal = (argCount == 3) ? vm->peek(0) : Value::nil();
+    Value startVal = (argCount >= 2) ? vm->peek(argCount - 2) : Value::nil();
+    Value strVal = vm->peek(argCount - 1);
 
-    if (!strVal.isString() && !strVal.isRuntimeString()) {
+    if (!strVal.isString()) {
         vm->runtimeError("string.sub expects string as first argument");
         return false;
     }
@@ -108,30 +104,23 @@ bool native_string_sub(VM* vm, int argCount) {
         return false;
     }
 
-    // Check runtime string first (isString() returns true for both types)
-    StringObject* str = strVal.isRuntimeString()
-        ? vm->getString(strVal.asStringIndex())
-        : vm->rootChunk()->getString(strVal.asStringIndex());
-
+    std::string s = vm->getStringValue(strVal);
     int start = static_cast<int>(startVal.asNumber());
-    int end = endVal.isNil() ? str->length() : static_cast<int>(endVal.asNumber());
+    int end = endVal.isNil() ? s.length() : static_cast<int>(endVal.asNumber());
 
-    // Lua uses 1-based indexing
-    // Negative indices count from end
-    if (start < 0) start = str->length() + start + 1;
-    if (end < 0) end = str->length() + end + 1;
+    if (start < 0) start = s.length() + start + 1;
+    if (end < 0) end = s.length() + end + 1;
 
-    // Clamp to valid range
-    start = std::max(1, std::min(start, static_cast<int>(str->length()) + 1));
-    end = std::max(0, std::min(end, static_cast<int>(str->length())));
+    start = std::max(1, std::min(start, static_cast<int>(s.length()) + 1));
+    end = std::max(0, std::min(end, static_cast<int>(s.length())));
 
-    if (start > end) {
-        vm->push(Value::runtimeString(vm->internString("")));
-    } else {
-        std::string substr(str->chars() + start - 1, end - start + 1);
-        vm->push(Value::runtimeString(vm->internString(substr)));
+    std::string res;
+    if (start <= end) {
+        res = s.substr(start - 1, end - start + 1);
     }
 
+    for (int i = 0; i < argCount; i++) vm->pop();
+    vm->push(Value::runtimeString(vm->internString(res)));
     return true;
 }
 
@@ -140,19 +129,17 @@ bool native_string_upper(VM* vm, int argCount) {
         vm->runtimeError("string.upper expects 1 argument");
         return false;
     }
-    Value strVal = vm->pop();
-    if (!strVal.isString() && !strVal.isRuntimeString()) {
+    Value strVal = vm->peek(0);
+    if (!strVal.isString()) {
         vm->runtimeError("string.upper expects string argument");
         return false;
     }
-    // Check runtime string first (isString() returns true for both types)
-    StringObject* str = strVal.isRuntimeString()
-        ? vm->getString(strVal.asStringIndex())
-        : vm->rootChunk()->getString(strVal.asStringIndex());
-
-    std::string upper(str->chars(), str->length());
-    std::transform(upper.begin(), upper.end(), upper.begin(), ::toupper);
-    vm->push(Value::runtimeString(vm->internString(upper)));
+    
+    std::string s = vm->getStringValue(strVal);
+    std::transform(s.begin(), s.end(), s.begin(), ::toupper);
+    
+    vm->pop();
+    vm->push(Value::runtimeString(vm->internString(s)));
     return true;
 }
 
@@ -161,19 +148,17 @@ bool native_string_lower(VM* vm, int argCount) {
         vm->runtimeError("string.lower expects 1 argument");
         return false;
     }
-    Value strVal = vm->pop();
-    if (!strVal.isString() && !strVal.isRuntimeString()) {
+    Value strVal = vm->peek(0);
+    if (!strVal.isString()) {
         vm->runtimeError("string.lower expects string argument");
         return false;
     }
-    // Check runtime string first (isString() returns true for both types)
-    StringObject* str = strVal.isRuntimeString()
-        ? vm->getString(strVal.asStringIndex())
-        : vm->rootChunk()->getString(strVal.asStringIndex());
-
-    std::string lower(str->chars(), str->length());
-    std::transform(lower.begin(), lower.end(), lower.begin(), ::tolower);
-    vm->push(Value::runtimeString(vm->internString(lower)));
+    
+    std::string s = vm->getStringValue(strVal);
+    std::transform(s.begin(), s.end(), s.begin(), ::tolower);
+    
+    vm->pop();
+    vm->push(Value::runtimeString(vm->internString(s)));
     return true;
 }
 
@@ -182,19 +167,17 @@ bool native_string_reverse(VM* vm, int argCount) {
         vm->runtimeError("string.reverse expects 1 argument");
         return false;
     }
-    Value strVal = vm->pop();
-    if (!strVal.isString() && !strVal.isRuntimeString()) {
+    Value strVal = vm->peek(0);
+    if (!strVal.isString()) {
         vm->runtimeError("string.reverse expects string argument");
         return false;
     }
-    // Check runtime string first (isString() returns true for both types)
-    StringObject* str = strVal.isRuntimeString()
-        ? vm->getString(strVal.asStringIndex())
-        : vm->rootChunk()->getString(strVal.asStringIndex());
-
-    std::string reversed(str->chars(), str->length());
-    std::reverse(reversed.begin(), reversed.end());
-    vm->push(Value::runtimeString(vm->internString(reversed)));
+    
+    std::string s = vm->getStringValue(strVal);
+    std::reverse(s.begin(), s.end());
+    
+    vm->pop();
+    vm->push(Value::runtimeString(vm->internString(s)));
     return true;
 }
 
@@ -204,25 +187,24 @@ bool native_string_byte(VM* vm, int argCount) {
         return false;
     }
 
-    Value posVal = (argCount == 2) ? vm->pop() : Value::number(1);
-    Value strVal = vm->pop();
+    Value posVal = (argCount == 2) ? vm->peek(0) : Value::number(1);
+    Value strVal = vm->peek(argCount - 1);
 
-    if (!strVal.isString() && !strVal.isRuntimeString()) {
+    if (!strVal.isString()) {
         vm->runtimeError("string.byte expects string argument");
         return false;
     }
 
-    // Check runtime string first (isString() returns true for both types)
-    StringObject* str = strVal.isRuntimeString()
-        ? vm->getString(strVal.asStringIndex())
-        : vm->rootChunk()->getString(strVal.asStringIndex());
-
+    std::string s = vm->getStringValue(strVal);
     int pos = static_cast<int>(posVal.asNumber());
-    if (pos < 1 || pos > static_cast<int>(str->length())) {
-        vm->push(Value::nil());
-    } else {
-        vm->push(Value::number(static_cast<unsigned char>(str->chars()[pos - 1])));
+    
+    Value res = Value::nil();
+    if (pos >= 1 && pos <= static_cast<int>(s.length())) {
+        res = Value::number(static_cast<unsigned char>(s[pos - 1]));
     }
+    
+    for (int i = 0; i < argCount; i++) vm->pop();
+    vm->push(res);
     return true;
 }
 
@@ -230,9 +212,8 @@ bool native_string_char(VM* vm, int argCount) {
     std::string result;
     result.reserve(argCount);
 
-    // Pop arguments in reverse order
     for (int i = 0; i < argCount; i++) {
-        Value val = vm->pop();
+        Value val = vm->peek(argCount - 1 - i);
         if (!val.isNumber()) {
             vm->runtimeError("string.char expects number arguments");
             return false;
@@ -240,9 +221,7 @@ bool native_string_char(VM* vm, int argCount) {
         result.push_back(static_cast<char>(val.asNumber()));
     }
 
-    // Reverse since we popped in reverse order
-    std::reverse(result.begin(), result.end());
-
+    for (int i = 0; i < argCount; i++) vm->pop();
     vm->push(Value::runtimeString(vm->internString(result)));
     return true;
 }
@@ -252,54 +231,54 @@ bool native_string_find(VM* vm, int argCount) {
         vm->runtimeError("string.find expects 2 or 3 arguments");
         return false;
     }
-    Value startVal = (argCount == 3) ? vm->pop() : Value::number(1);
-    Value patternVal = vm->pop();
-    Value strVal = vm->pop();
+    Value startVal = (argCount == 3) ? vm->peek(0) : Value::number(1);
+    Value patternVal = vm->peek(argCount - 2);
+    Value strVal = vm->peek(argCount - 1);
 
-    if ((!strVal.isString() && !strVal.isRuntimeString()) || 
-        (!patternVal.isString() && !patternVal.isRuntimeString())) {
+    if (!strVal.isString() || !patternVal.isString()) {
         vm->runtimeError("string.find expects string arguments");
         return false;
     }
-    if (!startVal.isNumber()) {
-        vm->runtimeError("string.find expects number as third argument");
-        return false;
-    }
-
+    
     std::string s = vm->getStringValue(strVal);
     std::string p = vm->getStringValue(patternVal);
     int start = static_cast<int>(startVal.asNumber());
 
-    // Lua uses 1-based indexing
     if (start < 1) start = 1;
-    if (start > static_cast<int>(s.length()) + 1) {
-        vm->push(Value::nil());
-        return true;
+    
+    Value res1 = Value::nil();
+    Value res2 = Value::nil();
+    bool found = false;
+
+    if (start <= static_cast<int>(s.length()) + 1) {
+        size_t pos = s.find(p, start - 1);
+        if (pos != std::string::npos) {
+            res1 = Value::number(pos + 1);
+            res2 = Value::number(pos + p.length());
+            found = true;
+        }
     }
 
-    size_t pos = s.find(p, start - 1);
-    if (pos == std::string::npos) {
-        vm->push(Value::nil());
+    for (int i = 0; i < argCount; i++) vm->pop();
+    if (found) {
+        vm->push(res1);
+        vm->push(res2);
     } else {
-        vm->push(Value::number(pos + 1));
-        vm->push(Value::number(pos + p.length()));
+        vm->push(Value::nil());
     }
     return true;
 }
-
 
 bool native_string_gsub(VM* vm, int argCount) {
     if (argCount < 3) {
         vm->runtimeError("string.gsub expects at least 3 arguments");
         return false;
     }
-    Value replVal = vm->pop();
-    Value patternVal = vm->pop();
-    Value strVal = vm->pop();
+    Value replVal = vm->peek(0);
+    Value patternVal = vm->peek(1);
+    Value strVal = vm->peek(2);
 
-    if ((!strVal.isString() && !strVal.isRuntimeString()) || 
-        (!patternVal.isString() && !patternVal.isRuntimeString()) ||
-        (!replVal.isString() && !replVal.isRuntimeString())) {
+    if (!strVal.isString() || !patternVal.isString() || !replVal.isString()) {
         vm->runtimeError("string.gsub expects string arguments");
         return false;
     }
@@ -317,6 +296,7 @@ bool native_string_gsub(VM* vm, int argCount) {
         count++;
     }
 
+    for (int i = 0; i < argCount; i++) vm->pop();
     vm->push(Value::runtimeString(vm->internString(result)));
     vm->push(Value::number(count));
     return true;
@@ -327,29 +307,24 @@ bool native_string_packsize(VM* vm, int argCount) {
         vm->runtimeError("string.packsize expects at least 1 argument");
         return false;
     }
-    Value fmtVal = vm->pop();
+    Value fmtVal = vm->peek(0);
     if (!fmtVal.isString()) {
         vm->runtimeError("string.packsize expects string format");
         return false;
     }
     
-    std::string fmt = vm->getStringValue(fmtVal);
-    // Stub for all.lua tests: string.packsize("j") * 8, string.packsize("n") * 8
-    // "j" is lua_Integer, "n" is lua_Number. In this VM, numbers are doubles (8 bytes).
-    // Let's assume 8 bytes for both for simplicity.
+    for (int i = 0; i < argCount; i++) vm->pop();
     vm->push(Value::number(8));
     return true;
 }
 
 bool native_string_pack(VM* vm, int argCount) {
-    // Stub implementation
     for(int i=0; i<argCount; i++) vm->pop();
     vm->push(Value::runtimeString(vm->internString("packed_data_stub")));
     return true;
 }
 
 bool native_string_dump(VM* vm, int argCount) {
-    // Stub implementation: string.dump(func [, strip])
     for(int i=0; i<argCount; i++) vm->pop();
     vm->push(Value::runtimeString(vm->internString("function_bytecode_stub")));
     return true;
@@ -372,4 +347,3 @@ void registerStringLibrary(VM* vm, TableObject* stringTable) {
     vm->addNativeToTable(stringTable, "pack", native_string_pack);
     vm->addNativeToTable(stringTable, "dump", native_string_dump);
 }
-

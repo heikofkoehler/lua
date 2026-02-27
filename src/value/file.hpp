@@ -15,6 +15,10 @@ class FileObject : public GCObject {
 public:
     // Open file with mode ("r" = read, "w" = write, "a" = append)
     FileObject(const std::string& filename, const std::string& mode);
+    
+    // Wrap existing stream (e.g. std::cout, std::cin)
+    FileObject(std::iostream* stream, const std::string& name);
+    
     ~FileObject();
 
     // Disable copy, allow move
@@ -25,6 +29,9 @@ public:
 
     // Check if file is open
     bool isOpen() const;
+
+    // Check if EOF reached
+    bool isEOF() const;
 
     // Write string to file
     bool write(const std::string& data);
@@ -47,8 +54,10 @@ public:
 private:
     std::string filename_;
     std::string mode_;
-    std::unique_ptr<std::fstream> stream_;
+    std::unique_ptr<std::fstream> ownedStream_;
+    std::iostream* stream_;
     bool isOpen_;
+    bool isOwned_;
 };
 
 #endif // LUA_FILE_HPP

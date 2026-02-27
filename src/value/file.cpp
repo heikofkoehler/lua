@@ -1,27 +1,33 @@
 #include "value/file.hpp"
 #include <sstream>
+#include <iostream>
 
 FileObject::FileObject(const std::string& filename, const std::string& mode)
-    : GCObject(GCObject::Type::FILE), filename_(filename), mode_(mode), isOpen_(false) {
+    : GCObject(GCObject::Type::FILE), filename_(filename), mode_(mode), isOpen_(false), isOwned_(true) {
 
-    stream_ = std::make_unique<std::fstream>();
+    ownedStream_ = std::make_unique<std::fstream>();
+    stream_ = ownedStream_.get();
 
     // Parse mode and open file
     if (mode == "r") {
-        stream_->open(filename, std::ios::in);
+        ownedStream_->open(filename, std::ios::in);
     } else if (mode == "w") {
-        stream_->open(filename, std::ios::out | std::ios::trunc);
+        ownedStream_->open(filename, std::ios::out | std::ios::trunc);
     } else if (mode == "a") {
-        stream_->open(filename, std::ios::out | std::ios::app);
+        ownedStream_->open(filename, std::ios::out | std::ios::app);
     } else if (mode == "r+") {
-        stream_->open(filename, std::ios::in | std::ios::out);
+        ownedStream_->open(filename, std::ios::in | std::ios::out);
     } else if (mode == "w+") {
-        stream_->open(filename, std::ios::in | std::ios::out | std::ios::trunc);
+        ownedStream_->open(filename, std::ios::in | std::ios::out | std::ios::trunc);
     } else if (mode == "a+") {
-        stream_->open(filename, std::ios::in | std::ios::out | std::ios::app);
+        ownedStream_->open(filename, std::ios::in | std::ios::out | std::ios::app);
     }
 
-    isOpen_ = stream_->is_open();
+    isOpen_ = ownedStream_->is_open();
+}
+
+FileObject::FileObject(std::iostream* stream, const std::string& name)
+    : GCObject(GCObject::Type::FILE), filename_(name), mode_(""), stream_(stream), isOpen_(true), isOwned_(false) {
 }
 
 FileObject::~FileObject() {
@@ -29,7 +35,11 @@ FileObject::~FileObject() {
 }
 
 bool FileObject::isOpen() const {
-    return isOpen_ && stream_ && stream_->is_open();
+    return isOpen_ && stream_ && (isOwned_ ? ownedStream_->is_open() : true);
+}
+
+bool FileObject::isEOF() const {
+    return stream_ && stream_->eof();
 }
 
 bool FileObject::write(const std::string& data) {
@@ -58,8 +68,10 @@ std::string FileObject::readLine() {
 }
 
 void FileObject::close() {
-    if (isOpen_ && stream_) {
-        stream_->close();
+    if (isOpen_) {
+        if (isOwned_ && ownedStream_) {
+            ownedStream_->close();
+        }
         isOpen_ = false;
     }
 }

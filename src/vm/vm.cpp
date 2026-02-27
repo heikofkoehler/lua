@@ -320,6 +320,10 @@ void VM::closeUpvalues(size_t lastStackIndex) {
 
 size_t VM::openFile(const std::string& filename, const std::string& mode) {
     FileObject* file = new FileObject(filename, mode);
+    return registerFile(file);
+}
+
+size_t VM::registerFile(FileObject* file) {
     addObject(file);  // Register with GC
     files_.push_back(file);
     return files_.size() - 1;
@@ -421,6 +425,13 @@ void VM::initStandardLibrary() {
     registerOSLibrary(this, osTable);
     globals_["os"] = Value::table(osTableIdx);
 
+    // Create 'io' table
+    size_t ioTableIdx = createTable();
+    TableObject* ioTable = getTable(ioTableIdx);
+    void registerIOLibrary(VM* vm, TableObject* ioTable);
+    registerIOLibrary(this, ioTable);
+    globals_["io"] = Value::table(ioTableIdx);
+
     // Create 'socket' table
     size_t socketTableIdx = createTable();
     TableObject* socketTable = getTable(socketTableIdx);
@@ -456,6 +467,16 @@ void VM::initStandardLibrary() {
         "__coroutine_wrap = nil\n";
 
     runSource(wrapScript, "coroutine_wrap_init");
+
+    // Register _G (global environment)
+    size_t gTableIdx = createTable();
+    TableObject* gTable = getTable(gTableIdx);
+    globals_["_G"] = Value::table(gTableIdx);
+    
+    // Copy all current globals into _G table
+    for (const auto& pair : globals_) {
+        gTable->set(Value::runtimeString(internString(pair.first)), pair.second);
+    }
 }
 
 CallFrame& VM::currentFrame() {
@@ -677,13 +698,7 @@ bool VM::run(size_t targetFrameCount) {
                 Value b = pop();
                 Value a = pop();
                 if (a.isNumber() && b.isNumber()) {
-                    double divisor = b.asNumber();
-                    if (divisor == 0.0) {
-                        runtimeError("Division by zero");
-                        push(Value::nil());
-                    } else {
-                        push(Value::number(a.asNumber() / divisor));
-                    }
+                    push(Value::number(a.asNumber() / b.asNumber()));
                 } else if (!callBinaryMetamethod(a, b, "__div")) {
                     runtimeError("attempt to perform arithmetic on " + a.typeToString() + " and " + b.typeToString());
                 }

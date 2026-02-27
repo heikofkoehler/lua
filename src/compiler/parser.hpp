@@ -40,7 +40,6 @@ private:
 
     // Parsing methods (in order of precedence, lowest to highest)
     std::unique_ptr<StmtNode> statement();
-    std::unique_ptr<StmtNode> printStatement();
     std::unique_ptr<StmtNode> expressionStatement();
     std::unique_ptr<StmtNode> assignmentOrExpression();
     std::unique_ptr<StmtNode> localDeclaration();

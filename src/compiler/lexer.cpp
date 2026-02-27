@@ -23,7 +23,6 @@ const std::unordered_map<std::string, TokenType> Lexer::keywords_ = {
     {"true",     TokenType::TRUE},
     {"until",    TokenType::UNTIL},
     {"while",    TokenType::WHILE},
-    {"print",    TokenType::PRINT},
 };
 
 Lexer::Lexer(const std::string& source)

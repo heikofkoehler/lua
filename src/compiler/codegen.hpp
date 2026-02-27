@@ -27,7 +27,6 @@ public:
     void visitCall(CallExprNode* node) override;
     void visitTableConstructor(TableConstructorNode* node) override;
     void visitIndexExpr(IndexExprNode* node) override;
-    void visitPrintStmt(PrintStmtNode* node) override;
     void visitExprStmt(ExprStmtNode* node) override;
     void visitAssignmentStmt(AssignmentStmtNode* node) override;
     void visitIndexAssignmentStmt(IndexAssignmentStmtNode* node) override;
