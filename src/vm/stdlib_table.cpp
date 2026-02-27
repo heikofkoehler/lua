@@ -251,7 +251,7 @@ bool native_table_sort(VM* vm, int argCount) {
             vm->push(b);
             
             size_t prevFrames = vm->currentCoroutine()->frames.size();
-            if (!vm->callValue(2, 1)) {
+            if (!vm->callValue(2, 2)) { // Expect 1 result (1+1=2)
                 sortError = true;
                 return false;
             }

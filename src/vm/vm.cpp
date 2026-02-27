@@ -753,7 +753,7 @@ bool VM::run(size_t targetFrameCount) {
                     if (!func.isNil()) {
                         push(func);
                         push(a);
-                        callValue(1, 1);
+                        callValue(1, 2); // Expect 1 result (1+1=2)
                     } else {
                         runtimeError("attempt to perform arithmetic on " + a.typeToString());
                     }
@@ -988,7 +988,7 @@ bool VM::run(size_t targetFrameCount) {
 
                 // Adjust return values based on what caller expects
                 if (expectedRetCount > 0) {
-                    size_t expected = static_cast<size_t>(expectedRetCount);
+                    size_t expected = static_cast<size_t>(expectedRetCount - 1);
                     if (returnValues.size() > expected) {
                         // Keep only the first expected values
                         returnValues.resize(expected);
@@ -1069,7 +1069,7 @@ bool VM::run(size_t targetFrameCount) {
                                 push(indexMethod);
                                 push(tableValue);
                                 push(key);
-                                callValue(2, 1);
+                                callValue(2, 2); // Expect 1 result (1 + 1 = 2)
                             } else if (indexMethod.isTable()) {
                                 TableObject* indexTable = getTable(indexMethod.asTableIndex());
                                 push(indexTable->get(key));
@@ -1108,7 +1108,7 @@ bool VM::run(size_t targetFrameCount) {
                         push(tableValue);
                         push(key);
                         push(value);
-                        callValue(3, 0);
+                        callValue(3, 1); // Expect 0 results (0 + 1 = 1)
                     } else if (newIndex.isTable()) {
                         TableObject* newIndexTable = getTable(newIndex.asTableIndex());
                         newIndexTable->set(key, value);
@@ -1258,15 +1258,16 @@ bool VM::run(size_t targetFrameCount) {
                     }
                     currentCoroutine_->lastResultCount = varargs.size();
                 } else {
-                    // Push exactly retCount values
-                    for (int i = 0; i < (int)retCount; i++) {
+                    // Push exactly retCount - 1 values
+                    int count = (int)retCount - 1;
+                    for (int i = 0; i < count; i++) {
                         if (i < (int)varargs.size()) {
                             push(varargs[i]);
                         } else {
                             push(Value::nil());
                         }
                     }
-                    currentCoroutine_->lastResultCount = retCount;
+                    currentCoroutine_->lastResultCount = count;
                 }
                 break;
             }
@@ -1410,7 +1411,7 @@ Value VM::getMetamethod(const Value& obj, const std::string& method) {
 
 bool VM::pcall(int argCount) {
     size_t prevFrames = currentCoroutine_->frames.size();
-    size_t stackSizeBefore = currentCoroutine_->stack.size() - argCount - 1;
+    size_t stackSizeBefore = currentCoroutine_->stack.size() - argCount; // Leave pcall on stack
 
     bool prevPcall = inPcall_;
     inPcall_ = true;
@@ -1494,7 +1495,7 @@ bool VM::xpcall(int argCount) {
     
     // Save error handler
     Value msgh = peek(argCount - 2);
-    size_t stackSizeBefore = currentCoroutine_->stack.size() - argCount - 1;
+    size_t stackSizeBefore = currentCoroutine_->stack.size() - argCount; // Leave xpcall on stack
 
     bool prevPcall = inPcall_;
     inPcall_ = true;
@@ -1538,7 +1539,7 @@ bool VM::xpcall(int argCount) {
         push(Value::runtimeString(internString(lastErrorMessage_)));
         
         hadError_ = false; // Prepare to call error handler
-        if (callValue(1, 1)) {
+        if (callValue(1, 2)) { // Expect 1 result (1+1=2)
             // Error handler should return the new error object
             // Results of callValue are already pushed
         } else {
@@ -1600,7 +1601,7 @@ bool VM::callValue(int argCount, int retCount) {
 
         // Adjust result count based on what caller expects
         if (retCount > 0) {
-            size_t expected = static_cast<size_t>(retCount);
+            size_t expected = static_cast<size_t>(retCount - 1);
             if (results.size() > expected) {
                 // Truncate
                 results.resize(expected);
@@ -1725,7 +1726,7 @@ bool VM::callBinaryMetamethod(const Value& a, const Value& b, const std::string&
     push(func);
     push(a);
     push(b);
-    return callValue(2, 1);
+    return callValue(2, 2); // Expect 1 result (1+1=2)
 }
 
 Value VM::add(const Value& a, const Value& b) {

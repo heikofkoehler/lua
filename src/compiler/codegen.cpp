@@ -3,7 +3,7 @@
 #include "value/string.hpp"
 
 CodeGenerator::CodeGenerator()
-    : chunk_(nullptr), currentLine_(1), scopeDepth_(0), localCount_(0), enclosingCompiler_(nullptr), expectedRetCount_(1) {}
+    : chunk_(nullptr), currentLine_(1), scopeDepth_(0), localCount_(0), enclosingCompiler_(nullptr), expectedRetCount_(2) {}
 
 std::unique_ptr<Chunk> CodeGenerator::generate(ProgramNode* program) {
     chunk_ = std::make_unique<Chunk>();
@@ -205,11 +205,15 @@ void CodeGenerator::visitVararg(VarargExprNode* node) {
 void CodeGenerator::visitExprStmt(ExprStmtNode* node) {
     setLine(node->line());
 
-    // Compile expression
+    uint8_t oldRetCount = expectedRetCount_;
+    expectedRetCount_ = 1; // Zero results expected (0 + 1 = 1)
     node->expr()->accept(*this);
+    expectedRetCount_ = oldRetCount;
 
-    // Pop the result (expression statements discard their value)
-    emitOpCode(OpCode::OP_POP);
+    // If it was NOT a call, it pushed 1 value, so we still need to pop.
+    if (dynamic_cast<CallExprNode*>(node->expr()) == nullptr) {
+        emitOpCode(OpCode::OP_POP);
+    }
 }
 
 void CodeGenerator::visitAssignmentStmt(AssignmentStmtNode* node) {
@@ -275,7 +279,7 @@ void CodeGenerator::visitMultipleLocalDeclStmt(MultipleLocalDeclStmtNode* node) 
 
     // 1. Evaluate all initializers except the last one
     for (size_t i = 0; i < (initCount > 0 ? initCount - 1 : 0); i++) {
-        expectedRetCount_ = 1;
+        expectedRetCount_ = 2; // ONE
         initializers[i]->accept(*this);
     }
 
@@ -283,9 +287,9 @@ void CodeGenerator::visitMultipleLocalDeclStmt(MultipleLocalDeclStmtNode* node) 
     if (initCount > 0) {
         if (varCount > initCount) {
             // Last expression needs to provide multiple values
-            expectedRetCount_ = static_cast<uint8_t>(varCount - (initCount - 1));
+            expectedRetCount_ = static_cast<uint8_t>(varCount - (initCount - 1) + 1);
         } else {
-            expectedRetCount_ = 1;
+            expectedRetCount_ = 2; // ONE
         }
         initializers[initCount - 1]->accept(*this);
     }
@@ -328,16 +332,16 @@ void CodeGenerator::visitMultipleAssignmentStmt(MultipleAssignmentStmtNode* node
 
     // 1. Evaluate all values except the last one
     for (size_t i = 0; i < (valCount > 0 ? valCount - 1 : 0); i++) {
-        expectedRetCount_ = 1;
+        expectedRetCount_ = 2;
         values[i]->accept(*this);
     }
 
     // 2. Evaluate the last value with multires if needed
     if (valCount > 0) {
         if (varCount > valCount) {
-            expectedRetCount_ = static_cast<uint8_t>(varCount - (valCount - 1));
+            expectedRetCount_ = static_cast<uint8_t>(varCount - (valCount - 1) + 1);
         } else {
-            expectedRetCount_ = 1;
+            expectedRetCount_ = 2;
         }
         values[valCount - 1]->accept(*this);
     }
@@ -710,7 +714,7 @@ void CodeGenerator::visitForInStmt(ForInStmtNode* node) {
     
     // Save current expected return count and set to 3 for iterator init
     uint8_t oldRetCount = expectedRetCount_;
-    expectedRetCount_ = 3;
+    expectedRetCount_ = 4; // 3 results (3+1=4)
     node->iterator()->accept(*this);
     expectedRetCount_ = oldRetCount; // Restore
 
@@ -762,7 +766,7 @@ void CodeGenerator::visitForInStmt(ForInStmtNode* node) {
         // We need varNames.size() return values
         // But we need at least 1 (to check for nil)
         uint8_t retCount = varNames.empty() ? 1 : static_cast<uint8_t>(varNames.size());
-        emitByte(retCount); 
+        emitByte(retCount + 1); // nresults + 1
      
 
     // Values are now on stack.
@@ -837,39 +841,6 @@ void CodeGenerator::visitForInStmt(ForInStmtNode* node) {
 void CodeGenerator::visitCall(CallExprNode* node) {
     setLine(node->line());
 
-    // Check for built-in IO functions (only if callee is a simple variable)
-    auto* varExpr = dynamic_cast<VariableExprNode*>(node->callee());
-    if (varExpr) {
-        const std::string& name = varExpr->name();
-
-        if (name == "io_open" && node->args().size() == 2) {
-            // Compile arguments (filename, mode)
-            node->args()[0]->accept(*this);  // filename
-            node->args()[1]->accept(*this);  // mode
-            emitOpCode(OpCode::OP_IO_OPEN);
-            return;
-        }
-        if (name == "io_write" && node->args().size() == 2) {
-            // Compile arguments (file, data)
-            node->args()[0]->accept(*this);  // file handle
-            node->args()[1]->accept(*this);  // data
-            emitOpCode(OpCode::OP_IO_WRITE);
-            return;
-        }
-        if (name == "io_read" && node->args().size() == 1) {
-            // Compile argument (file)
-            node->args()[0]->accept(*this);  // file handle
-            emitOpCode(OpCode::OP_IO_READ);
-            return;
-        }
-        if (name == "io_close" && node->args().size() == 1) {
-            // Compile argument (file)
-            node->args()[0]->accept(*this);  // file handle
-            emitOpCode(OpCode::OP_IO_CLOSE);
-            return;
-        }
-    }
-
     // Check for coroutine.yield (if callee is coroutine.yield)
     auto* indexExpr = dynamic_cast<IndexExprNode*>(node->callee());
     if (indexExpr) {
@@ -901,7 +872,7 @@ void CodeGenerator::visitCall(CallExprNode* node) {
     // Save current expected return count
     uint8_t oldRetCount = expectedRetCount_;
     
-    expectedRetCount_ = 1; // The callee itself expects 1 result
+    expectedRetCount_ = 2; // The callee itself expects 1 result (1 + 1 = 2)
     node->callee()->accept(*this);
     
     // Compile arguments and push onto stack
@@ -913,10 +884,10 @@ void CodeGenerator::visitCall(CallExprNode* node) {
                              (dynamic_cast<VarargExprNode*>(args[i].get()) != nullptr);
         
         if (i == args.size() - 1 && canBeMultires) {
-            expectedRetCount_ = 0; // Last argument can be multires
+            expectedRetCount_ = 0; // Last argument can be multires (0 = ALL)
             isLastMultires = true;
         } else {
-            expectedRetCount_ = 1;
+            expectedRetCount_ = 2; // ONE (1 + 1 = 2)
         }
         args[i]->accept(*this);
     }
@@ -965,12 +936,12 @@ void CodeGenerator::visitTableConstructor(TableConstructorNode* node) {
             
             uint8_t oldRetCount = expectedRetCount_;
             if (isLast && canBeMultires) {
-                expectedRetCount_ = 0; // Multires
+                expectedRetCount_ = 0; // Multires (0 = ALL)
                 entry.value->accept(*this);
                 expectedRetCount_ = oldRetCount;
                 emitOpCode(OpCode::OP_SET_TABLE_MULTI);
             } else {
-                expectedRetCount_ = 1;
+                expectedRetCount_ = 2; // ONE (1 + 1 = 2)
                 entry.value->accept(*this);
                 expectedRetCount_ = oldRetCount;
                 emitOpCode(OpCode::OP_SET_TABLE);
@@ -981,7 +952,7 @@ void CodeGenerator::visitTableConstructor(TableConstructorNode* node) {
             entry.key->accept(*this);
             
             uint8_t oldRetCount = expectedRetCount_;
-            expectedRetCount_ = 1;
+            expectedRetCount_ = 2; // ONE (1 + 1 = 2)
             entry.value->accept(*this);
             expectedRetCount_ = oldRetCount;
             
@@ -1131,10 +1102,10 @@ void CodeGenerator::visitReturn(ReturnStmtNode* node) {
             
             uint8_t oldRetCount = expectedRetCount_;
             if (i == args.size() - 1 && canBeMultires) {
-                expectedRetCount_ = 0; // All results
+                expectedRetCount_ = 0; // All results (0 = ALL)
                 isLastMultires = true;
             } else {
-                expectedRetCount_ = 1;
+                expectedRetCount_ = 2; // ONE (1 + 1 = 2)
             }
             args[i]->accept(*this);
             expectedRetCount_ = oldRetCount;
@@ -1341,7 +1312,7 @@ void CodeGenerator::pushCompilerState() {
     upvalues_.clear();
     scopeDepth_ = 0;
     localCount_ = 0;
-    expectedRetCount_ = 1; // Default for function body
+    expectedRetCount_ = 2; // Default for function body (one result)
 }
 
 void CodeGenerator::popCompilerState() {

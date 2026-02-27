@@ -85,14 +85,15 @@ bool native_coroutine_resume(VM* vm, int argCount) {
     } else {
         // Not first resume - we are resuming from a yield.
         // We need to adjust the values we just pushed to match what the yield expected.
-        uint8_t expected = co->retCount;
-        if (expected > 0) {
+        uint8_t expectedRetCount = co->retCount;
+        if (expectedRetCount > 0) {
+            size_t expected = static_cast<size_t>(expectedRetCount - 1);
             if (pushedCount > expected) {
                 // Truncate
                 co->stack.resize(co->stack.size() - (pushedCount - expected));
             } else if (pushedCount < expected) {
                 // Pad with nil
-                for (size_t i = 0; i < (size_t)expected - pushedCount; i++) {
+                for (size_t i = 0; i < expected - pushedCount; i++) {
                     co->stack.push_back(Value::nil());
                 }
             }

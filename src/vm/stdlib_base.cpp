@@ -138,7 +138,7 @@ bool native_tostring(VM* vm, int argCount) {
         vm->pop(); // pop val
         vm->push(meta);
         vm->push(val);
-        return vm->callValue(1, 1);
+        return vm->callValue(1, 2); // Expect 1 result (1+1=2)
     }
     
     // Default conversion

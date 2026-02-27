@@ -186,6 +186,15 @@ size_t Chunk::disassembleInstruction(size_t offset) const {
         case OpCode::OP_SET_TABLE_MULTI:
             return simpleInstruction("OP_SET_TABLE_MULTI", offset);
 
+        case OpCode::OP_IO_OPEN:
+            return simpleInstruction("OP_IO_OPEN", offset);
+        case OpCode::OP_IO_WRITE:
+            return simpleInstruction("OP_IO_WRITE", offset);
+        case OpCode::OP_IO_READ:
+            return simpleInstruction("OP_IO_READ", offset);
+        case OpCode::OP_IO_CLOSE:
+            return simpleInstruction("OP_IO_CLOSE", offset);
+
         case OpCode::OP_GET_VARARG:
             return byteInstruction("OP_GET_VARARG", offset);
 
