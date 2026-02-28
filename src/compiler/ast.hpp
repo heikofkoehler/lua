@@ -501,6 +501,49 @@ public:
     void accept(ASTVisitor& visitor) override;
 };
 
+// Goto statement: goto label
+class GotoStmtNode : public StmtNode {
+public:
+    GotoStmtNode(const std::string& label, int line)
+        : StmtNode(line), label_(label) {}
+
+    void accept(ASTVisitor& visitor) override;
+
+    const std::string& label() const { return label_; }
+
+private:
+    std::string label_;
+};
+
+// Label statement: ::label::
+class LabelStmtNode : public StmtNode {
+public:
+    LabelStmtNode(const std::string& label, int line)
+        : StmtNode(line), label_(label) {}
+
+    void accept(ASTVisitor& visitor) override;
+
+    const std::string& label() const { return label_; }
+
+private:
+    std::string label_;
+};
+
+
+// Block statement: do ... end
+class BlockStmtNode : public StmtNode {
+public:
+    BlockStmtNode(std::vector<std::unique_ptr<StmtNode>> statements, int line)
+        : StmtNode(line), statements_(std::move(statements)) {}
+
+    void accept(ASTVisitor& visitor) override;
+
+    const std::vector<std::unique_ptr<StmtNode>>& statements() const { return statements_; }
+
+private:
+    std::vector<std::unique_ptr<StmtNode>> statements_;
+};
+
 // Program: list of statements
 class ProgramNode : public ASTNode {
 public:
@@ -550,6 +593,9 @@ public:
     virtual void visitFunctionDecl(FunctionDeclNode* node) = 0;
     virtual void visitReturn(ReturnStmtNode* node) = 0;
     virtual void visitBreak(BreakStmtNode* node) = 0;
+    virtual void visitGoto(GotoStmtNode* node) = 0;
+    virtual void visitLabel(LabelStmtNode* node) = 0;
+    virtual void visitBlock(BlockStmtNode* node) = 0;
     virtual void visitProgram(ProgramNode* node) = 0;
 };
 
@@ -652,6 +698,18 @@ inline void ReturnStmtNode::accept(ASTVisitor& visitor) {
 
 inline void BreakStmtNode::accept(ASTVisitor& visitor) {
     visitor.visitBreak(this);
+}
+
+inline void GotoStmtNode::accept(ASTVisitor& visitor) {
+    visitor.visitGoto(this);
+}
+
+inline void LabelStmtNode::accept(ASTVisitor& visitor) {
+    visitor.visitLabel(this);
+}
+
+inline void BlockStmtNode::accept(ASTVisitor& visitor) {
+    visitor.visitBlock(this);
 }
 
 inline void ProgramNode::accept(ASTVisitor& visitor) {

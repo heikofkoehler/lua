@@ -136,11 +136,26 @@ std::unique_ptr<StmtNode> Parser::statement() {
     if (match(TokenType::FUNCTION)) {
         return functionDeclaration();
     }
-    if (match(TokenType::RETURN)) {
-        return returnStatement();
+    if (match(TokenType::GOTO)) {
+        return gotoStatement();
+    }
+    if (match(TokenType::COLON_COLON)) {
+        return labelStatement();
     }
     if (match(TokenType::BREAK)) {
         return breakStatement();
+    }
+    if (match(TokenType::RETURN)) {
+        return returnStatement();
+    }
+    if (match(TokenType::DO)) {
+        int line = previous_.line;
+        std::vector<std::unique_ptr<StmtNode>> body;
+        while (!check(TokenType::END) && !isAtEnd()) {
+            body.push_back(statement());
+        }
+        consume(TokenType::END, "Expected 'end' after 'do' block");
+        return std::make_unique<BlockStmtNode>(std::move(body), line);
     }
 
     // Check for assignment (simple lookahead for IDENTIFIER = )
@@ -515,6 +530,21 @@ std::unique_ptr<StmtNode> Parser::returnStatement() {
 std::unique_ptr<StmtNode> Parser::breakStatement() {
     int line = previous_.line;
     return std::make_unique<BreakStmtNode>(line);
+}
+
+std::unique_ptr<StmtNode> Parser::gotoStatement() {
+    int line = previous_.line;
+    consume(TokenType::IDENTIFIER, "Expected label name after 'goto'");
+    std::string label = previous_.lexeme;
+    return std::make_unique<GotoStmtNode>(label, line);
+}
+
+std::unique_ptr<StmtNode> Parser::labelStatement() {
+    int line = previous_.line;
+    consume(TokenType::IDENTIFIER, "Expected label name after '::'");
+    std::string label = previous_.lexeme;
+    consume(TokenType::COLON_COLON, "Expected '::' after label name");
+    return std::make_unique<LabelStmtNode>(label, line);
 }
 
 std::unique_ptr<ExprNode> Parser::expression() {

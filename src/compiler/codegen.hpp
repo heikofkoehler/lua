@@ -43,6 +43,9 @@ public:
     void visitFunctionExpr(FunctionExprNode* node) override;
     void visitReturn(ReturnStmtNode* node) override;
     void visitBreak(BreakStmtNode* node) override;
+    void visitGoto(GotoStmtNode* node) override;
+    void visitLabel(LabelStmtNode* node) override;
+    void visitBlock(BlockStmtNode* node) override;
     void visitProgram(ProgramNode* node) override;
 
 private:
@@ -61,6 +64,21 @@ private:
         std::string name;   // For debugging
     };
 
+    // Label and Goto tracking for Lua 5.2+
+    struct Label {
+        size_t offset;
+        int localCount;
+        int scopeDepth;
+    };
+
+    struct Goto {
+        std::string name;
+        size_t instructionOffset;
+        int localCount;
+        int scopeDepth;
+        int line;
+    };
+
     // Compiler state for nested function compilation
     struct CompilerState {
         std::unique_ptr<Chunk> chunk;
@@ -70,6 +88,8 @@ private:
         int localCount;
         uint8_t expectedRetCount;
         CompilerState* enclosing;  // Parent compiler (not owned)
+        std::unordered_map<std::string, Label> labels;
+        std::vector<Goto> unresolvedGotos;
     };
 
     std::unique_ptr<Chunk> chunk_;
@@ -81,12 +101,19 @@ private:
     std::deque<CompilerState> compilerStack_;
     CompilerState* enclosingCompiler_;  // Parent compiler for upvalue resolution
     
+    std::unordered_map<std::string, Label> labels_;
+    std::vector<Goto> unresolvedGotos_;
+
     // Context for expression return values
     uint8_t expectedRetCount_; // 0=all (multires), 1=single (default), >1=specific count
     bool isTailCall_ = false;  // Whether current call should be compiled as tail call
 
     // Loop context for break statements
-    std::vector<std::vector<size_t>> breakJumps_;  // Stack of break jump lists
+    struct LoopContext {
+        std::vector<size_t> jumps;
+        int localCount;
+    };
+    std::vector<LoopContext> loopStack_;
 
     // Bytecode emission
     void emitByte(uint8_t byte);

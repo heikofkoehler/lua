@@ -10,7 +10,7 @@ enum class TokenType {
     LEFT_PAREN, RIGHT_PAREN,
     LEFT_BRACE, RIGHT_BRACE,
     LEFT_BRACKET, RIGHT_BRACKET,
-    COMMA, DOT, SEMICOLON, COLON, HASH,
+    COMMA, DOT, SEMICOLON, COLON, COLON_COLON, HASH,
     PLUS, MINUS, STAR, SLASH, PERCENT, CARET,
     AMPERSAND, PIPE, SLASH_SLASH,
     LESS_LESS, GREATER_GREATER,
@@ -29,7 +29,7 @@ enum class TokenType {
 
     // Keywords
     AND, BREAK, DO, ELSE, ELSEIF,
-    END, FALSE, FOR, FUNCTION, IF,
+    END, FALSE, FOR, FUNCTION, GOTO, IF,
     IN, LOCAL, NIL, NOT, OR,
     REPEAT, RETURN, THEN, TRUE, UNTIL,
     WHILE,
@@ -65,6 +65,7 @@ inline const char* tokenTypeName(TokenType type) {
         case TokenType::DOT: return "DOT";
         case TokenType::SEMICOLON: return "SEMICOLON";
         case TokenType::COLON: return "COLON";
+        case TokenType::COLON_COLON: return "COLON_COLON";
         case TokenType::HASH: return "HASH";
         case TokenType::PLUS: return "PLUS";
         case TokenType::MINUS: return "MINUS";
@@ -101,6 +102,7 @@ inline const char* tokenTypeName(TokenType type) {
         case TokenType::FALSE: return "FALSE";
         case TokenType::FOR: return "FOR";
         case TokenType::FUNCTION: return "FUNCTION";
+        case TokenType::GOTO: return "GOTO";
         case TokenType::IF: return "IF";
         case TokenType::IN: return "IN";
         case TokenType::LOCAL: return "LOCAL";

@@ -447,6 +447,53 @@ void CodeGenerator::visitMultipleAssignmentStmt(MultipleAssignmentStmtNode* node
     }
 }
 
+void CodeGenerator::visitGoto(GotoStmtNode* node) {
+    setLine(node->line());
+    const std::string& name = node->label();
+    
+    auto it = labels_.find(name);
+    if (it != labels_.end()) {
+        // Backward jump
+        if (localCount_ < it->second.localCount) {
+            throw CompileError("<goto " + name + "> jumps into the scope of local variables", currentLine_);
+        }
+        
+        // Pop locals to reach label's local count
+        // For simplicity and safety, we use OP_CLOSE_UPVALUE which also pops
+        for (int i = localCount_ - 1; i >= it->second.localCount; i--) {
+            emitOpCode(OpCode::OP_CLOSE_UPVALUE);
+        }
+        
+        // Our OP_LOOP jumps backward. The offset is relative to the instruction after OP_LOOP
+        emitLoop(it->second.offset);
+    } else {
+        // Forward jump - unresolved
+        size_t jump = emitJump(OpCode::OP_JUMP);
+        unresolvedGotos_.push_back({name, jump, localCount_, scopeDepth_, currentLine_});
+    }
+}
+
+void CodeGenerator::visitLabel(LabelStmtNode* node) {
+    setLine(node->line());
+    const std::string& name = node->label();
+    
+    if (labels_.find(name) != labels_.end()) {
+        throw CompileError("label '" + name + "' already defined", currentLine_);
+    }
+    
+    Label lbl = {currentChunk()->size(), localCount_, scopeDepth_};
+    labels_[name] = lbl;
+}
+
+void CodeGenerator::visitBlock(BlockStmtNode* node) {
+    setLine(node->line());
+    beginScope();
+    for (const auto& stmt : node->statements()) {
+        stmt->accept(*this);
+    }
+    endScope();
+}
+
 void CodeGenerator::visitProgram(ProgramNode* node) {
     setLine(node->line());
 
@@ -1179,6 +1226,44 @@ void CodeGenerator::compileFunction(const std::string& name, const std::vector<s
         stmt->accept(*this);
     }
 
+    // Resolve forward gotos
+    for (const Goto& g : unresolvedGotos_) {
+        auto it = labels_.find(g.name);
+        if (it == labels_.end()) {
+            throw CompileError("no visible label '" + g.name + "' for <goto>", g.line);
+        }
+        
+        if (g.localCount < it->second.localCount) {
+            throw CompileError("<goto " + g.name + "> jumps into the scope of local variables", g.line);
+        }
+        
+        if (g.localCount == it->second.localCount) {
+            // Direct jump
+            size_t jumpDist = it->second.offset - g.instructionOffset - 2;
+            currentChunk()->code()[g.instructionOffset] = jumpDist & 0xff;
+            currentChunk()->code()[g.instructionOffset + 1] = (jumpDist >> 8) & 0xff;
+        } else {
+            // Need a cleanup stub
+            size_t stubOffset = currentChunk()->size();
+            
+            // Patch original JUMP to jump to the stub
+            size_t jumpToStub = stubOffset - g.instructionOffset - 2;
+            currentChunk()->code()[g.instructionOffset] = jumpToStub & 0xff;
+            currentChunk()->code()[g.instructionOffset + 1] = (jumpToStub >> 8) & 0xff;
+            
+            // Generate cleanup stub
+            for (int i = g.localCount - 1; i >= it->second.localCount; i--) {
+                emitOpCode(OpCode::OP_CLOSE_UPVALUE);
+            }
+            
+            // Jump from stub to label (forward or backward depending on where the label is relative to stub)
+            // Wait, the label is always BEFORE the stub, because the label was defined in the function body,
+            // and the stub is appended at the very end of the function body!
+            // So it's ALWAYS a backward jump from the stub to the label.
+            emitLoop(it->second.offset);
+        }
+    }
+
     // Emit implicit return nil at end (if no explicit return)
     emitOpCode(OpCode::OP_NIL);
     emitOpCode(OpCode::OP_RETURN_VALUE);
@@ -1276,8 +1361,14 @@ void CodeGenerator::visitBreak(BreakStmtNode* node) {
     setLine(node->line());
 
     // Check if we're inside a loop
-    if (breakJumps_.empty()) {
+    if (loopStack_.empty()) {
         throw CompileError("'break' outside of loop", currentLine_);
+    }
+
+    // Pop locals created inside the loop before breaking
+    int loopLocalCount = loopStack_.back().localCount;
+    for (int i = localCount_ - 1; i >= loopLocalCount; i--) {
+        emitOpCode(OpCode::OP_CLOSE_UPVALUE);
     }
 
     // Emit jump and add to list of jumps to patch
@@ -1286,27 +1377,27 @@ void CodeGenerator::visitBreak(BreakStmtNode* node) {
 }
 
 void CodeGenerator::beginLoop() {
-    breakJumps_.push_back(std::vector<size_t>());
+    loopStack_.push_back({std::vector<size_t>(), localCount_});
 }
 
 void CodeGenerator::endLoop() {
-    if (breakJumps_.empty()) {
+    if (loopStack_.empty()) {
         throw CompileError("endLoop() called without matching beginLoop()", currentLine_);
     }
 
     // Patch all break jumps to jump to current position
-    for (size_t jump : breakJumps_.back()) {
+    for (size_t jump : loopStack_.back().jumps) {
         patchJump(jump);
     }
 
-    breakJumps_.pop_back();
+    loopStack_.pop_back();
 }
 
 void CodeGenerator::addBreakJump(size_t jump) {
-    if (breakJumps_.empty()) {
+    if (loopStack_.empty()) {
         throw CompileError("addBreakJump() called outside of loop", currentLine_);
     }
-    breakJumps_.back().push_back(jump);
+    loopStack_.back().jumps.push_back(jump);
 }
 
 void CodeGenerator::addLocal(const std::string& name) {
@@ -1450,6 +1541,8 @@ void CodeGenerator::pushCompilerState() {
     state.localCount = localCount_;
     state.expectedRetCount = expectedRetCount_;
     state.enclosing = enclosingCompiler_;
+    state.labels = std::move(labels_);
+    state.unresolvedGotos = std::move(unresolvedGotos_);
 
     compilerStack_.push_back(std::move(state));
 
@@ -1460,6 +1553,8 @@ void CodeGenerator::pushCompilerState() {
     chunk_ = std::make_unique<Chunk>();
     locals_.clear();
     upvalues_.clear();
+    labels_.clear();
+    unresolvedGotos_.clear();
     scopeDepth_ = 0;
     localCount_ = 0;
     expectedRetCount_ = 2; // Default for function body (one result)
@@ -1477,6 +1572,8 @@ void CodeGenerator::popCompilerState() {
     chunk_ = std::move(state.chunk);
     locals_ = std::move(state.locals);
     upvalues_ = std::move(state.upvalues);
+    labels_ = std::move(state.labels);
+    unresolvedGotos_ = std::move(state.unresolvedGotos);
     scopeDepth_ = state.scopeDepth;
     localCount_ = state.localCount;
     expectedRetCount_ = state.expectedRetCount;

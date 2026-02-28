@@ -51,6 +51,8 @@ private:
     std::unique_ptr<StmtNode> functionDeclaration();
     std::unique_ptr<StmtNode> returnStatement();
     std::unique_ptr<StmtNode> breakStatement();
+    std::unique_ptr<StmtNode> gotoStatement();
+    std::unique_ptr<StmtNode> labelStatement();
 
     struct FunctionBody {
         std::vector<std::string> params;
