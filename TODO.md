@@ -17,7 +17,7 @@ This document tracks the missing features and planned improvements to bring this
 ## 3. Standard Library Completeness
 - [x] **Pattern Matching:** Replace C++ string methods with Lua-style pattern matching (`%d`, `%a`, `(.-)`, etc.) in `string` library.
 - [x] **C Modules:** Enable `package.loadlib` to load shared libraries (`.so` / `.dll`).
-- [ ] **Debug Library:** Implement `debug.getlocal`, `debug.setlocal`, and execution hooks.
+- [x] **Debug Library:** Implement `debug.getlocal`, `debug.setlocal`, and execution hooks.
 - [x] **Environments:** Implement `_ENV` (Lua 5.2+) or `setfenv`/`getfenv` (Lua 5.1).
 
 

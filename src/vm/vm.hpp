@@ -114,6 +114,7 @@ public:
 
     // Access to current coroutine
     CoroutineObject* currentCoroutine() { return currentCoroutine_; }
+    CallFrame* getFrame(int level);
 
     // Registry for internal use (stable storage)
     void setRegistry(const std::string& key, const Value& value) { registry_[key] = value; }
@@ -135,6 +136,7 @@ public:
     Value getMetamethod(const Value& obj, const std::string& method);
     bool callBinaryMetamethod(const Value& a, const Value& b, const std::string& method);
     bool callValue(int argCount, int retCount, bool isTailCall = false);
+    void callHook(const char* event, int line = -1);
     std::string getStringValue(const Value& value);
 
     // Global metatables

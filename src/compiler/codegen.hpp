@@ -4,6 +4,7 @@
 #include "common/common.hpp"
 #include "compiler/ast.hpp"
 #include "compiler/chunk.hpp"
+#include "value/function.hpp"
 #include <deque>
 #include <memory>
 
@@ -56,6 +57,7 @@ private:
         int depth;
         int slot;
         bool isCaptured;  // True if captured by a closure
+        size_t startPC;   // Instruction offset where local enters scope
     };
 
     // Upvalue tracking
@@ -85,6 +87,7 @@ private:
         std::unique_ptr<Chunk> chunk;
         std::vector<Local> locals;
         std::vector<Upvalue> upvalues;
+        std::vector<LocalVarInfo> finishedLocals;
         int scopeDepth;
         int localCount;
         uint8_t expectedRetCount;
@@ -97,6 +100,7 @@ private:
     int currentLine_;
     std::vector<Local> locals_;
     std::vector<Upvalue> upvalues_;
+    std::vector<LocalVarInfo> finishedLocals_;
     int scopeDepth_;
     int localCount_;
     std::deque<CompilerState> compilerStack_;
@@ -108,6 +112,7 @@ private:
     // Context for expression return values
     uint8_t expectedRetCount_; // 0=all (multires), 1=single (default), >1=specific count
     bool isTailCall_ = false;  // Whether current call should be compiled as tail call
+    std::string expectedName_ = ""; // For naming anonymous functions assigned to variables
 
     // Loop context for break statements
     struct LoopContext {

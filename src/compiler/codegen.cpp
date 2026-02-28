@@ -29,7 +29,17 @@ std::unique_ptr<FunctionObject> CodeGenerator::generate(ProgramNode* program, co
     // Emit return at end
     emitReturn();
 
-    return std::make_unique<FunctionObject>(name, 0, std::move(chunk_), static_cast<int>(upvalues_.size()), true);
+    // Close remaining locals (top level)
+    size_t endPC = currentChunk()->size();
+    for (Local& l : locals_) {
+        finishedLocals_.push_back({l.name, l.startPC, endPC, l.slot});
+    }
+
+    auto function = std::make_unique<FunctionObject>(name, 0, std::move(chunk_), static_cast<int>(upvalues_.size()), true);
+    for (const auto& l : finishedLocals_) {
+        function->addLocalVar(l.name, l.startPC, l.endPC, l.slot);
+    }
+    return function;
 }
 
 void CodeGenerator::visitLiteral(LiteralNode* node) {
@@ -285,7 +295,9 @@ void CodeGenerator::visitAssignmentStmt(AssignmentStmtNode* node) {
     setLine(node->line());
 
     // Compile the value
+    expectedName_ = node->name();
     node->value()->accept(*this);
+    expectedName_ = "";
 
     // Three-level resolution: local → upvalue → global
 
@@ -349,7 +361,9 @@ void CodeGenerator::visitLocalDeclStmt(LocalDeclStmtNode* node) {
         addLocal(node->name());
         
         // Compile the function expression
+        expectedName_ = node->name();
         node->initializer()->accept(*this);
+        expectedName_ = "";
         
         // Update the local slot with the compiled function
         int slot = resolveLocal(node->name());
@@ -1273,7 +1287,8 @@ void CodeGenerator::visitFunctionExpr(FunctionExprNode* node) {
     setLine(node->line());
     
     // Compile function and emit OP_CLOSURE (leaves closure on stack)
-    compileFunction("anonymous", node->params(), node->body(), node->hasVarargs());
+    std::string name = expectedName_.empty() ? "anonymous" : expectedName_;
+    compileFunction(name, node->params(), node->body(), node->hasVarargs());
 }
 
 void CodeGenerator::compileFunction(const std::string& name, const std::vector<std::string>& params,
@@ -1344,12 +1359,19 @@ void CodeGenerator::compileFunction(const std::string& name, const std::vector<s
     // Get compiled function chunk (don't call endScope - cleanup is handled by OP_RETURN_VALUE)
     auto functionChunk = std::move(chunk_);
 
+    // Record remaining locals
+    size_t endPC = functionChunk->size();
+    for (Local& l : locals_) {
+        finishedLocals_.push_back({l.name, l.startPC, endPC, l.slot});
+    }
+
 #ifdef PRINT_CODE
     functionChunk->disassemble(name);
 #endif
 
     // capturedUpvalues contains the upvalues for the current function.
     std::vector<Upvalue> capturedUpvalues = upvalues_;
+    std::vector<LocalVarInfo> capturedLocals = finishedLocals_;
 
     // Restore outer compiler state
     popCompilerState();
@@ -1362,6 +1384,10 @@ void CodeGenerator::compileFunction(const std::string& name, const std::vector<s
         capturedUpvalues.size(),
         hasVarargs
     );
+
+    for (const auto& l : capturedLocals) {
+        func->addLocalVar(l.name, l.startPC, l.endPC, l.slot);
+    }
 
     // Add function to chunk's function pool and get its index
     size_t funcIndex = currentChunk()->addFunction(func);
@@ -1482,6 +1508,7 @@ void CodeGenerator::addLocal(const std::string& name) {
     local.depth = scopeDepth_;
     local.slot = localCount_++;
     local.isCaptured = false;  // Not captured by default
+    local.startPC = currentChunk()->size();
     locals_.push_back(local);
 }
 
@@ -1621,6 +1648,10 @@ void CodeGenerator::endScope() {
 
     // Pop locals from this scope
     while (!locals_.empty() && locals_.back().depth > scopeDepth_) {
+        // Record debug info for finished local
+        Local& l = locals_.back();
+        finishedLocals_.push_back({l.name, l.startPC, currentChunk()->size(), l.slot});
+
         if (locals_.back().isCaptured) {
             // Close the upvalue instead of just popping
             emitOpCode(OpCode::OP_CLOSE_UPVALUE);
@@ -1638,6 +1669,7 @@ void CodeGenerator::pushCompilerState() {
     state.chunk = std::move(chunk_);
     state.locals = std::move(locals_);
     state.upvalues = std::move(upvalues_);
+    state.finishedLocals = std::move(finishedLocals_);
     state.scopeDepth = scopeDepth_;
     state.localCount = localCount_;
     state.expectedRetCount = expectedRetCount_;
@@ -1654,6 +1686,7 @@ void CodeGenerator::pushCompilerState() {
     chunk_ = std::make_unique<Chunk>();
     locals_.clear();
     upvalues_.clear();
+    finishedLocals_.clear();
     labels_.clear();
     unresolvedGotos_.clear();
     scopeDepth_ = 0;
@@ -1673,6 +1706,7 @@ void CodeGenerator::popCompilerState() {
     chunk_ = std::move(state.chunk);
     locals_ = std::move(state.locals);
     upvalues_ = std::move(state.upvalues);
+    finishedLocals_ = std::move(state.finishedLocals);
     labels_ = std::move(state.labels);
     unresolvedGotos_ = std::move(state.unresolvedGotos);
     scopeDepth_ = state.scopeDepth;

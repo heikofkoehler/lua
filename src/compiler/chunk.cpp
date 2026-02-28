@@ -379,6 +379,18 @@ void FunctionObject::serialize(std::ostream& os) const {
     os.write(reinterpret_cast<const char*>(&varargs), sizeof(varargs));
     
     chunk_->serialize(os);
+
+    // Local variable info
+    uint32_t localCount = static_cast<uint32_t>(localVars_.size());
+    os.write(reinterpret_cast<const char*>(&localCount), sizeof(localCount));
+    for (const auto& l : localVars_) {
+        uint32_t nameLen = static_cast<uint32_t>(l.name.length());
+        os.write(reinterpret_cast<const char*>(&nameLen), sizeof(nameLen));
+        os.write(l.name.c_str(), nameLen);
+        os.write(reinterpret_cast<const char*>(&l.startPC), sizeof(l.startPC));
+        os.write(reinterpret_cast<const char*>(&l.endPC), sizeof(l.endPC));
+        os.write(reinterpret_cast<const char*>(&l.slot), sizeof(l.slot));
+    }
 }
 
 std::unique_ptr<FunctionObject> FunctionObject::deserialize(std::istream& is) {
@@ -394,5 +406,23 @@ std::unique_ptr<FunctionObject> FunctionObject::deserialize(std::istream& is) {
     is.read(reinterpret_cast<char*>(&varargs), sizeof(varargs));
     
     auto chunk = Chunk::deserialize(is);
-    return std::make_unique<FunctionObject>(name, arity, std::move(chunk), upvalueCount, varargs != 0);
+    auto function = std::make_unique<FunctionObject>(name, arity, std::move(chunk), upvalueCount, varargs != 0);
+
+    // Local variable info
+    uint32_t localCount;
+    is.read(reinterpret_cast<char*>(&localCount), sizeof(localCount));
+    for (uint32_t i = 0; i < localCount; i++) {
+        uint32_t lNameLen;
+        is.read(reinterpret_cast<char*>(&lNameLen), sizeof(lNameLen));
+        std::string lName(lNameLen, '\0');
+        is.read(&lName[0], lNameLen);
+        size_t startPC, endPC;
+        int slot;
+        is.read(reinterpret_cast<char*>(&startPC), sizeof(startPC));
+        is.read(reinterpret_cast<char*>(&endPC), sizeof(endPC));
+        is.read(reinterpret_cast<char*>(&slot), sizeof(slot));
+        function->addLocalVar(lName, startPC, endPC, slot);
+    }
+
+    return function;
 }

@@ -86,6 +86,7 @@ void VM::markObject(GCObject* object) {
             }
             for (auto* uv : co->openUpvalues) markObject(uv);
             if (co->caller) markObject(co->caller);
+            markValue(co->hook);
             break;
         }
 

@@ -336,6 +336,43 @@ void VM::initStandardLibrary() {
     runInitializationFrames();
 }
 
+CallFrame* VM::getFrame(int level) {
+    if (level < 1 || static_cast<size_t>(level) > currentCoroutine_->frames.size()) {
+        return nullptr;
+    }
+    // level 1 is the most recent frame (top of frames vector)
+    return &currentCoroutine_->frames[currentCoroutine_->frames.size() - level];
+}
+
+void VM::callHook(const char* event, int line) {
+    if (currentCoroutine_->inHook || currentCoroutine_->hook.isNil()) return;
+    
+    currentCoroutine_->inHook = true;
+    
+    // Push hook function and arguments
+    push(currentCoroutine_->hook);
+    push(Value::runtimeString(internString(event)));
+    if (line != -1) {
+        push(Value::number(line));
+    } else {
+        push(Value::nil());
+    }
+    
+    size_t prevFrames = currentCoroutine_->frames.size();
+    // Call hook function.
+    if (callValue(2, 1)) {
+        if (currentCoroutine_->frames.size() > prevFrames) {
+            // Lua hook: execute until it returns to current frame level
+            run(prevFrames);
+        } else {
+            // Native hook: already finished, pop the single nil result
+            pop();
+        }
+    }
+    
+    currentCoroutine_->inHook = false;
+}
+
 CallFrame& VM::currentFrame() {
     if (currentCoroutine_->frames.empty()) {
         throw RuntimeError("No active call frame");
@@ -417,6 +454,10 @@ bool VM::run(const FunctionObject& function) {
         return false;
     }
 
+    if (currentCoroutine_->hookMask & CoroutineObject::MASK_CALL) {
+        callHook("call");
+    }
+
     bool result = run();
 
     if (currentCoroutine_->status == CoroutineObject::Status::SUSPENDED) {
@@ -444,6 +485,36 @@ bool VM::run() {
 bool VM::run(size_t targetFrameCount) {
     // Main execution loop
     while (true) {
+        // Handle debug hooks
+        if (stdlibInitialized_ && !currentCoroutine_->inHook && currentCoroutine_->hookMask != 0) {
+            bool triggerCount = false;
+            bool triggerLine = false;
+            int currentLine = -1;
+
+            if (currentCoroutine_->hookMask & CoroutineObject::MASK_COUNT) {
+                if (--currentCoroutine_->hookCount <= 0) {
+                    triggerCount = true;
+                    currentCoroutine_->hookCount = currentCoroutine_->baseHookCount;
+                }
+            }
+
+            if (currentCoroutine_->hookMask & CoroutineObject::MASK_LINE) {
+                if (!currentCoroutine_->frames.empty()) {
+                    currentLine = currentFrame().chunk->getLine(currentFrame().ip);
+                    if (currentLine != currentCoroutine_->lastLine) {
+                        triggerLine = true;
+                        currentCoroutine_->lastLine = currentLine;
+                    }
+                }
+            }
+
+            if (triggerCount) callHook("count");
+            if (hadError_) return false;
+            
+            if (triggerLine) callHook("line", currentLine);
+            if (hadError_) return false;
+        }
+
         if (traceExecution_) {
             traceExecution();
         }
@@ -956,8 +1027,14 @@ bool VM::run(size_t targetFrameCount) {
             case OpCode::OP_CALL: {
                 uint8_t argCount = readByte();
                 uint8_t retCount = readByte();  // Number of return values to keep (0 = all)
+                size_t prevFrames = currentCoroutine_->frames.size();
                 if (!callValue(argCount, retCount)) {
                     return false;
+                }
+                // If it was a Lua call, trigger hook
+                if (currentCoroutine_->frames.size() > prevFrames && 
+                    (currentCoroutine_->hookMask & CoroutineObject::MASK_CALL)) {
+                    callHook("call");
                 }
                 break;
             }
@@ -967,8 +1044,14 @@ bool VM::run(size_t targetFrameCount) {
                 uint8_t retCount = readByte();
                 // actual argCount = fixedArgs + lastResultCount
                 int actualArgCount = static_cast<int>(fixedArgCount) + static_cast<int>(currentCoroutine_->lastResultCount);
+                size_t prevFrames = currentCoroutine_->frames.size();
                 if (!callValue(actualArgCount, retCount)) {
                     return false;
+                }
+                // If it was a Lua call, trigger hook
+                if (currentCoroutine_->frames.size() > prevFrames && 
+                    (currentCoroutine_->hookMask & CoroutineObject::MASK_CALL)) {
+                    callHook("call");
                 }
                 break;
             }
@@ -976,8 +1059,14 @@ bool VM::run(size_t targetFrameCount) {
             case OpCode::OP_TAILCALL: {
                 uint8_t argCount = readByte();
                 // A tailcall always expects ALL return values (retCount = 0)
+                size_t prevFrames = currentCoroutine_->frames.size();
                 if (!callValue(argCount, 0, true)) {
                     return false;
+                }
+                // If it was a Lua call, trigger hook
+                if (currentCoroutine_->frames.size() > prevFrames && 
+                    (currentCoroutine_->hookMask & CoroutineObject::MASK_CALL)) {
+                    callHook("call");
                 }
                 break;
             }
@@ -985,13 +1074,24 @@ bool VM::run(size_t targetFrameCount) {
             case OpCode::OP_TAILCALL_MULTI: {
                 uint8_t fixedArgCount = readByte();
                 int actualArgCount = static_cast<int>(fixedArgCount) + static_cast<int>(currentCoroutine_->lastResultCount);
+                size_t prevFrames = currentCoroutine_->frames.size();
                 if (!callValue(actualArgCount, 0, true)) {
                     return false;
+                }
+                // If it was a Lua call, trigger hook
+                if (currentCoroutine_->frames.size() > prevFrames && 
+                    (currentCoroutine_->hookMask & CoroutineObject::MASK_CALL)) {
+                    callHook("call");
                 }
                 break;
             }
 
             case OpCode::OP_RETURN_VALUE: {
+                // Handle debug hook before cleanup
+                if (currentCoroutine_->hookMask & CoroutineObject::MASK_RET) {
+                    callHook("return");
+                }
+
                 // Read the count of return values
                 uint8_t count = readByte();
                 size_t actualCount = count;
@@ -1015,8 +1115,9 @@ bool VM::run(size_t targetFrameCount) {
                         pop();
                     }
                     if (stackBase > 0) pop(); // Pop closure
-                    
+
                     // Push results
+
                     currentCoroutine_->lastResultCount = returnValues.size();
                     for (const auto& value : returnValues) {
                         push(value);
@@ -1262,6 +1363,9 @@ bool VM::run(size_t targetFrameCount) {
             }
 
             case OpCode::OP_RETURN:
+                if (currentCoroutine_->hookMask & CoroutineObject::MASK_RET) {
+                    callHook("return");
+                }
                 if (currentCoroutine_->frames.size() == 1) {
                     currentCoroutine_->status = CoroutineObject::Status::DEAD;
                     return !hadError_;
