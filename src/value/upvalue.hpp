@@ -42,6 +42,10 @@ public:
     // GC interface
     void markReferences() override;
 
+    size_t size() const override {
+        return sizeof(UpvalueObject);
+    }
+
 private:
     class CoroutineObject* owner_; // Coroutine that owns the stack slot (if open)
     size_t stackIndex_;            // Index in owner's stack (for open upvalues)

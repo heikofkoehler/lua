@@ -37,6 +37,10 @@ public:
 
     void markReferences() override {}
 
+    size_t size() const override {
+        return sizeof(SocketObject);
+    }
+
 private:
     socket_t fd_;
 };

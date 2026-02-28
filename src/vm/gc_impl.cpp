@@ -11,6 +11,7 @@
 void VM::addObject(GCObject* object) {
     object->setNext(gcObjects_);
     gcObjects_ = object;
+    bytesAllocated_ += object->size();
 }
 
 void VM::markValue(const Value& value) {
@@ -206,6 +207,7 @@ void VM::sweep() {
 void VM::freeObject(GCObject* object) {
     // Strings in VM::strings_ and functions_ are deleted in reset()
     // but here we only delete GC-allocated objects.
+    bytesAllocated_ -= object->size();
     
     switch (object->type()) {
         case GCObject::Type::STRING: delete static_cast<StringObject*>(object); break;
@@ -236,5 +238,28 @@ void VM::collectGarbage() {
     processWeakTables();
     removeUnmarkedWeakEntries();
     sweep();
+    
+    // Recompute accurately
+    bytesAllocated_ = 0;
+    GCObject* obj = gcObjects_;
+    while (obj) {
+        bytesAllocated_ += obj->size();
+        obj = obj->next();
+    }
+
     nextGC_ = bytesAllocated_ * 2;
+}
+
+void VM::checkGC(size_t additionalBytes) {
+    if (isHandlingError_) return;
+
+    if (bytesAllocated_ + additionalBytes > nextGC_ || bytesAllocated_ + additionalBytes > memoryLimit_) {
+        // Trigger GC
+        collectGarbage();
+    }
+    
+    if (bytesAllocated_ + additionalBytes > memoryLimit_) {
+        // Still over limit after GC - emergency!
+        runtimeError("not enough memory");
+    }
 }

@@ -22,7 +22,7 @@ This document tracks the missing features and planned improvements to bring this
 
 
 ## 4. VM & Garbage Collection
-- [ ] **Emergency GC:** Trigger garbage collection automatically when an allocation fails.
+- [x] **Emergency GC:** Trigger garbage collection automatically when an allocation fails.
 - [x] **Upvalue Sharing:** Verify and robustly implement upvalue sharing across coroutine boundaries.
 - [ ] **Incremental GC:** Upgrade the mark-and-sweep collector to an incremental or generational model to reduce pause times.
 

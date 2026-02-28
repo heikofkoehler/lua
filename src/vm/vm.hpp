@@ -122,7 +122,9 @@ public:
 
     // Garbage collection
     size_t bytesAllocated() const { return bytesAllocated_; }
+    void setMemoryLimit(size_t limit) { memoryLimit_ = limit; }
     void collectGarbage();
+    void checkGC(size_t additionalBytes = 0);
     void markRoots();
     void markValue(const Value& value);
     void markObject(GCObject* object);
@@ -144,6 +146,30 @@ public:
     Value getTypeMetatable(Value::Type type) const;
 
 private:
+    // GC-aware object allocation helper
+    template<typename T, typename... Args>
+    T* allocateObject(Args&&... args) {
+        // First check with emergency GC if needed
+        checkGC(sizeof(T)); 
+        
+        try {
+            T* obj = new T(std::forward<Args>(args)...);
+            addObject(obj);
+            return obj;
+        } catch (const std::bad_alloc&) {
+            // Hard failure from OS - try one last ditch GC
+            collectGarbage();
+            try {
+                T* obj = new T(std::forward<Args>(args)...);
+                addObject(obj);
+                return obj;
+            } catch (const std::bad_alloc&) {
+                runtimeError("not enough memory (hard allocation failure)");
+                return nullptr;
+            }
+        }
+    }
+
     // Arithmetic operations
     Value add(const Value& a, const Value& b);
     Value subtract(const Value& a, const Value& b);
@@ -177,6 +203,7 @@ private:
     CoroutineObject* currentCoroutine_;
     bool hadError_;               // Error flag
     bool inPcall_;                // Whether we are inside a protected call
+    bool isHandlingError_;        // TRUE if we're currently processing an error
     std::string lastErrorMessage_; // Last runtime error message
     bool stdlibInitialized_;      // Whether standard library has been initialized
 
@@ -184,6 +211,7 @@ private:
     GCObject* gcObjects_;         // Linked list of all GC objects
     size_t bytesAllocated_;       // Total bytes allocated
     size_t nextGC_;               // Threshold for next GC
+    size_t memoryLimit_;          // Maximum bytes allowed before Emergency GC
     bool gcEnabled_;              // Can disable GC for debugging
     std::vector<class TableObject*> weakTables_;
 

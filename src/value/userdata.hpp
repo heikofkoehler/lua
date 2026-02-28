@@ -27,6 +27,10 @@ public:
         }
     }
 
+    size_t size() const override {
+        return sizeof(UserdataObject);
+    }
+
 private:
     void* data_;
     Value metatable_;

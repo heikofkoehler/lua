@@ -51,6 +51,11 @@ public:
     // GC interface: files don't reference other objects
     void markReferences() override {}
 
+    size_t size() const override {
+        return sizeof(FileObject) + filename_.capacity() + mode_.capacity() + 
+               (isOwned_ ? sizeof(std::fstream) : 0);
+    }
+
 private:
     std::string filename_;
     std::string mode_;

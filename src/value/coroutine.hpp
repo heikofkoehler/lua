@@ -69,6 +69,14 @@ public:
     // GC interface
     void markReferences() override;
 
+    size_t size() const override {
+        return sizeof(CoroutineObject) + 
+               stack.capacity() * sizeof(Value) + 
+               frames.capacity() * sizeof(CallFrame) + 
+               openUpvalues.capacity() * sizeof(UpvalueObject*) + 
+               yieldedValues.capacity() * sizeof(Value);
+    }
+
     const char* statusToString() const {
         switch (status) {
             case Status::RUNNING: return "running";

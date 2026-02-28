@@ -41,6 +41,9 @@ public:
     // Recursively mark objects referenced by this object
     virtual void markReferences() = 0;
 
+    // Get approximate memory size of this object
+    virtual size_t size() const = 0;
+
 private:
     Type type_;
     bool isMarked_;

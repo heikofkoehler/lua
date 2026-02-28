@@ -47,6 +47,10 @@ public:
     // GC interface: strings don't reference other objects
     void markReferences() override {}
 
+    size_t size() const override {
+        return sizeof(StringObject) + length_ + 1;
+    }
+
 private:
     char* chars_;
     size_t length_;

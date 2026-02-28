@@ -15,13 +15,26 @@
 namespace {
 
 bool native_collectgarbage(VM* vm, int argCount) {
-    if (argCount == 1) {
-        Value var = vm->peek(0);
-        if (var.isString() && vm->getStringValue(var) == "count") {
-            double count = static_cast<double>(vm->bytesAllocated()) / 1024.0;
-            for(int i=0; i<argCount; i++) vm->pop();
-            vm->push(Value::number(count));
-            return true;
+    if (argCount >= 1) {
+        Value var = vm->peek(argCount - 1);
+        if (var.isString()) {
+            std::string opt = vm->getStringValue(var);
+            if (opt == "count") {
+                double count = static_cast<double>(vm->bytesAllocated()) / 1024.0;
+                for(int i=0; i<argCount; i++) vm->pop();
+                vm->push(Value::number(count));
+                return true;
+            } else if (opt == "setmemorylimit") {
+                if (argCount < 2) {
+                    vm->runtimeError("collectgarbage('setmemorylimit') expects a limit in bytes");
+                    return false;
+                }
+                double limit = vm->peek(0).asNumber();
+                vm->setMemoryLimit(static_cast<size_t>(limit));
+                for(int i=0; i<argCount; i++) vm->pop();
+                vm->push(Value::nil());
+                return true;
+            }
         }
     }
 

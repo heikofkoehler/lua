@@ -39,6 +39,10 @@ public:
     // GC interface: mark references
     void markReferences() override;
 
+    size_t size() const override {
+        return sizeof(ClosureObject) + upvalues_.size() * sizeof(UpvalueObject*);
+    }
+
 private:
     FunctionObject* function_;           // Not owned (owned by Chunk)
     std::vector<UpvalueObject*> upvalues_; // Captured variables (heap-allocated)

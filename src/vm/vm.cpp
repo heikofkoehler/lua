@@ -26,8 +26,10 @@ VM::VM() :
            traceExecution_(false), 
 #endif
            mainCoroutine_(nullptr), currentCoroutine_(nullptr), 
-           hadError_(false), inPcall_(false), lastErrorMessage_(""), stdlibInitialized_(false),
-           gcObjects_(nullptr), bytesAllocated_(0), nextGC_(1024 * 1024), gcEnabled_(true) {
+           hadError_(false), inPcall_(false), isHandlingError_(false), lastErrorMessage_(""), stdlibInitialized_(false),
+           gcObjects_(nullptr), bytesAllocated_(0), nextGC_(1024 * 1024), 
+           memoryLimit_(100 * 1024 * 1024), // Default 100MB limit
+           gcEnabled_(true) {
     currentVM = this;
     for (int i = 0; i < Value::NUM_TYPES; i++) {
         typeMetatables_[i] = Value::nil();
@@ -40,41 +42,64 @@ VM::VM() :
 }
 
 VM::~VM() {
-    reset(); // Clean up strings, tables, closures, etc.
-    for (auto* func : functions_) {
-        delete func;
-    }
-}
-
-void VM::reset() {
-    // Rely on GC to free most objects (strings, tables, closures, etc.)
-    // We just need to clear our handles to them.
+    currentVM = nullptr;
     
-    // Clean up coroutines (VM owns them)
-    for (auto* co : coroutines_) {
-        delete co;
+    // 1. Clear all handles that could be roots
+    globals_.clear();
+    registry_.clear();
+    runtimeStrings_.clear();
+    for (int i = 0; i < Value::NUM_TYPES; i++) {
+        typeMetatables_[i] = Value::nil();
     }
+    
+    // 2. Clear coroutines vector (but don't delete yet, they are in gcObjects_)
     coroutines_.clear();
     mainCoroutine_ = nullptr;
     currentCoroutine_ = nullptr;
 
-    // Functions and strings are still owned by the VM handle
+    // 3. Free all objects in gcObjects_ list
+    GCObject* obj = gcObjects_;
+    while (obj) {
+        GCObject* next = obj->next();
+        delete obj;
+        obj = next;
+    }
+    gcObjects_ = nullptr;
+
+    // 4. Free non-GC objects
     for (auto* func : functions_) delete func;
-    functions_.clear();
     for (auto* str : strings_) delete str;
-    strings_.clear();
-    
-    runtimeStrings_.clear();
+}
+
+void VM::reset() {
+    // Clear all handles
     globals_.clear();
     registry_.clear();
+    runtimeStrings_.clear();
+    for (int i = 0; i < Value::NUM_TYPES; i++) {
+        typeMetatables_[i] = Value::nil();
+    }
+    
+    // Free all current GC objects
+    GCObject* obj = gcObjects_;
+    while (obj) {
+        GCObject* next = obj->next();
+        delete obj;
+        obj = next;
+    }
+    gcObjects_ = nullptr;
+    coroutines_.clear();
+    bytesAllocated_ = 0;
 
-    // Create a new main coroutine for next use
+    // Re-initialize main coroutine
     createCoroutine(nullptr);
     mainCoroutine_ = coroutines_.back();
     mainCoroutine_->status = CoroutineObject::Status::RUNNING;
     currentCoroutine_ = mainCoroutine_;
 
     hadError_ = false;
+    isHandlingError_ = false;
+    inPcall_ = false;
 }
 
 size_t VM::registerFunction(FunctionObject* func) {
@@ -98,14 +123,27 @@ StringObject* VM::internString(const char* chars, size_t length) {
         return it->second;
     }
 
-    if (bytesAllocated_ > nextGC_) {
-        collectGarbage();
-    }
+    // String size: sizeof(StringObject) + length + 1 (for null terminator)
+    size_t stringSize = sizeof(StringObject) + length + 1;
+    checkGC(stringSize);
 
-    StringObject* str = new StringObject(chars, length);
-    addObject(str);
-    runtimeStrings_[s] = str;
-    return str;
+    try {
+        StringObject* str = new StringObject(chars, length);
+        addObject(str);
+        runtimeStrings_[s] = str;
+        return str;
+    } catch (const std::bad_alloc&) {
+        collectGarbage();
+        try {
+            StringObject* str = new StringObject(chars, length);
+            addObject(str);
+            runtimeStrings_[s] = str;
+            return str;
+        } catch (const std::bad_alloc&) {
+            runtimeError("not enough memory (hard allocation failure)");
+            return nullptr;
+        }
+    }
 }
 
 StringObject* VM::internString(const std::string& str) {
@@ -121,42 +159,39 @@ StringObject* VM::getString(size_t index) {
 }
 
 TableObject* VM::createTable() {
-    if (bytesAllocated_ > nextGC_) {
-        collectGarbage();
-    }
-
-    TableObject* table = new TableObject();
-    addObject(table);
-    return table;
+    return allocateObject<TableObject>();
 }
 
 UserdataObject* VM::createUserdata(void* data) {
-    if (bytesAllocated_ > nextGC_) {
-        collectGarbage();
-    }
-
-    UserdataObject* userdata = new UserdataObject(data);
-    addObject(userdata);
-    return userdata;
+    return allocateObject<UserdataObject>(data);
 }
 
 ClosureObject* VM::createClosure(FunctionObject* function) {
-    if (bytesAllocated_ > nextGC_) {
+    // Closure size is variable: sizeof(ClosureObject) + upvalueCount * sizeof(UpvalueObject*)
+    // But our allocateObject only checks sizeof(T). 
+    // For simplicity, let's manually handle it if it's variable.
+    size_t closureSize = sizeof(ClosureObject) + function->upvalueCount() * sizeof(UpvalueObject*);
+    checkGC(closureSize);
+    
+    try {
+        ClosureObject* closure = new ClosureObject(function, function->upvalueCount());
+        addObject(closure);
+        return closure;
+    } catch (const std::bad_alloc&) {
         collectGarbage();
+        try {
+            ClosureObject* closure = new ClosureObject(function, function->upvalueCount());
+            addObject(closure);
+            return closure;
+        } catch (const std::bad_alloc&) {
+            runtimeError("not enough memory (hard allocation failure)");
+            return nullptr;
+        }
     }
-
-    ClosureObject* closure = new ClosureObject(function, function->upvalueCount());
-    addObject(closure);
-    return closure;
 }
 
 CoroutineObject* VM::createCoroutine(ClosureObject* closure) {
-    if (bytesAllocated_ > nextGC_) {
-        collectGarbage();
-    }
-
-    CoroutineObject* co = new CoroutineObject();
-    addObject(co);
+    CoroutineObject* co = allocateObject<CoroutineObject>();
     coroutines_.push_back(co);
 
     if (closure) {
@@ -186,13 +221,7 @@ UpvalueObject* VM::captureUpvalue(size_t stackIndex) {
         }
     }
 
-    if (bytesAllocated_ > nextGC_) {
-        collectGarbage();
-    }
-
-    // Create new upvalue
-    UpvalueObject* upvalue = new UpvalueObject(currentCoroutine_, stackIndex);
-    addObject(upvalue);
+    UpvalueObject* upvalue = allocateObject<UpvalueObject>(currentCoroutine_, stackIndex);
 
     // Insert into currentCoroutine_->openUpvalues (keep sorted by stack index for efficient closing)
     auto it = currentCoroutine_->openUpvalues.begin();
@@ -218,9 +247,7 @@ void VM::closeUpvalues(size_t lastStackIndex) {
 }
 
 FileObject* VM::openFile(const std::string& filename, const std::string& mode) {
-    FileObject* file = new FileObject(filename, mode);
-    addObject(file);
-    return file;
+    return allocateObject<FileObject>(filename, mode);
 }
 
 void VM::closeFile(FileObject* file) {
@@ -228,9 +255,7 @@ void VM::closeFile(FileObject* file) {
 }
 
 SocketObject* VM::createSocket(socket_t fd) {
-    SocketObject* socket = new SocketObject(fd);
-    addObject(socket);
-    return socket;
+    return allocateObject<SocketObject>(fd);
 }
 
 void VM::closeSocket(SocketObject* socket) {
@@ -388,94 +413,99 @@ const CallFrame& VM::currentFrame() const {
 }
 
 bool VM::run(const FunctionObject& function) {
-    // Save current state for recursive calls
-    const Chunk* oldChunk = currentCoroutine_->chunk;
-    const Chunk* oldRoot = currentCoroutine_->rootChunk;
-    size_t oldFrameCount = currentCoroutine_->frames.size();
+    try {
+        // Save current state for recursive calls
+        const Chunk* oldChunk = currentCoroutine_->chunk;
+        const Chunk* oldRoot = currentCoroutine_->rootChunk;
+        size_t oldFrameCount = currentCoroutine_->frames.size();
 
-    currentCoroutine_->chunk = function.chunk();
-    if (currentCoroutine_->rootChunk == nullptr) {
-        currentCoroutine_->rootChunk = function.chunk();
-    }
-    if (mainCoroutine_->rootChunk == nullptr) {
-        mainCoroutine_->rootChunk = function.chunk();
-    }
-    hadError_ = false;
+        currentCoroutine_->chunk = function.chunk();
+        if (currentCoroutine_->rootChunk == nullptr) {
+            currentCoroutine_->rootChunk = function.chunk();
+        }
+        if (mainCoroutine_->rootChunk == nullptr) {
+            mainCoroutine_->rootChunk = function.chunk();
+        }
+        hadError_ = false;
 
-    // Initialize standard library on first run (needs chunk for string pool)
-    if (!stdlibInitialized_) {
-        initStandardLibrary();
-    }
+        // Initialize standard library on first run (needs chunk for string pool)
+        if (!stdlibInitialized_) {
+            initStandardLibrary();
+        }
 
 #ifdef PRINT_CODE
-    function.chunk()->disassemble(function.name());
+        function.chunk()->disassemble(function.name());
 #endif
 
-    // Create root closure
-    ClosureObject* closure = createClosure(const_cast<FunctionObject*>(&function));
-    
-    // Clear frames for a clean start if this is the first call
-    if (currentCoroutine_->frames.empty()) {
-        currentCoroutine_->stack.clear();
-    }
-    
-    // Initialize root upvalues (the first one is _ENV)
-    if (closure->upvalueCount() > 0) {
-        UpvalueObject* envUpvalue = nullptr;
+        // Create root closure
+        ClosureObject* closure = createClosure(const_cast<FunctionObject*>(&function));
         
-        // Try to inherit _ENV from current frame if we're called from Lua
-        if (!currentCoroutine_->frames.empty()) {
-            envUpvalue = currentFrame().closure->getUpvalueObj(0); // Assumes _ENV is always upvalue 0
+        // Clear frames for a clean start if this is the first call
+        if (currentCoroutine_->frames.empty()) {
+            currentCoroutine_->stack.clear();
         }
         
-        if (!envUpvalue) {
-            // Top-level call or native caller, use _G
-            Value gTable = Value::nil();
-            auto it = globals_.find("_G");
-            if (it != globals_.end()) {
-                gTable = it->second;
-            } else {
-                TableObject* table = createTable();
-                gTable = Value::table(table);
-                globals_["_G"] = gTable;
+        // Initialize root upvalues (the first one is _ENV)
+        if (closure->upvalueCount() > 0) {
+            UpvalueObject* envUpvalue = nullptr;
+            
+            // Try to inherit _ENV from current frame if we're called from Lua
+            if (!currentCoroutine_->frames.empty()) {
+                envUpvalue = currentFrame().closure->getUpvalueObj(0); // Assumes _ENV is always upvalue 0
             }
             
-            envUpvalue = new UpvalueObject(gTable);
-            addObject(envUpvalue);
+            if (!envUpvalue) {
+                // Top-level call or native caller, use _G
+                Value gTable = Value::nil();
+                auto it = globals_.find("_G");
+                if (it != globals_.end()) {
+                    gTable = it->second;
+                } else {
+                    TableObject* table = createTable();
+                    gTable = Value::table(table);
+                    globals_["_G"] = gTable;
+                }
+                
+                envUpvalue = new UpvalueObject(gTable);
+                addObject(envUpvalue);
+            }
+            
+            closure->setUpvalue(0, envUpvalue);
         }
-        
-        closure->setUpvalue(0, envUpvalue);
-    }
 
-    push(Value::closure(closure));
-    
-    // Use callValue to push the frame correctly
-    if (!callValue(0, 1)) {
+        push(Value::closure(closure));
+        
+        // Use callValue to push the frame correctly
+        if (!callValue(0, 1)) {
+            return false;
+        }
+
+        if (currentCoroutine_->hookMask & CoroutineObject::MASK_CALL) {
+            callHook("call");
+        }
+
+        bool result = run();
+
+        if (currentCoroutine_->status == CoroutineObject::Status::SUSPENDED) {
+            // Coroutine yielded - do NOT restore state or pop frames!
+            // The state will be restored when resume() finishes and returns to resumer.
+            return result;
+        }
+
+        // Restore previous state
+        currentCoroutine_->chunk = oldChunk;
+        currentCoroutine_->rootChunk = oldRoot;
+        
+        // Clean up frames from this call (if any left)
+        while (currentCoroutine_->frames.size() > oldFrameCount) {
+            currentCoroutine_->frames.pop_back();
+        }
+
+        return result;
+    } catch (const RuntimeError& e) {
+        isHandlingError_ = false;
         return false;
     }
-
-    if (currentCoroutine_->hookMask & CoroutineObject::MASK_CALL) {
-        callHook("call");
-    }
-
-    bool result = run();
-
-    if (currentCoroutine_->status == CoroutineObject::Status::SUSPENDED) {
-        // Coroutine yielded - do NOT restore state or pop frames!
-        // The state will be restored when resume() finishes and returns to resumer.
-        return result;
-    }
-
-    // Restore previous state
-    currentCoroutine_->chunk = oldChunk;
-    currentCoroutine_->rootChunk = oldRoot;
-    
-    // Clean up frames from this call (if any left)
-    while (currentCoroutine_->frames.size() > oldFrameCount) {
-        currentCoroutine_->frames.pop_back();
-    }
-
-    return result;
 }
 
 bool VM::run() {
@@ -1494,26 +1524,18 @@ bool VM::pcall(int argCount) {
     bool prevPcall = inPcall_;
     inPcall_ = true;
     
-    // callValue pops (argCount - 1) and the function, and sets up a new frame if closure
-    bool success = callValue(argCount - 1, 0); // 0 means return all results
-    
-    if (!success) {
-        // Error during call setup (e.g. invalid function, or error in native func)
-        // Clean up stack
-        while (currentCoroutine_->stack.size() > stackSizeBefore) {
-            pop();
+    bool success = false;
+    try {
+        // callValue pops (argCount - 1) and the function, and sets up a new frame if closure
+        success = callValue(argCount - 1, 0); // 0 means return all results
+
+        // If it was a closure, a new frame was pushed. We need to run it until it pops.
+        if (success && currentCoroutine_->frames.size() > prevFrames) {
+            success = run(prevFrames);
         }
-        push(Value::boolean(false));
-        push(Value::runtimeString(internString(lastErrorMessage_)));
-        hadError_ = false; // Recovered
-        inPcall_ = prevPcall;
-        currentCoroutine_->lastResultCount = 2;
-        return true;
-    }
-    
-    // If it was a closure, a new frame was pushed. We need to run it until it pops.
-    if (currentCoroutine_->frames.size() > prevFrames) {
-        success = run(prevFrames);
+    } catch (const RuntimeError& e) {
+        isHandlingError_ = false;
+        success = false;
     }
     
     inPcall_ = prevPcall;
@@ -1597,15 +1619,21 @@ bool VM::xpcall(int argCount) {
     }
     
     // Now stack is: [..., f, arg1, arg2, ...]
-    bool success = callValue(argCount - 2, 0);
-    
-    if (success && currentCoroutine_->frames.size() > prevFrames) {
-        success = run(prevFrames);
+    bool success = false;
+    try {
+        success = callValue(argCount - 2, 0);
+        if (success && currentCoroutine_->frames.size() > prevFrames) {
+            success = run(prevFrames);
+        }
+    } catch (const RuntimeError& e) {
+        isHandlingError_ = false;
+        success = false;
     }
     
     inPcall_ = prevPcall;
 
     if (!success) {
+        printf("DEBUG: pcall/xpcall failure unwind. prevFrames=%zu current=%zu\n", prevFrames, currentCoroutine_->frames.size());
         // Runtime error occurred during execution
         // Stack and frames need to be unwound
         while (currentCoroutine_->frames.size() > prevFrames) {
@@ -2048,29 +2076,35 @@ Value VM::bitwiseNot(const Value& a) {
 }
 
 void VM::runtimeError(const std::string& message) {
+    if (isHandlingError_) {
+        // Nested error during error handling - this is bad.
+        // Just throw without more printing.
+        throw RuntimeError(message);
+    }
+
+    isHandlingError_ = true;
     lastErrorMessage_ = message;
     hadError_ = true;
 
-    if (inPcall_) {
-        // Do not print anything, just record the error
-        return;
+    if (!inPcall_) {
+        // Get line number from current instruction
+        int line = -1;
+        if (!currentCoroutine_->frames.empty()) {
+            const Chunk* chunk = currentFrame().chunk;
+            if (chunk && currentFrame().ip > 0) {
+                line = chunk->getLine(currentFrame().ip - 1);
+            }
+        }
+
+        if (line != -1) {
+            std::cout << "RUNTIME ERROR at line " << line << ": " << message << std::endl;
+        } else {
+            std::cout << "RUNTIME ERROR: " << message << std::endl;
+        }
     }
 
-    // Get line number from current instruction
-    const Chunk* chunk = currentCoroutine_->frames.empty() ? currentCoroutine_->chunk : currentFrame().chunk;
-    int line = chunk->getLine(currentFrame().ip - 1);
-    uint8_t op = chunk->at(currentFrame().ip - 1);
-    std::cout << "RUNTIME ERROR at line " << line << " (op " << (int)op << " " << opcodeName(static_cast<OpCode>(op)) << "): " << message << std::endl;
-    
-    std::cout << "Stack trace (bottom to top):" << std::endl;
-    for (size_t i = 0; i < currentCoroutine_->stack.size(); i++) {
-        std::cout << "  [" << i << "] " << currentCoroutine_->stack[i].typeToString() << ": " << currentCoroutine_->stack[i] << std::endl;
-    }
-
-    Log::error(message, line);
-    hadError_ = true;
+    throw RuntimeError(message);
 }
-
 void VM::traceExecution() {
     // Print stack contents
     std::cout << "          ";

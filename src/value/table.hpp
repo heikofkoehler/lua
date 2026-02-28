@@ -66,10 +66,6 @@ public:
         return false;
     }
 
-    size_t size() const {
-        return map_.size();
-    }
-
     size_t length() const {
         size_t n = 0;
         while (true) {
@@ -98,6 +94,11 @@ public:
 
     // GC interface: mark all keys and values
     void markReferences() override;
+
+    size_t size() const override {
+        // Approximate size: object + entries * (key + value + node overhead)
+        return sizeof(TableObject) + map_.size() * (sizeof(Value) * 2 + 16);
+    }
 
 private:
     std::unordered_map<Value, Value, ValueHash, ValueEqual> map_;
