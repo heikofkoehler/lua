@@ -499,7 +499,7 @@ bool VM::run(size_t targetFrameCount) {
                 Value b = pop();
                 Value a = pop();
                 if (a.isNumber() && b.isNumber()) {
-                    push(Value::number(a.asNumber() + b.asNumber()));
+                    push(add(a, b));
                 } else if (!callBinaryMetamethod(a, b, "__add")) {
                     runtimeError("attempt to perform arithmetic on " + a.typeToString() + " and " + b.typeToString());
                 }
@@ -510,7 +510,7 @@ bool VM::run(size_t targetFrameCount) {
                 Value b = pop();
                 Value a = pop();
                 if (a.isNumber() && b.isNumber()) {
-                    push(Value::number(a.asNumber() - b.asNumber()));
+                    push(subtract(a, b));
                 } else if (!callBinaryMetamethod(a, b, "__sub")) {
                     runtimeError("attempt to perform arithmetic on " + a.typeToString() + " and " + b.typeToString());
                 }
@@ -521,7 +521,7 @@ bool VM::run(size_t targetFrameCount) {
                 Value b = pop();
                 Value a = pop();
                 if (a.isNumber() && b.isNumber()) {
-                    push(Value::number(a.asNumber() * b.asNumber()));
+                    push(multiply(a, b));
                 } else if (!callBinaryMetamethod(a, b, "__mul")) {
                     runtimeError("attempt to perform arithmetic on " + a.typeToString() + " and " + b.typeToString());
                 }
@@ -532,7 +532,7 @@ bool VM::run(size_t targetFrameCount) {
                 Value b = pop();
                 Value a = pop();
                 if (a.isNumber() && b.isNumber()) {
-                    push(Value::number(a.asNumber() / b.asNumber()));
+                    push(divide(a, b));
                 } else if (!callBinaryMetamethod(a, b, "__div")) {
                     runtimeError("attempt to perform arithmetic on " + a.typeToString() + " and " + b.typeToString());
                 }
@@ -543,7 +543,7 @@ bool VM::run(size_t targetFrameCount) {
                 Value b = pop();
                 Value a = pop();
                 if (a.isNumber() && b.isNumber()) {
-                    push(Value::number(std::fmod(a.asNumber(), b.asNumber())));
+                    push(modulo(a, b));
                 } else if (!callBinaryMetamethod(a, b, "__mod")) {
                     runtimeError("attempt to perform arithmetic on " + a.typeToString() + " and " + b.typeToString());
                 }
@@ -554,7 +554,7 @@ bool VM::run(size_t targetFrameCount) {
                 Value b = pop();
                 Value a = pop();
                 if (a.isNumber() && b.isNumber()) {
-                    push(Value::number(std::pow(a.asNumber(), b.asNumber())));
+                    push(power(a, b));
                 } else if (!callBinaryMetamethod(a, b, "__pow")) {
                     runtimeError("attempt to perform arithmetic on " + a.typeToString() + " and " + b.typeToString());
                 }
@@ -1550,6 +1550,9 @@ Value VM::add(const Value& a, const Value& b) {
         runtimeError("Operands must be numbers");
         return Value::nil();
     }
+    if (a.isInteger() && b.isInteger()) {
+        return Value::integer(a.asInteger() + b.asInteger());
+    }
     return Value::number(a.asNumber() + b.asNumber());
 }
 
@@ -1558,6 +1561,9 @@ Value VM::subtract(const Value& a, const Value& b) {
         runtimeError("Operands must be numbers");
         return Value::nil();
     }
+    if (a.isInteger() && b.isInteger()) {
+        return Value::integer(a.asInteger() - b.asInteger());
+    }
     return Value::number(a.asNumber() - b.asNumber());
 }
 
@@ -1565,6 +1571,9 @@ Value VM::multiply(const Value& a, const Value& b) {
     if (!a.isNumber() || !b.isNumber()) {
         runtimeError("Operands must be numbers");
         return Value::nil();
+    }
+    if (a.isInteger() && b.isInteger()) {
+        return Value::integer(a.asInteger() * b.asInteger());
     }
     return Value::number(a.asNumber() * b.asNumber());
 }
@@ -1579,6 +1588,7 @@ Value VM::divide(const Value& a, const Value& b) {
         runtimeError("Division by zero");
         return Value::nil();
     }
+    // Float division always returns float in Lua 5.3+
     return Value::number(a.asNumber() / divisor);
 }
 
@@ -1587,7 +1597,26 @@ Value VM::modulo(const Value& a, const Value& b) {
         runtimeError("Operands must be numbers");
         return Value::nil();
     }
-    return Value::number(std::fmod(a.asNumber(), b.asNumber()));
+    if (a.isInteger() && b.isInteger()) {
+        int64_t div = b.asInteger();
+        if (div == 0) {
+            runtimeError("Modulo by zero");
+            return Value::nil();
+        }
+        int64_t val = a.asInteger();
+        int64_t res = val % div;
+        if (res != 0 && (val < 0) != (div < 0)) {
+            res += div;
+        }
+        return Value::integer(res);
+    }
+    double av = a.asNumber();
+    double bv = b.asNumber();
+    double res = std::fmod(av, bv);
+    if (res != 0.0 && (av < 0.0) != (bv < 0.0)) {
+        res += bv;
+    }
+    return Value::number(res);
 }
 
 Value VM::power(const Value& a, const Value& b) {
@@ -1595,6 +1624,7 @@ Value VM::power(const Value& a, const Value& b) {
         runtimeError("Operands must be numbers");
         return Value::nil();
     }
+    // Power always returns float
     return Value::number(std::pow(a.asNumber(), b.asNumber()));
 }
 

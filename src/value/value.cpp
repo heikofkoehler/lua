@@ -19,7 +19,8 @@ std::string Value::toString() const {
 
 std::string Value::typeToString() const {
     switch (type()) {
-        case Type::NUMBER: return "number";
+        case Type::NUMBER: 
+        case Type::INTEGER: return "number";
         case Type::BOOL: return "boolean";
         case Type::NIL: return "nil";
         case Type::STRING:
@@ -39,6 +40,7 @@ void Value::print(std::ostream& os) const {
     switch (type()) {
         case Type::NIL: os << "nil"; break;
         case Type::BOOL: os << (asBool() ? "true" : "false"); break;
+        case Type::INTEGER: os << asInteger(); break;
         case Type::NUMBER: {
             double num = asNumber();
             if (std::floor(num) == num && !std::isinf(num) && !std::isnan(num)) {
@@ -61,18 +63,18 @@ void Value::print(std::ostream& os) const {
 }
 
 bool Value::operator==(const Value& other) const {
-    if (type() != other.type()) {
-        // Special case: compare STRING (index) and RUNTIME_STRING (ptr) by content
-        // This is tricky without VM context for compile-time strings.
-        // But in a running VM, readConstant already interns everything.
-        return false;
-    }
-    
-    if (isNumber()) {
+    if (isNumber() && other.isNumber()) {
+        if (isInteger() && other.isInteger()) {
+            return asInteger() == other.asInteger();
+        }
         double a = asNumber();
         double b = other.asNumber();
         if (std::isnan(a) && std::isnan(b)) return false;
         return a == b;
+    }
+    
+    if (type() != other.type()) {
+        return false;
     }
 
     if (isRuntimeString()) {
@@ -90,6 +92,7 @@ bool Value::isStringEqual(const std::string& str) const {
 }
 
 size_t Value::hash() const {
+    if (isInteger()) return std::hash<int64_t>()(asInteger());
     if (isNumber()) return std::hash<double>()(asNumber());
     if (isRuntimeString()) return std::hash<std::string>()(asStringObj()->chars());
     return std::hash<uint64_t>()(bits_);
@@ -108,6 +111,11 @@ void Value::serialize(std::ostream& os, const Chunk* chunk) const {
         }
         case Type::NUMBER: {
             double n = asNumber();
+            os.write(reinterpret_cast<const char*>(&n), sizeof(n));
+            break;
+        }
+        case Type::INTEGER: {
+            int64_t n = asInteger();
             os.write(reinterpret_cast<const char*>(&n), sizeof(n));
             break;
         }
@@ -144,6 +152,11 @@ Value Value::deserialize(std::istream& is, Chunk* chunk) {
             double n;
             is.read(reinterpret_cast<char*>(&n), sizeof(n));
             return Value::number(n);
+        }
+        case Type::INTEGER: {
+            int64_t n;
+            is.read(reinterpret_cast<char*>(&n), sizeof(n));
+            return Value::integer(n);
         }
         case Type::STRING: {
             uint32_t len;

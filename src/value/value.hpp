@@ -33,7 +33,8 @@ public:
     enum class Type {
         NIL,
         BOOL,
-        NUMBER,
+        NUMBER, // Float
+        INTEGER,
         FUNCTION, // Compile-time function index
         STRING,   // Compile-time string index
         TABLE,    // Pointer to TableObject
@@ -64,9 +65,21 @@ public:
     }
 
     static Value number(double value) {
+        // Automatically convert to integer if it's an exact integer fitting in 48 bits
+        double intPart;
+        if (std::modf(value, &intPart) == 0.0 && 
+            value >= -140737488355328.0 && value <= 140737488355327.0) {
+            return integer(static_cast<int64_t>(value));
+        }
+        
         Value v(0);
         std::memcpy(&v.bits_, &value, sizeof(double));
         return v;
+    }
+
+    static Value integer(int64_t value) {
+        // Store 48-bit integer
+        return Value(QNAN | TAG_INTEGER | (static_cast<uint64_t>(value) & PAYLOAD_MASK));
     }
 
     static Value function(size_t funcIndex) {
@@ -108,9 +121,14 @@ public:
     // Type checking
     bool isNil() const { return bits_ == (QNAN | TAG_NIL); }
     bool isBool() const { return (bits_ & (QNAN | TAG_MASK)) == (QNAN | TAG_BOOL); }
+    bool isInteger() const { return (bits_ & (QNAN | TAG_MASK)) == (QNAN | TAG_INTEGER); }
     bool isNumber() const { 
+        if (isInteger()) return true; // Integers are numbers in Lua
         if ((bits_ & 0x7FF0000000000000ULL) != 0x7FF0000000000000ULL) return true;
         return (bits_ & TAG_MASK) == 0; // Infinity has 0 tag
+    }
+    bool isFloat() const {
+        return isNumber() && !isInteger();
     }
     bool isFunctionObject() const { return (bits_ & (QNAN | TAG_MASK)) == (QNAN | TAG_FUNCTION); }
     
@@ -157,7 +175,22 @@ public:
     // Value extraction
     bool asBool() const { return (bits_ & 1) != 0; }
 
+    int64_t asInteger() const {
+        if (isInteger()) {
+            uint64_t payload = bits_ & PAYLOAD_MASK;
+            // Sign extend the 48-bit integer
+            if (payload & 0x0000800000000000ULL) {
+                return static_cast<int64_t>(payload | 0xFFFF000000000000ULL);
+            }
+            return static_cast<int64_t>(payload);
+        }
+        return static_cast<int64_t>(asNumber());
+    }
+
     double asNumber() const {
+        if (isInteger()) {
+            return static_cast<double>(asInteger());
+        }
         double result;
         std::memcpy(&result, &bits_, sizeof(double));
         return result;
@@ -218,6 +251,7 @@ private:
     static constexpr uint64_t TAG_RUNTIME_STRING = 0x000A000000000000ULL;
     static constexpr uint64_t TAG_NATIVE_FUNCTION = 0x000B000000000000ULL;
     static constexpr uint64_t TAG_THREAD   = 0x000C000000000000ULL;
+    static constexpr uint64_t TAG_INTEGER  = 0x000D000000000000ULL;
     
     static constexpr uint64_t TAG_MASK     = 0x000F000000000000ULL;
     static constexpr uint64_t PAYLOAD_MASK = 0x0000FFFFFFFFFFFFULL;
