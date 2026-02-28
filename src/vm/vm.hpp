@@ -46,6 +46,7 @@ public:
 
     // Execute Lua source code
     bool runSource(const std::string& source, const std::string& name = "script");
+    FunctionObject* compileSource(const std::string& source, const std::string& name = "script");
 
     // Reset VM state
     void reset();
@@ -92,6 +93,7 @@ public:
     NativeFunction getNativeFunction(size_t index);
     void addNativeToTable(TableObject* table, const char* name, NativeFunction func);
     void initStandardLibrary();
+    void runInitializationFrames();
 
     // Root chunk access (for native functions to access compile-time strings)
     const Chunk* rootChunk() const { return currentCoroutine_->rootChunk; }

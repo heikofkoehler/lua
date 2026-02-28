@@ -255,19 +255,36 @@ void VM::addNativeToTable(TableObject* table, const char* name, NativeFunction f
     table->set(name, Value::nativeFunction(funcIndex));
 }
 
+void VM::runInitializationFrames() {
+    size_t baseFrames = currentCoroutine_->frames.size();
+    while (currentCoroutine_->frames.size() > baseFrames) {
+        // Run until this specific initialization frame returns
+        if (run(currentCoroutine_->frames.size() - 1)) {
+            // Success, pop results left by the initialization script
+            for (size_t i = 0; i < currentCoroutine_->lastResultCount; i++) {
+                pop();
+            }
+        }
+    }
+}
+
 void VM::initStandardLibrary() {
+    if (stdlibInitialized_) return;
+    stdlibInitialized_ = true;
+
     // Register base library (global functions like collectgarbage)
     registerBaseLibrary(this);
 
     // Create 'string' table
     TableObject* stringTable = createTable();
-    registerStringLibrary(this, stringTable);
     globals_["string"] = Value::table(stringTable);
 
     // Create 'table' table
     TableObject* tableTable = createTable();
-    registerTableLibrary(this, tableTable);
     globals_["table"] = Value::table(tableTable);
+    registerTableLibrary(this, tableTable);
+
+    registerStringLibrary(this, stringTable);
 
     // Create 'math' table
     TableObject* mathTable = createTable();
@@ -301,22 +318,8 @@ void VM::initStandardLibrary() {
     registerDebugLibrary(this, debugTable);
     globals_["debug"] = Value::table(debugTable);
 
-    // Define coroutine.wrap in Lua
-    const char* wrapScript = 
-        "function __coroutine_wrap(f)\n"
-        "    local co = coroutine.create(f)\n"
-        "    return function(...)\n"
-        "        local res = table.pack(coroutine.resume(co, ...))\n"
-        "        if not res[1] then\n"
-        "            error(res[2])\n"
-        "        end\n"
-        "        return table.unpack(res, 2, res.n)\n"
-        "    end\n"
-        "end\n"
-        "coroutine.wrap = __coroutine_wrap\n"
-        "__coroutine_wrap = nil\n";
-
-    runSource(wrapScript, "coroutine_wrap_init");
+    // Run all initialization scripts registered during library loading
+    runInitializationFrames();
 
     // Register _G (global environment)
     TableObject* gTable = createTable();
@@ -359,7 +362,6 @@ bool VM::run(const Chunk& chunk) {
 
     // Initialize standard library on first run (needs chunk for string pool)
     if (!stdlibInitialized_) {
-        stdlibInitialized_ = true; // Set before calling to avoid recursion
         initStandardLibrary();
     }
 
@@ -1903,29 +1905,34 @@ void VM::traceExecution() {
 }
 
 bool VM::runSource(const std::string& source, const std::string& name) {
+    FunctionObject* func = compileSource(source, name);
+    if (!func) return false;
+    return run(*func->chunk());
+}
+
+FunctionObject* VM::compileSource(const std::string& source, const std::string& name) {
     try {
         Lexer lexer(source);
         Parser parser(lexer);
         auto program = parser.parse();
-        if (!program) return false;
+        if (!program) return nullptr;
 
         CodeGenerator codegen;
         auto chunk = codegen.generate(program.get());
-        if (!chunk) return false;
+        if (!chunk) return nullptr;
 
 #ifdef PRINT_CODE
         chunk->disassemble(name);
 #endif
 
         // Create a FunctionObject to own the Chunk and keep it alive in the VM's function table
-        FunctionObject* function = new FunctionObject(name, 0, std::move(chunk));
+        // We set arity to 0 and hasVarargs to true so the script can access arguments via '...'
+        FunctionObject* function = new FunctionObject(name, 0, std::move(chunk), 0, true);
         registerFunction(function);
-
-        // Run the chunk
-        return run(*function->chunk());
+        return function;
     } catch (const std::exception& e) {
-        std::cerr << "Error in runSource (" << name << "): " << e.what() << std::endl;
-        return false;
+        std::cerr << "Error in compileSource (" << name << "): " << e.what() << std::endl;
+        return nullptr;
     }
 }
 

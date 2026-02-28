@@ -813,18 +813,9 @@ void CodeGenerator::visitForInStmt(ForInStmtNode* node) {
     expectedRetCount_ = 4; // 3 results (3+1=4)
     node->iterator()->accept(*this);
     expectedRetCount_ = oldRetCount; // Restore
-
-    // Pad if not a call
-    auto* callExpr = dynamic_cast<CallExprNode*>(node->iterator());
-    if (!callExpr) {
-        // Only 1 value was pushed. Push 2 nils for state and control
-        emitOpCode(OpCode::OP_NIL);
-        emitOpCode(OpCode::OP_NIL);
-    }
-
+    
     // Store iterator state in hidden locals
-    // Stack top is control, then state, then iterator
-    // We need to store them in locals to access them efficiently
+    // They are already on stack in order [iter, state, control]
     addLocal("(for iterator)");
     addLocal("(for state)");
     addLocal("(for control)");
