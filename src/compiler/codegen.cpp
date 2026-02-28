@@ -913,14 +913,24 @@ void CodeGenerator::visitCall(CallExprNode* node) {
     expectedRetCount_ = oldRetCount;
 
     // Emit call instruction
-    if (isLastMultires) {
-        emitOpCode(OpCode::OP_CALL_MULTI);
-        emitByte(static_cast<uint8_t>(args.size() - 1)); // Number of FIXED args
-        emitByte(expectedRetCount_);
+    if (isTailCall_) {
+        if (isLastMultires) {
+            emitOpCode(OpCode::OP_TAILCALL_MULTI);
+            emitByte(static_cast<uint8_t>(args.size() - 1)); // Number of FIXED args
+        } else {
+            emitOpCode(OpCode::OP_TAILCALL);
+            emitByte(static_cast<uint8_t>(args.size()));
+        }
     } else {
-        emitOpCode(OpCode::OP_CALL);
-        emitByte(static_cast<uint8_t>(args.size()));
-        emitByte(expectedRetCount_);
+        if (isLastMultires) {
+            emitOpCode(OpCode::OP_CALL_MULTI);
+            emitByte(static_cast<uint8_t>(args.size() - 1)); // Number of FIXED args
+            emitByte(expectedRetCount_);
+        } else {
+            emitOpCode(OpCode::OP_CALL);
+            emitByte(static_cast<uint8_t>(args.size()));
+            emitByte(expectedRetCount_);
+        }
     }
 }
 
@@ -987,15 +997,25 @@ void CodeGenerator::visitMethodCall(MethodCallExprNode* node) {
     expectedRetCount_ = oldRetCount;
 
     // Emit call instruction. Argument count is args.size() + 1 (for self)
-    if (isLastMultires) {
-        emitOpCode(OpCode::OP_CALL_MULTI);
-        emitByte(static_cast<uint8_t>(args.size())); // args.size() FIXED args (including self, minus the multires one)
-        // Wait: FIXED args = (args.size() - 1) + 1 = args.size()
-        emitByte(expectedRetCount_);
+    if (isTailCall_) {
+        if (isLastMultires) {
+            emitOpCode(OpCode::OP_TAILCALL_MULTI);
+            emitByte(static_cast<uint8_t>(args.size())); // FIXED args
+        } else {
+            emitOpCode(OpCode::OP_TAILCALL);
+            emitByte(static_cast<uint8_t>(args.size() + 1));
+        }
     } else {
-        emitOpCode(OpCode::OP_CALL);
-        emitByte(static_cast<uint8_t>(args.size() + 1));
-        emitByte(expectedRetCount_);
+        if (isLastMultires) {
+            emitOpCode(OpCode::OP_CALL_MULTI);
+            emitByte(static_cast<uint8_t>(args.size())); // args.size() FIXED args (including self, minus the multires one)
+            // Wait: FIXED args = (args.size() - 1) + 1 = args.size()
+            emitByte(expectedRetCount_);
+        } else {
+            emitOpCode(OpCode::OP_CALL);
+            emitByte(static_cast<uint8_t>(args.size() + 1));
+            emitByte(expectedRetCount_);
+        }
     }
 }
 
@@ -1193,14 +1213,20 @@ void CodeGenerator::visitReturn(ReturnStmtNode* node) {
                                  (dynamic_cast<VarargExprNode*>(args[i].get()) != nullptr);
             
             uint8_t oldRetCount = expectedRetCount_;
+            bool oldTailCall = isTailCall_;
             if (i == args.size() - 1 && canBeMultires) {
                 expectedRetCount_ = 0; // All results (0 = ALL)
                 isLastMultires = true;
+                if (values.size() == 1 && (dynamic_cast<CallExprNode*>(args[i].get()) != nullptr || 
+                                           dynamic_cast<MethodCallExprNode*>(args[i].get()) != nullptr)) {
+                    isTailCall_ = true;
+                }
             } else {
                 expectedRetCount_ = 2; // ONE (1 + 1 = 2)
             }
             args[i]->accept(*this);
             expectedRetCount_ = oldRetCount;
+            isTailCall_ = oldTailCall;
         }
 
         // Emit return instruction with count

@@ -57,6 +57,8 @@ enum class OpCode : uint8_t {
     OP_CLOSURE,     // Load function constant [index: uint8_t]
     OP_CALL,          // call function [arg_count: uint8_t, ret_count: uint8_t]
     OP_CALL_MULTI,    // call with variable args (last arg was multires) [fixed_arg_count: uint8_t, ret_count: uint8_t]
+    OP_TAILCALL,      // tail call function [arg_count: uint8_t] (always returns all results to caller)
+    OP_TAILCALL_MULTI,// tail call with variable args [fixed_arg_count: uint8_t]
     OP_RETURN_VALUE,  // return with values from function [count: uint8_t] (0 means all from lastResultCount)
 
     // Tables
@@ -117,6 +119,8 @@ inline const char* opcodeName(OpCode op) {
         case OpCode::OP_CLOSURE:       return "OP_CLOSURE";
         case OpCode::OP_CALL:          return "OP_CALL";
         case OpCode::OP_CALL_MULTI:    return "OP_CALL_MULTI";
+        case OpCode::OP_TAILCALL:      return "OP_TAILCALL";
+        case OpCode::OP_TAILCALL_MULTI: return "OP_TAILCALL_MULTI";
         case OpCode::OP_RETURN_VALUE:  return "OP_RETURN_VALUE";
         case OpCode::OP_NEW_TABLE:     return "OP_NEW_TABLE";
         case OpCode::OP_GET_TABLE:     return "OP_GET_TABLE";

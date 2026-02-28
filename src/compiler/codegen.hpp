@@ -83,6 +83,7 @@ private:
     
     // Context for expression return values
     uint8_t expectedRetCount_; // 0=all (multires), 1=single (default), >1=specific count
+    bool isTailCall_ = false;  // Whether current call should be compiled as tail call
 
     // Loop context for break statements
     std::vector<std::vector<size_t>> breakJumps_;  // Stack of break jump lists

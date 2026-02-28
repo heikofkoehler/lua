@@ -782,6 +782,24 @@ bool VM::run(size_t targetFrameCount) {
                 break;
             }
 
+            case OpCode::OP_TAILCALL: {
+                uint8_t argCount = readByte();
+                // A tailcall always expects ALL return values (retCount = 0)
+                if (!callValue(argCount, 0, true)) {
+                    return false;
+                }
+                break;
+            }
+
+            case OpCode::OP_TAILCALL_MULTI: {
+                uint8_t fixedArgCount = readByte();
+                int actualArgCount = static_cast<int>(fixedArgCount) + static_cast<int>(currentCoroutine_->lastResultCount);
+                if (!callValue(actualArgCount, 0, true)) {
+                    return false;
+                }
+                break;
+            }
+
             case OpCode::OP_RETURN_VALUE: {
                 // Read the count of return values
                 uint8_t count = readByte();
@@ -1342,7 +1360,7 @@ bool VM::xpcall(int argCount) {
     return true;
 }
 
-bool VM::callValue(int argCount, int retCount) {
+bool VM::callValue(int argCount, int retCount, bool isTailCall) {
     Value callee = peek(argCount);
 
     if (callee.isNativeFunction()) {
@@ -1439,13 +1457,38 @@ bool VM::callValue(int argCount, int retCount) {
         CallFrame frame;
         frame.closure = closure;
         frame.chunk = function->chunk();
-        frame.callerChunk = currentCoroutine_->chunk;
         frame.ip = 0; // New frame starts at beginning of its chunk
-        frame.stackBase = currentCoroutine_->stack.size() - argCount;
         frame.retCount = retCount;
         frame.varargs = std::move(varargs);
-        // std::cout << "DEBUG frame: closure=" << closureIndex << " base=" << frame.stackBase << " args=" << argCount << " size=" << currentCoroutine_->stack.size() << std::endl;
-        currentCoroutine_->frames.push_back(frame);
+
+        if (isTailCall && !currentCoroutine_->frames.empty()) {
+            // Close upvalues for current frame
+            size_t oldStackBase = currentCoroutine_->frames.back().stackBase;
+            closeUpvalues(oldStackBase);
+            
+            size_t newStackBase = currentCoroutine_->stack.size() - argCount;
+            size_t calleePos = newStackBase - 1;
+            
+            // Move callee and args down
+            for (int i = 0; i <= argCount; i++) {
+                currentCoroutine_->stack[oldStackBase - 1 + i] = currentCoroutine_->stack[calleePos + i];
+            }
+            
+            // Pop the rest
+            while (currentCoroutine_->stack.size() > oldStackBase + argCount) {
+                currentCoroutine_->stack.pop_back();
+            }
+            
+            frame.stackBase = oldStackBase;
+            frame.callerChunk = currentCoroutine_->frames.back().callerChunk;
+            
+            currentCoroutine_->frames.pop_back();
+            currentCoroutine_->frames.push_back(std::move(frame));
+        } else {
+            frame.stackBase = currentCoroutine_->stack.size() - argCount;
+            frame.callerChunk = currentCoroutine_->chunk;
+            currentCoroutine_->frames.push_back(std::move(frame));
+        }
 
         currentCoroutine_->chunk = function->chunk();
         currentCoroutine_->lastResultCount = 0; // Initialize for new frame
@@ -1478,7 +1521,7 @@ bool VM::callValue(int argCount, int retCount) {
              push(func);
              for (auto it = args.rbegin(); it != args.rend(); ++it) push(*it);
              
-             return callValue(argCount + 1, retCount);
+             return callValue(argCount + 1, retCount, isTailCall);
         }
     }
 

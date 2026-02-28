@@ -126,7 +126,7 @@ public:
     // Metamethod helper
     Value getMetamethod(const Value& obj, const std::string& method);
     bool callBinaryMetamethod(const Value& a, const Value& b, const std::string& method);
-    bool callValue(int argCount, int retCount);
+    bool callValue(int argCount, int retCount, bool isTailCall = false);
     std::string getStringValue(const Value& value);
 
     // Global metatables

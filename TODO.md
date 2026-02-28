@@ -3,7 +3,7 @@
 This document tracks the missing features and planned improvements to bring this custom Lua VM closer to the Lua 5.1-5.4 specifications.
 
 ## 1. Language Syntax & Control Flow
-- [ ] **Tail Call Optimization (TCO):** Implement `OP_TAILCALL` to prevent stack overflow in deep recursion.
+- [x] **Tail Call Optimization (TCO):** Implement `OP_TAILCALL` to prevent stack overflow in deep recursion.
 - [ ] **Goto and Labels:** Add support for `goto` and `::label::` (Lua 5.2+).
 - [ ] **Bitwise Operators:** Add tokens and opcodes for `&`, `|`, `~`, `<<`, `>>`, and `//` (integer division) (Lua 5.3+).
 - [ ] **Generic `for` Loop:** Ensure full support for the `for var in iter, state, var do` iterator protocol.
