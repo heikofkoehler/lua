@@ -134,6 +134,27 @@ private:
     std::vector<std::unique_ptr<ExprNode>> args_;
 };
 
+// Method call expression: object:method(args)
+class MethodCallExprNode : public ExprNode {
+public:
+    MethodCallExprNode(std::unique_ptr<ExprNode> object,
+                       const std::string& method,
+                       std::vector<std::unique_ptr<ExprNode>> args,
+                       int line)
+        : ExprNode(line), object_(std::move(object)), method_(method), args_(std::move(args)) {}
+
+    void accept(ASTVisitor& visitor) override;
+
+    ExprNode* object() const { return object_.get(); }
+    const std::string& method() const { return method_; }
+    const std::vector<std::unique_ptr<ExprNode>>& args() const { return args_; }
+
+private:
+    std::unique_ptr<ExprNode> object_;
+    std::string method_;
+    std::vector<std::unique_ptr<ExprNode>> args_;
+};
+
 // Table constructor: {}
 class TableConstructorNode : public ExprNode {
 public:
@@ -259,17 +280,19 @@ private:
 // Local variable declaration: local variable = expression
 class LocalDeclStmtNode : public StmtNode {
 public:
-    LocalDeclStmtNode(const std::string& name, std::unique_ptr<ExprNode> initializer, int line)
-        : StmtNode(line), name_(name), initializer_(std::move(initializer)) {}
+    LocalDeclStmtNode(const std::string& name, std::unique_ptr<ExprNode> initializer, int line, bool isFunction = false)
+        : StmtNode(line), name_(name), initializer_(std::move(initializer)), isFunction_(isFunction) {}
 
     void accept(ASTVisitor& visitor) override;
 
     const std::string& name() const { return name_; }
     ExprNode* initializer() const { return initializer_.get(); }
+    bool isFunction() const { return isFunction_; }
 
 private:
     std::string name_;
     std::unique_ptr<ExprNode> initializer_;
+    bool isFunction_;
 };
 
 // Multiple local variable declaration: local a, b, c = 1, 2, 3
@@ -509,7 +532,8 @@ public:
     virtual void visitVariable(VariableExprNode* node) = 0;
     virtual void visitVararg(VarargExprNode* node) = 0;
     virtual void visitCall(CallExprNode* node) = 0;
-        virtual void visitTableConstructor(TableConstructorNode* node) = 0;
+    virtual void visitMethodCall(MethodCallExprNode* node) = 0;
+    virtual void visitTableConstructor(TableConstructorNode* node) = 0;
             virtual void visitIndexExpr(IndexExprNode* node) = 0;
             virtual void visitFunctionExpr(FunctionExprNode* node) = 0;
         
@@ -556,6 +580,10 @@ inline void VarargExprNode::accept(ASTVisitor& visitor) {
 
 inline void CallExprNode::accept(ASTVisitor& visitor) {
     visitor.visitCall(this);
+}
+
+inline void MethodCallExprNode::accept(ASTVisitor& visitor) {
+    visitor.visitMethodCall(this);
 }
 
 inline void TableConstructorNode::accept(ASTVisitor& visitor) {

@@ -1,6 +1,11 @@
 #include "value/value.hpp"
 #include "value/function.hpp"
 #include "value/string.hpp"
+#include "value/table.hpp"
+#include "value/closure.hpp"
+#include "value/file.hpp"
+#include "value/socket.hpp"
+#include "value/coroutine.hpp"
 #include "compiler/chunk.hpp"
 #include <sstream>
 #include <iomanip>
@@ -12,19 +17,30 @@ std::string Value::toString() const {
     return oss.str();
 }
 
+std::string Value::typeToString() const {
+    switch (type()) {
+        case Type::NUMBER: return "number";
+        case Type::BOOL: return "boolean";
+        case Type::NIL: return "nil";
+        case Type::STRING:
+        case Type::RUNTIME_STRING: return "string";
+        case Type::TABLE: return "table";
+        case Type::FUNCTION:
+        case Type::CLOSURE:
+        case Type::NATIVE_FUNCTION: return "function";
+        case Type::THREAD: return "thread";
+        case Type::FILE:
+        case Type::SOCKET: return "userdata";
+        default: return "unknown";
+    }
+}
+
 void Value::print(std::ostream& os) const {
     switch (type()) {
-        case Type::NIL:
-            os << "nil";
-            break;
-
-        case Type::BOOL:
-            os << (asBool() ? "true" : "false");
-            break;
-
+        case Type::NIL: os << "nil"; break;
+        case Type::BOOL: os << (asBool() ? "true" : "false"); break;
         case Type::NUMBER: {
             double num = asNumber();
-            // Check if it's an integer value
             if (std::floor(num) == num && !std::isinf(num) && !std::isnan(num)) {
                 os << static_cast<int64_t>(num);
             } else {
@@ -32,54 +48,51 @@ void Value::print(std::ostream& os) const {
             }
             break;
         }
-
-        case Type::FUNCTION: {
-            size_t funcIndex = asFunctionIndex();
-            os << "<function:" << funcIndex << ">";
-            break;
-        }
-
-        case Type::STRING: {
-            size_t stringIndex = asStringIndex();
-            os << "<string:" << stringIndex << ">";
-            break;
-        }
-
-        case Type::TABLE: {
-            size_t tableIndex = asTableIndex();
-            os << "<table:" << tableIndex << ">";
-            break;
-        }
-
-        case Type::CLOSURE: {
-            size_t closureIndex = asClosureIndex();
-            os << "<closure:" << closureIndex << ">";
-            break;
-        }
-
-        case Type::FILE: {
-            size_t fileIndex = asFileIndex();
-            os << "<file:" << fileIndex << ">";
-            break;
-        }
-
-        case Type::SOCKET: {
-            size_t socketIndex = asSocketIndex();
-            os << "<socket:" << socketIndex << ">";
-            break;
-        }
-
-        case Type::NATIVE_FUNCTION: {
-            os << "<native function>";
-            break;
-        }
-
-        case Type::THREAD: {
-            size_t threadIndex = asThreadIndex();
-            os << "<thread:" << threadIndex << ">";
-            break;
-        }
+        case Type::FUNCTION: os << "<function:" << asFunctionIndex() << ">"; break;
+        case Type::STRING: os << "<string:" << asStringIndex() << ">"; break;
+        case Type::RUNTIME_STRING: os << asStringObj()->chars(); break;
+        case Type::TABLE: os << "table: " << asTableObj(); break;
+        case Type::CLOSURE: os << "function: " << asClosureObj(); break;
+        case Type::FILE: os << "file: " << asFileObj(); break;
+        case Type::SOCKET: os << "socket: " << asSocketObj(); break;
+        case Type::NATIVE_FUNCTION: os << "<native function>"; break;
+        case Type::THREAD: os << "thread: " << asThreadObj(); break;
     }
+}
+
+bool Value::operator==(const Value& other) const {
+    if (type() != other.type()) {
+        // Special case: compare STRING (index) and RUNTIME_STRING (ptr) by content
+        // This is tricky without VM context for compile-time strings.
+        // But in a running VM, readConstant already interns everything.
+        return false;
+    }
+    
+    if (isNumber()) {
+        double a = asNumber();
+        double b = other.asNumber();
+        if (std::isnan(a) && std::isnan(b)) return false;
+        return a == b;
+    }
+
+    if (isRuntimeString()) {
+        return asStringObj()->equals(other.asStringObj());
+    }
+
+    return bits_ == other.bits_;
+}
+
+bool Value::isStringEqual(const std::string& str) const {
+    if (isRuntimeString()) {
+        return std::string(asStringObj()->chars()) == str;
+    }
+    return false; // Compile-time strings must be interned first
+}
+
+size_t Value::hash() const {
+    if (isNumber()) return std::hash<double>()(asNumber());
+    if (isRuntimeString()) return std::hash<std::string>()(asStringObj()->chars());
+    return std::hash<uint64_t>()(bits_);
 }
 
 void Value::serialize(std::ostream& os, const Chunk* chunk) const {
@@ -87,8 +100,7 @@ void Value::serialize(std::ostream& os, const Chunk* chunk) const {
     os.write(reinterpret_cast<const char*>(&t), sizeof(t));
     
     switch (type()) {
-        case Type::NIL:
-            break;
+        case Type::NIL: break;
         case Type::BOOL: {
             uint8_t b = asBool() ? 1 : 0;
             os.write(reinterpret_cast<const char*>(&b), sizeof(b));
@@ -112,7 +124,7 @@ void Value::serialize(std::ostream& os, const Chunk* chunk) const {
             break;
         }
         default:
-            throw std::runtime_error("Cannot serialize value type: " + typeToString());
+            throw std::runtime_error("Cannot serialize dynamic type: " + typeToString());
     }
 }
 
@@ -122,8 +134,7 @@ Value Value::deserialize(std::istream& is, Chunk* chunk) {
     Type type = static_cast<Type>(t);
     
     switch (type) {
-        case Type::NIL:
-            return Value::nil();
+        case Type::NIL: return Value::nil();
         case Type::BOOL: {
             uint8_t b;
             is.read(reinterpret_cast<char*>(&b), sizeof(b));

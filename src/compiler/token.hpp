@@ -10,7 +10,7 @@ enum class TokenType {
     LEFT_PAREN, RIGHT_PAREN,
     LEFT_BRACE, RIGHT_BRACE,
     LEFT_BRACKET, RIGHT_BRACKET,
-    COMMA, DOT, SEMICOLON,
+    COMMA, DOT, SEMICOLON, COLON,
     PLUS, MINUS, STAR, SLASH, PERCENT, CARET,
 
     // One or two character tokens
@@ -62,6 +62,7 @@ inline const char* tokenTypeName(TokenType type) {
         case TokenType::COMMA: return "COMMA";
         case TokenType::DOT: return "DOT";
         case TokenType::SEMICOLON: return "SEMICOLON";
+        case TokenType::COLON: return "COLON";
         case TokenType::PLUS: return "PLUS";
         case TokenType::MINUS: return "MINUS";
         case TokenType::STAR: return "STAR";

@@ -274,10 +274,8 @@ void registerMathLibrary(VM* vm, TableObject* mathTable) {
     vm->addNativeToTable(mathTable, "randomseed", native_math_randomseed);
 
     // Add math.pi constant
-    size_t piIndex = vm->internString("pi");
-    mathTable->set(Value::runtimeString(piIndex), Value::number(M_PI));
+    mathTable->set("pi", Value::number(M_PI));
 
     // Add math.huge constant
-    size_t hugeIndex = vm->internString("huge");
-    mathTable->set(Value::runtimeString(hugeIndex), Value::number(HUGE_VAL));
+    mathTable->set("huge", Value::number(HUGE_VAL));
 }

@@ -25,6 +25,7 @@ public:
     void visitVariable(VariableExprNode* node) override;
     void visitVararg(VarargExprNode* node) override;
     void visitCall(CallExprNode* node) override;
+    void visitMethodCall(MethodCallExprNode* node) override;
     void visitTableConstructor(TableConstructorNode* node) override;
     void visitIndexExpr(IndexExprNode* node) override;
     void visitExprStmt(ExprStmtNode* node) override;

@@ -6,17 +6,14 @@
 #include <vector>
 #include <cstddef>
 
-// ClosureObject: A function with captured upvalues
-//
-// Represents a runtime closure - a function together with its captured
-// variables from enclosing scopes. The closure stores indices into the
-// VM's upvalue pool, allowing multiple closures to share upvalues.
+class UpvalueObject;
 
+// ClosureObject: A function with captured upvalues
 class ClosureObject : public GCObject {
 public:
     // Create closure for a function with specified upvalue count
     ClosureObject(FunctionObject* function, size_t upvalueCount)
-        : GCObject(GCObject::Type::CLOSURE), function_(function), upvalues_(upvalueCount, SIZE_MAX) {}
+        : GCObject(GCObject::Type::CLOSURE), function_(function), upvalues_(upvalueCount, nullptr) {}
 
     // Get the underlying function
     FunctionObject* function() const { return function_; }
@@ -24,27 +21,27 @@ public:
     // Get number of upvalues
     size_t upvalueCount() const { return upvalues_.size(); }
 
-    // Set upvalue at index (stores index into VM's upvalue pool)
-    void setUpvalue(size_t index, size_t upvalueIndex) {
+    // Set upvalue pointer
+    void setUpvalue(size_t index, UpvalueObject* upvalue) {
         if (index < upvalues_.size()) {
-            upvalues_[index] = upvalueIndex;
+            upvalues_[index] = upvalue;
         }
     }
 
-    // Get upvalue index at position
-    size_t getUpvalue(size_t index) const {
+    // Get upvalue object
+    UpvalueObject* getUpvalueObj(size_t index) const {
         if (index < upvalues_.size()) {
             return upvalues_[index];
         }
-        return SIZE_MAX;
+        return nullptr;
     }
 
-    // GC interface: mark function and upvalues
+    // GC interface: mark references
     void markReferences() override;
 
 private:
     FunctionObject* function_;           // Not owned (owned by Chunk)
-    std::vector<size_t> upvalues_;      // Indices into VM's upvalue pool
+    std::vector<UpvalueObject*> upvalues_; // Captured variables (heap-allocated)
 };
 
 #endif // LUA_CLOSURE_HPP

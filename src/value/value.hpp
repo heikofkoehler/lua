@@ -5,9 +5,16 @@
 #include <cstring>
 #include <cmath>
 
-// Forward declaration
+// Forward declarations
 class FunctionObject;
 class Chunk;
+class GCObject;
+class StringObject;
+class TableObject;
+class ClosureObject;
+class FileObject;
+class SocketObject;
+class CoroutineObject;
 
 // NaN-boxing implementation
 // Uses 64-bit representation to store all value types efficiently
@@ -16,11 +23,10 @@ class Chunk;
 // Sign (1 bit) | Exponent (11 bits) | Mantissa (52 bits)
 //
 // NaN values have exponent = 0x7FF and non-zero mantissa
-// We use quiet NaN (mantissa bit 51 set) with additional tag bits
+// We use quiet NaN (mantissa bit 51 set) with additional tag bits in the mantissa.
 //
-// Encoding:
-// - Numbers: stored directly as IEEE 754 doubles
-// - Other types: quiet NaN with type tags in lower bits
+// Bits 48-51 are the type tag (4 bits).
+// Bits 0-47 are the payload (pointer or index).
 
 class Value {
 public:
@@ -28,17 +34,19 @@ public:
         NIL,
         BOOL,
         NUMBER,
-        FUNCTION,
-        STRING,
-        TABLE,
-        CLOSURE,
-        FILE,
-        SOCKET,
-        NATIVE_FUNCTION,
-        THREAD
+        FUNCTION, // Compile-time function index
+        STRING,   // Compile-time string index
+        TABLE,    // Pointer to TableObject
+        CLOSURE,  // Pointer to ClosureObject
+        FILE,     // Pointer to FileObject
+        SOCKET,   // Pointer to SocketObject
+        RUNTIME_STRING, // Pointer to StringObject
+        NATIVE_FUNCTION, // Native function index
+        THREAD    // Pointer to CoroutineObject
     };
 
-    // Constructors (private, use factory methods)
+    static constexpr int NUM_TYPES = 12;
+
 private:
     explicit Value(uint64_t bits) : bits_(bits) {}
 
@@ -62,117 +70,80 @@ public:
     }
 
     static Value function(size_t funcIndex) {
-        // Encode function index (not pointer!)
-        // Index fits easily in lower 48 bits
-        return Value(QNAN | TAG_FUNCTION | (funcIndex << 4));
+        return Value(QNAN | TAG_FUNCTION | funcIndex);
     }
 
     static Value string(size_t stringIndex) {
-        // Encode string index (not pointer!)
-        // Index fits easily in lower 48 bits
-        // This is for compile-time strings from chunk
-        return Value(QNAN | TAG_STRING | (stringIndex << 4));
+        return Value(QNAN | TAG_STRING | stringIndex);
     }
 
-    static Value runtimeString(size_t stringIndex) {
-        // Encode runtime string index (not pointer!)
-        // This is for runtime strings from VM pool (e.g., from IO)
-        return Value(QNAN | TAG_RUNTIME_STRING | (stringIndex << 4));
+    static Value runtimeString(StringObject* str) {
+        return pointerValue(TAG_RUNTIME_STRING, str);
     }
 
-    static Value table(size_t tableIndex) {
-        // Encode table index (not pointer!)
-        // Index fits easily in lower 48 bits
-        return Value(QNAN | TAG_TABLE | (tableIndex << 4));
+    static Value table(TableObject* table) {
+        return pointerValue(TAG_TABLE, table);
     }
 
-    static Value closure(size_t closureIndex) {
-        // Encode closure index (not pointer!)
-        // Index fits easily in lower 48 bits
-        return Value(QNAN | TAG_CLOSURE | (closureIndex << 4));
+    static Value closure(ClosureObject* closure) {
+        return pointerValue(TAG_CLOSURE, closure);
     }
 
-    static Value file(size_t fileIndex) {
-        // Encode file index (not pointer!)
-        // Index fits easily in lower 48 bits
-        return Value(QNAN | TAG_FILE | (fileIndex << 4));
+    static Value file(FileObject* file) {
+        return pointerValue(TAG_FILE, file);
     }
 
-    static Value socket(size_t socketIndex) {
-        // Encode socket index (not pointer!)
-        // Index fits easily in lower 48 bits
-        return Value(QNAN | TAG_SOCKET | (socketIndex << 4));
+    static Value socket(SocketObject* socket) {
+        return pointerValue(TAG_SOCKET, socket);
     }
 
     static Value nativeFunction(size_t funcIndex) {
-        // Encode native function index (not pointer!)
-        // Index fits easily in lower 48 bits
-        return Value(QNAN | TAG_NATIVE_FUNCTION | (funcIndex << 4));
+        return Value(QNAN | TAG_NATIVE_FUNCTION | funcIndex);
     }
 
-    static Value thread(size_t threadIndex) {
-        // Encode thread index
-        return Value(QNAN | TAG_THREAD | (threadIndex << 4));
+    static Value thread(CoroutineObject* thread) {
+        return pointerValue(TAG_THREAD, thread);
     }
 
     // Type checking
-    bool isNil() const {
-        return (bits_ & (QNAN | TAG_MASK)) == (QNAN | TAG_NIL);
+    bool isNil() const { return bits_ == (QNAN | TAG_NIL); }
+    bool isBool() const { return (bits_ & (QNAN | TAG_MASK)) == (QNAN | TAG_BOOL); }
+    bool isNumber() const { 
+        if ((bits_ & 0x7FF0000000000000ULL) != 0x7FF0000000000000ULL) return true;
+        return (bits_ & TAG_MASK) == 0; // Infinity has 0 tag
     }
-
-    bool isBool() const {
-        return (bits_ & (QNAN | (TAG_MASK & ~1ULL))) == (QNAN | TAG_BOOL);
-    }
-
-    bool isNumber() const {
-        return (bits_ & QNAN) != QNAN;
-    }
-
-    bool isFunctionObject() const {
-        return (bits_ & (QNAN | TAG_MASK)) == (QNAN | TAG_FUNCTION);
-    }
-
+    bool isFunctionObject() const { return (bits_ & (QNAN | TAG_MASK)) == (QNAN | TAG_FUNCTION); }
+    
     bool isString() const {
         uint64_t tag = bits_ & (QNAN | TAG_MASK);
         return tag == (QNAN | TAG_STRING) || tag == (QNAN | TAG_RUNTIME_STRING);
     }
-
-    bool isRuntimeString() const {
-        return (bits_ & (QNAN | TAG_MASK)) == (QNAN | TAG_RUNTIME_STRING);
-    }
-
-    bool isTable() const {
-        return (bits_ & (QNAN | TAG_MASK)) == (QNAN | TAG_TABLE);
-    }
-
-    bool isClosure() const {
-        return (bits_ & (QNAN | TAG_MASK)) == (QNAN | TAG_CLOSURE);
-    }
-
-    bool isFile() const {
-        return (bits_ & (QNAN | TAG_MASK)) == (QNAN | TAG_FILE);
-    }
-
-    bool isSocket() const {
-        return (bits_ & (QNAN | TAG_MASK)) == (QNAN | TAG_SOCKET);
-    }
-
-    bool isNativeFunction() const {
-        return (bits_ & (QNAN | TAG_MASK)) == (QNAN | TAG_NATIVE_FUNCTION);
-    }
-
-    bool isThread() const {
-        return (bits_ & (QNAN | TAG_MASK)) == (QNAN | TAG_THREAD);
-    }
+    
+    bool isRuntimeString() const { return (bits_ & (QNAN | TAG_MASK)) == (QNAN | TAG_RUNTIME_STRING); }
+    bool isTable() const { return (bits_ & (QNAN | TAG_MASK)) == (QNAN | TAG_TABLE); }
+    bool isClosure() const { return (bits_ & (QNAN | TAG_MASK)) == (QNAN | TAG_CLOSURE); }
+    bool isFile() const { return (bits_ & (QNAN | TAG_MASK)) == (QNAN | TAG_FILE); }
+    bool isSocket() const { return (bits_ & (QNAN | TAG_MASK)) == (QNAN | TAG_SOCKET); }
+    bool isNativeFunction() const { return (bits_ & (QNAN | TAG_MASK)) == (QNAN | TAG_NATIVE_FUNCTION); }
+    bool isThread() const { return (bits_ & (QNAN | TAG_MASK)) == (QNAN | TAG_THREAD); }
     
     bool isFunction() const {
         return isFunctionObject() || isClosure() || isNativeFunction();
     }
 
+    bool isObj() const {
+        if (isNumber()) return false;
+        uint64_t tag = bits_ & (QNAN | TAG_MASK);
+        return tag == (QNAN | TAG_TABLE) || tag == (QNAN | TAG_CLOSURE) || tag == (QNAN | TAG_FILE) || 
+               tag == (QNAN | TAG_SOCKET) || tag == (QNAN | TAG_RUNTIME_STRING) || tag == (QNAN | TAG_THREAD);
+    }
+
     Type type() const {
         if (isNumber()) return Type::NUMBER;
+        if (isNil()) return Type::NIL;
         if (isBool()) return Type::BOOL;
         if (isFunctionObject()) return Type::FUNCTION;
+        if (isRuntimeString()) return Type::RUNTIME_STRING;
         if (isString()) return Type::STRING;
         if (isTable()) return Type::TABLE;
         if (isClosure()) return Type::CLOSURE;
@@ -184,138 +155,41 @@ public:
     }
 
     // Value extraction
-    bool asBool() const {
-        if (!isBool()) {
-            throw RuntimeError("Value is not a boolean");
-        }
-        return (bits_ & 1) != 0;
-    }
+    bool asBool() const { return (bits_ & 1) != 0; }
 
     double asNumber() const {
-        if (!isNumber()) {
-            throw RuntimeError("Value is not a number");
-        }
         double result;
         std::memcpy(&result, &bits_, sizeof(double));
         return result;
     }
 
-    size_t asFunctionIndex() const {
-        if (!isFunctionObject()) {
-            throw RuntimeError("Value is not a function");
-        }
-        // Extract function index (shift right by 4 to undo the encoding)
-        uint64_t index = (bits_ & 0x0000FFFFFFFFFFF0ULL) >> 4;
-        return static_cast<size_t>(index);
-    }
+    size_t asFunctionIndex() const { return static_cast<size_t>(bits_ & PAYLOAD_MASK); }
+    size_t asStringIndex() const { return static_cast<size_t>(bits_ & PAYLOAD_MASK); }
+    size_t asNativeFunctionIndex() const { return static_cast<size_t>(bits_ & PAYLOAD_MASK); }
 
-    size_t asStringIndex() const {
-        if (!isString()) {
-            throw RuntimeError("Value is not a string");
-        }
-        // Extract string index (shift right by 4 to undo the encoding)
-        uint64_t index = (bits_ & 0x0000FFFFFFFFFFF0ULL) >> 4;
-        return static_cast<size_t>(index);
-    }
+    GCObject* asObj() const { return reinterpret_cast<GCObject*>(bits_ & PAYLOAD_MASK); }
+    StringObject* asStringObj() const { return reinterpret_cast<StringObject*>(bits_ & PAYLOAD_MASK); }
+    TableObject* asTableObj() const { return reinterpret_cast<TableObject*>(bits_ & PAYLOAD_MASK); }
+    ClosureObject* asClosureObj() const { return reinterpret_cast<ClosureObject*>(bits_ & PAYLOAD_MASK); }
+    FileObject* asFileObj() const { return reinterpret_cast<FileObject*>(bits_ & PAYLOAD_MASK); }
+    SocketObject* asSocketObj() const { return reinterpret_cast<SocketObject*>(bits_ & PAYLOAD_MASK); }
+    CoroutineObject* asThreadObj() const { return reinterpret_cast<CoroutineObject*>(bits_ & PAYLOAD_MASK); }
 
-    size_t asTableIndex() const {
-        if (!isTable()) {
-            throw RuntimeError("Value is not a table");
-        }
-        // Extract table index (shift right by 4 to undo the encoding)
-        uint64_t index = (bits_ & 0x0000FFFFFFFFFFF0ULL) >> 4;
-        return static_cast<size_t>(index);
-    }
+    // Equality and Hashing
+    bool operator==(const Value& other) const;
+    bool operator!=(const Value& other) const { return !(*this == other); }
+    bool equals(const Value& other) const { return *this == other; }
+    bool isStringEqual(const std::string& str) const;
+    size_t hash() const;
 
-    size_t asClosureIndex() const {
-        if (!isClosure()) {
-            throw RuntimeError("Value is not a closure");
-        }
-        // Extract closure index (shift right by 4 to undo the encoding)
-        uint64_t index = (bits_ & 0x0000FFFFFFFFFFF0ULL) >> 4;
-        return static_cast<size_t>(index);
-    }
-
-    size_t asFileIndex() const {
-        if (!isFile()) {
-            throw RuntimeError("Value is not a file");
-        }
-        // Extract file index (shift right by 4 to undo the encoding)
-        uint64_t index = (bits_ & 0x0000FFFFFFFFFFF0ULL) >> 4;
-        return static_cast<size_t>(index);
-    }
-
-    size_t asSocketIndex() const {
-        if (!isSocket()) {
-            throw RuntimeError("Value is not a socket");
-        }
-        // Extract socket index (shift right by 4 to undo the encoding)
-        uint64_t index = (bits_ & 0x0000FFFFFFFFFFF0ULL) >> 4;
-        return static_cast<size_t>(index);
-    }
-
-    size_t asNativeFunctionIndex() const {
-        if (!isNativeFunction()) {
-            throw RuntimeError("Value is not a native function");
-        }
-        // Extract native function index (shift right by 4 to undo the encoding)
-        uint64_t index = (bits_ & 0x0000FFFFFFFFFFF0ULL) >> 4;
-        return static_cast<size_t>(index);
-    }
-
-    size_t asThreadIndex() const {
-        if (!isThread()) {
-            throw RuntimeError("Value is not a thread");
-        }
-        uint64_t index = (bits_ & 0x0000FFFFFFFFFFF0ULL) >> 4;
-        return static_cast<size_t>(index);
-    }
-
-    // Equality
-    bool operator==(const Value& other) const {
-        if (type() != other.type()) return false;
-        
-        if (isNumber()) {
-            double a = asNumber();
-            double b = other.asNumber();
-            // NaN != NaN in Lua
-            if (std::isnan(a) && std::isnan(b)) return false;
-            return a == b;
-        }
-        return bits_ == other.bits_;
-    }
-
-    bool operator!=(const Value& other) const {
-        return !(*this == other);
-    }
-
-    // Truthiness (for logical operations)
-    bool isFalsey() const {
-        return isNil() || (isBool() && !asBool());
-    }
-
-    bool isTruthy() const {
-        return !isFalsey();
-    }
+    // Truthiness
+    bool isFalsey() const { return isNil() || (isBool() && !asBool()); }
+    bool isTruthy() const { return !isFalsey(); }
 
     // String representation
     std::string toString() const;
-    
-    // Type name representation
-    std::string typeToString() const {
-        if (isNumber()) return "number";
-        if (isBool()) return "boolean";
-        if (isNil()) return "nil";
-        if (isString()) return "string";
-        if (isTable()) return "table";
-        if (isNativeFunction() || isClosure() || isFunctionObject()) return "function";
-        if (isThread()) return "thread";
-        if (isFile()) return "userdata"; // Lua calls file userdata usually
-        if (isSocket()) return "userdata";
-        return "unknown";
-    }
+    std::string typeToString() const;
 
-    // Print to stream
     void print(std::ostream& os) const;
 
     // Serialization
@@ -324,42 +198,31 @@ public:
 
     uint64_t bits() const { return bits_; }
 
-    void normalize() {
-        if ((bits_ & 0x7FF0000000000000ULL) == 0x7FF0000000000000ULL) {
-            // If it's a NaN, normalize it to a specific NaN bit pattern
-            // that is NOT in our tagged range.
-            // Our tagged range is [0xFFF1, 0xFFFF] in the top 16 bits.
-            // IEEE 754 NaNs are [0x7FF1, 0x7FFF] or [0xFFF1, 0xFFFF].
-            // Wait, our tags are in the LOW bits!
-            // That's much safer.
-            
-            // To be absolutely sure, let's normalize all NaNs to a single bit pattern.
-            if ((bits_ & 0x000FFFFFFFFFFFFFULL) != 0) {
-                bits_ = 0x7FF8000000000000ULL;
-            }
-        }
-    }
-
 private:
     uint64_t bits_;
 
-    // NaN-boxing constants
-    static constexpr uint64_t QNAN = 0x7FFC000000000000ULL;
-    static constexpr uint64_t TAG_NIL = 1;
-    static constexpr uint64_t TAG_BOOL = 2;
-    static constexpr uint64_t TAG_FUNCTION = 3;
-    static constexpr uint64_t TAG_STRING = 4;  // Compile-time string (from chunk)
-    static constexpr uint64_t TAG_TABLE = 5;
-    static constexpr uint64_t TAG_CLOSURE = 6;
-    static constexpr uint64_t TAG_FILE = 7;
-    static constexpr uint64_t TAG_SOCKET = 8;
-    static constexpr uint64_t TAG_RUNTIME_STRING = 9;  // Runtime string (from VM pool)
-    static constexpr uint64_t TAG_NATIVE_FUNCTION = 10;  // Native function (C++ function pointer)
-    static constexpr uint64_t TAG_THREAD = 11;           // Coroutine object
-    static constexpr uint64_t TAG_MASK = 15;  // 4 bits
+    static Value pointerValue(uint64_t tag, void* ptr) {
+        return Value(QNAN | tag | (reinterpret_cast<uint64_t>(ptr) & PAYLOAD_MASK));
+    }
+
+    // NaN-boxing constants (4-bit tags in bits 48-51)
+    static constexpr uint64_t QNAN         = 0x7FF0000000000000ULL;
+    static constexpr uint64_t TAG_NIL      = 0x0001000000000000ULL;
+    static constexpr uint64_t TAG_BOOL     = 0x0002000000000000ULL;
+    static constexpr uint64_t TAG_FUNCTION = 0x0003000000000000ULL;
+    static constexpr uint64_t TAG_STRING   = 0x0004000000000000ULL;
+    static constexpr uint64_t TAG_TABLE    = 0x0005000000000000ULL;
+    static constexpr uint64_t TAG_CLOSURE  = 0x0006000000000000ULL;
+    static constexpr uint64_t TAG_FILE     = 0x0007000000000000ULL;
+    static constexpr uint64_t TAG_SOCKET   = 0x0009000000000000ULL; // Skip 8 (often Quiet NaN bit)
+    static constexpr uint64_t TAG_RUNTIME_STRING = 0x000A000000000000ULL;
+    static constexpr uint64_t TAG_NATIVE_FUNCTION = 0x000B000000000000ULL;
+    static constexpr uint64_t TAG_THREAD   = 0x000C000000000000ULL;
+    
+    static constexpr uint64_t TAG_MASK     = 0x000F000000000000ULL;
+    static constexpr uint64_t PAYLOAD_MASK = 0x0000FFFFFFFFFFFFULL;
 };
 
-// Stream operator
 inline std::ostream& operator<<(std::ostream& os, const Value& value) {
     value.print(os);
     return os;

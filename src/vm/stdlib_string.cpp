@@ -1,5 +1,6 @@
 #include "vm/vm.hpp"
 #include "value/string.hpp"
+#include "value/table.hpp"
 #include <algorithm>
 #include <cctype>
 #include <cstdio>
@@ -333,6 +334,19 @@ bool native_string_dump(VM* vm, int argCount) {
 } // anonymous namespace
 
 void registerStringLibrary(VM* vm, TableObject* stringTable) {
+    // String library metatable for strings
+    TableObject* stringMt = vm->createTable();
+    
+    // We set __index to the string table itself
+    Value stringTableVal = Value::table(stringTable);
+    stringMt->set("__index", stringTableVal);
+    
+    // Store in registry for getMetamethod to find it safely
+    vm->setRegistry("string_table", stringTableVal);
+    
+    vm->setTypeMetatable(Value::Type::STRING, Value::table(stringMt));
+    vm->setTypeMetatable(Value::Type::RUNTIME_STRING, Value::table(stringMt));
+
     vm->addNativeToTable(stringTable, "len", native_string_len);
     vm->addNativeToTable(stringTable, "sub", native_string_sub);
     vm->addNativeToTable(stringTable, "upper", native_string_upper);

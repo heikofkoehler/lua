@@ -61,7 +61,6 @@ size_t Chunk::addString(const std::string& str) {
     return index;
 }
 
-StringObject* getString(size_t index);
 StringObject* Chunk::getString(size_t index) const {
     if (index >= strings_.size()) {
         return nullptr;
@@ -161,6 +160,8 @@ size_t Chunk::disassembleInstruction(size_t offset) const {
             return simpleInstruction("OP_POP", offset);
         case OpCode::OP_DUP:
             return simpleInstruction("OP_DUP", offset);
+        case OpCode::OP_SWAP:
+            return simpleInstruction("OP_SWAP", offset);
         case OpCode::OP_JUMP:
             return jumpInstruction("OP_JUMP", 1, offset);
         case OpCode::OP_JUMP_IF_FALSE:

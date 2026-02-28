@@ -116,6 +116,9 @@ void Parser::synchronize() {
 
 std::unique_ptr<StmtNode> Parser::statement() {
     if (match(TokenType::LOCAL)) {
+        if (match(TokenType::FUNCTION)) {
+            return localFunctionDeclaration();
+        }
         return localDeclaration();
     }
     if (match(TokenType::IF)) {
@@ -259,6 +262,22 @@ std::unique_ptr<StmtNode> Parser::localDeclaration() {
     return std::make_unique<MultipleLocalDeclStmtNode>(
         std::move(names), std::move(initializers), line
     );
+}
+
+std::unique_ptr<StmtNode> Parser::localFunctionDeclaration() {
+    int line = previous_.line;
+
+    if (!check(TokenType::IDENTIFIER)) {
+        errorAtCurrent("Expected function name after 'local function'");
+        return nullptr;
+    }
+    std::string name = current_.lexeme;
+    advance();
+
+    FunctionBody fb = parseFunctionBody("after function name");
+    auto funcExpr = std::make_unique<FunctionExprNode>(std::move(fb.params), std::move(fb.body), fb.hasVarargs, line);
+
+    return std::make_unique<LocalDeclStmtNode>(name, std::move(funcExpr), line, true);
 }
 
 std::unique_ptr<StmtNode> Parser::ifStatement() {
@@ -655,6 +674,26 @@ std::unique_ptr<ExprNode> Parser::postfix() {
             std::string fieldName = previous_.lexeme;
             auto key = std::make_unique<StringLiteralNode>(fieldName, line);
             expr = std::make_unique<IndexExprNode>(std::move(expr), std::move(key), line);
+        }
+        // Method call: expr:method(args)
+        else if (match(TokenType::COLON)) {
+            if (!check(TokenType::IDENTIFIER)) {
+                error("Expected method name after ':'");
+                return expr;
+            }
+            advance();
+            std::string methodName = previous_.lexeme;
+            
+            consume(TokenType::LEFT_PAREN, "Expected '(' after method name");
+            std::vector<std::unique_ptr<ExprNode>> args;
+            if (!check(TokenType::RIGHT_PAREN)) {
+                do {
+                    args.push_back(expression());
+                } while (match(TokenType::COMMA));
+            }
+            consume(TokenType::RIGHT_PAREN, "Expected ')' after arguments");
+            
+            expr = std::make_unique<MethodCallExprNode>(std::move(expr), methodName, std::move(args), line);
         }
         else {
             break;

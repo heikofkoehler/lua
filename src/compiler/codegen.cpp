@@ -255,15 +255,32 @@ void CodeGenerator::visitAssignmentStmt(AssignmentStmtNode* node) {
 void CodeGenerator::visitLocalDeclStmt(LocalDeclStmtNode* node) {
     setLine(node->line());
 
-    // Compile initializer
-    if (node->initializer()) {
+    if (node->isFunction()) {
+        // For 'local function f', we need to add the local BEFORE compiling the body
+        // so that the function can refer to itself (recursion).
+        emitOpCode(OpCode::OP_NIL); // Placeholder for the function object
+        addLocal(node->name());
+        
+        // Compile the function expression
         node->initializer()->accept(*this);
+        
+        // Update the local slot with the compiled function
+        int slot = resolveLocal(node->name());
+        emitOpCode(OpCode::OP_SET_LOCAL);
+        emitByte(static_cast<uint8_t>(slot));
+        emitOpCode(OpCode::OP_POP); // Set local doesn't pop in our VM?
+        // Wait, OP_SET_LOCAL in our VM DOES NOT pop. Let's check.
     } else {
-        emitOpCode(OpCode::OP_NIL);
-    }
+        // Compile initializer
+        if (node->initializer()) {
+            node->initializer()->accept(*this);
+        } else {
+            emitOpCode(OpCode::OP_NIL);
+        }
 
-    // Add local variable (value is already on stack)
-    addLocal(node->name());
+        // Add local variable (value is already on stack)
+        addLocal(node->name());
+    }
 }
 
 void CodeGenerator::visitMultipleLocalDeclStmt(MultipleLocalDeclStmtNode* node) {
@@ -903,6 +920,81 @@ void CodeGenerator::visitCall(CallExprNode* node) {
     } else {
         emitOpCode(OpCode::OP_CALL);
         emitByte(static_cast<uint8_t>(args.size()));
+        emitByte(expectedRetCount_);
+    }
+}
+
+void CodeGenerator::visitMethodCall(MethodCallExprNode* node) {
+    setLine(node->line());
+
+    // Compile the object expression (receiver)
+    uint8_t oldRetCount = expectedRetCount_;
+    expectedRetCount_ = 2; // Expect ONE result
+    node->object()->accept(*this);
+    
+    // Duplicate object for OP_GET_TABLE AND for the 'self' argument
+    // Stack: [obj] -> [obj, obj]
+    emitOpCode(OpCode::OP_DUP);
+    
+    // Get the method from the object
+    // Stack: [obj, obj] -> [obj, obj, "method"] -> [obj, method]
+    emitConstant(Value::string(currentChunk()->addString(node->method())));
+    emitOpCode(OpCode::OP_GET_TABLE);
+    
+    // Now stack is: [obj, method]. We need [method, obj] for call.
+    // Wait, our VM expects [callee, arg1, arg2...].
+    // So we need: [method, obj, arg1, arg2...]
+    // Our stack currently has [obj, method].
+    // We can use a new opcode OP_SWAP or just manage it.
+    
+    // Let's use a temporary local or just swap?
+    // Actually, it's easier to:
+    // 1. Evaluate object [obj]
+    // 2. Duplicate [obj, obj]
+    // 3. Get method [obj, method]
+    // 4. Swap [method, obj] <-- 'obj' is now the first argument (self)
+    
+    // I don't have OP_SWAP. I'll add it or find another way.
+    // Alternative:
+    // 1. Evaluate object [obj]
+    // 2. Duplicate [obj, obj]
+    // 3. Constant method name [obj, obj, "method"]
+    // 4. OP_GET_TABLE [obj, method]
+    
+    // If I add OP_SWAP it's easiest.
+    emitOpCode(OpCode::OP_SWAP);
+    
+    // Now stack: [method, obj]
+    
+    // Compile arguments and push onto stack
+    const auto& args = node->args();
+    bool isLastMultires = false;
+    
+    for (size_t i = 0; i < args.size(); i++) {
+        bool canBeMultires = (dynamic_cast<CallExprNode*>(args[i].get()) != nullptr) ||
+                             (dynamic_cast<VarargExprNode*>(args[i].get()) != nullptr);
+        
+        if (i == args.size() - 1 && canBeMultires) {
+            expectedRetCount_ = 0; // Last argument can be multires (0 = ALL)
+            isLastMultires = true;
+        } else {
+            expectedRetCount_ = 2; // ONE (1 + 1 = 2)
+        }
+        args[i]->accept(*this);
+    }
+    
+    // Restore expected return count
+    expectedRetCount_ = oldRetCount;
+
+    // Emit call instruction. Argument count is args.size() + 1 (for self)
+    if (isLastMultires) {
+        emitOpCode(OpCode::OP_CALL_MULTI);
+        emitByte(static_cast<uint8_t>(args.size())); // args.size() FIXED args (including self, minus the multires one)
+        // Wait: FIXED args = (args.size() - 1) + 1 = args.size()
+        emitByte(expectedRetCount_);
+    } else {
+        emitOpCode(OpCode::OP_CALL);
+        emitByte(static_cast<uint8_t>(args.size() + 1));
         emitByte(expectedRetCount_);
     }
 }

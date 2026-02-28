@@ -7,8 +7,19 @@
 #include <vector>
 
 // Forward declaration
-struct CallFrame;
+class ClosureObject;
 class UpvalueObject;
+
+struct CallFrame {
+    ClosureObject* closure;     // Closure being executed (function + upvalues)
+    const Chunk* chunk;         // Chunk being executed in this frame
+    const Chunk* callerChunk;   // Chunk to return to
+    size_t ip;                  // Instruction pointer to return to
+    size_t stackBase;           // Where this frame's locals start on value stack
+    uint8_t retCount;           // Number of return values expected (0 = all, 1+ = that many)
+    std::vector<Value> varargs; // Varargs passed to this function
+    bool isPcall = false;       // TRUE if this frame is a pcall boundary
+};
 
 class CoroutineObject : public GCObject {
 public:
@@ -21,7 +32,7 @@ public:
 
     CoroutineObject()
         : GCObject(GCObject::Type::COROUTINE), 
-          ip(0), chunk(nullptr), rootChunk(nullptr), 
+          chunk(nullptr), rootChunk(nullptr), 
           status(Status::SUSPENDED), yieldCount(0), retCount(0), lastResultCount(0), caller(nullptr) {
         stack.reserve(256);
         frames.reserve(64);
@@ -30,7 +41,6 @@ public:
     // Coroutine state
     std::vector<Value> stack;
     std::vector<CallFrame> frames;
-    size_t ip;
     const Chunk* chunk;
     const Chunk* rootChunk;
     std::vector<UpvalueObject*> openUpvalues;

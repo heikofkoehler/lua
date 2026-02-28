@@ -35,7 +35,7 @@ bool native_table_insert(VM* vm, int argCount) {
         return false;
     }
 
-    TableObject* table = vm->getTable(tableVal.asTableIndex());
+    TableObject* table = tableVal.asTableObj();
 
     if (posVal.isNil()) {
         int n = 1;
@@ -80,7 +80,7 @@ bool native_table_remove(VM* vm, int argCount) {
         return false;
     }
 
-    TableObject* table = vm->getTable(tableVal.asTableIndex());
+    TableObject* table = tableVal.asTableObj();
 
     int n = 1;
     while (!table->get(Value::number(n)).isNil()) {
@@ -118,7 +118,7 @@ bool native_table_concat(VM* vm, int argCount) {
         return false;
     }
 
-    TableObject* table = vm->getTable(tableVal.asTableIndex());
+    TableObject* table = tableVal.asTableObj();
     std::string sep = sepVal.isNil() ? "" : vm->getStringValue(sepVal);
 
     std::string result;
@@ -138,19 +138,17 @@ bool native_table_concat(VM* vm, int argCount) {
 }
 
 bool native_table_pack(VM* vm, int argCount) {
-    size_t tableIdx = vm->createTable();
-    TableObject* table = vm->getTable(tableIdx);
+    TableObject* table = vm->createTable();
     
     for (int i = 1; i <= argCount; i++) {
         Value v = vm->peek(argCount - i);
         table->set(Value::number(i), v);
     }
     
-    size_t nIdx = vm->internString("n");
-    table->set(Value::runtimeString(nIdx), Value::number(argCount));
+    table->set("n", Value::number(argCount));
     
     for (int i = 0; i < argCount; i++) vm->pop();
-    vm->push(Value::table(tableIdx));
+    vm->push(Value::table(table));
     return true;
 }
 
@@ -169,7 +167,7 @@ bool native_table_unpack(VM* vm, int argCount) {
         return false;
     }
     
-    TableObject* table = vm->getTable(tableVal.asTableIndex());
+    TableObject* table = tableVal.asTableObj();
     
     int i = static_cast<int>(startVal.asNumber());
     int j;
@@ -212,7 +210,7 @@ bool native_table_sort(VM* vm, int argCount) {
         return false;
     }
 
-    TableObject* table = vm->getTable(tableVal.asTableIndex());
+    TableObject* table = tableVal.asTableObj();
 
     int n = 0;
     while (!table->get(Value::number(n + 1)).isNil()) {

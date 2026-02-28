@@ -18,16 +18,6 @@
 #include <string>
 
 // Call frame for function calls
-struct CallFrame {
-    ClosureObject* closure;     // Closure being executed (function + upvalues)
-    const Chunk* callerChunk;   // Chunk to return to
-    size_t ip;                  // Instruction pointer to return to
-    size_t stackBase;           // Where this frame's locals start on value stack
-    uint8_t retCount;           // Number of return values expected (0 = all, 1+ = that many)
-    std::vector<Value> varargs; // Varargs passed to this function
-    bool isPcall = false;       // TRUE if this frame is a pcall boundary
-};
-
 // Virtual Machine: Stack-based bytecode interpreter
 // Executes compiled Lua bytecode
 
@@ -41,6 +31,8 @@ class VM {
 public:
     VM();
     ~VM();
+
+    static VM* currentVM;
 
     // Execute a chunk of bytecode
     // Returns true if execution succeeded, false on error
@@ -66,40 +58,31 @@ public:
     FunctionObject* getFunction(size_t index);
 
     // String interning operations
-    size_t internString(const char* chars, size_t length);
-    size_t internString(const std::string& str);
+    StringObject* internString(const char* chars, size_t length);
+    StringObject* internString(const std::string& str);
     StringObject* getString(size_t index);
 
     // Table operations
-    size_t createTable();
-    TableObject* getTable(size_t index);
+    TableObject* createTable();
 
     // Closure operations
-    size_t createClosure(FunctionObject* function);
-    ClosureObject* getClosure(size_t index);
+    ClosureObject* createClosure(FunctionObject* function);
 
     // Coroutine operations
-    size_t createCoroutine(ClosureObject* closure);
-    CoroutineObject* getCoroutine(size_t index);
-    size_t getCoroutineIndex(CoroutineObject* co);
+    CoroutineObject* createCoroutine(ClosureObject* closure);
     bool resumeCoroutine(CoroutineObject* co);
 
     // Upvalue operations
-    size_t captureUpvalue(size_t stackIndex);
-    UpvalueObject* getUpvalue(size_t index);
+    UpvalueObject* captureUpvalue(size_t stackIndex);
     void closeUpvalues(size_t lastStackIndex);
 
     // File operations
-    size_t openFile(const std::string& filename, const std::string& mode);
-    size_t registerFile(FileObject* file);
-    FileObject* getFile(size_t index);
-    void closeFile(size_t index);
+    FileObject* openFile(const std::string& filename, const std::string& mode);
+    void closeFile(FileObject* file);
 
     // Socket operations
-    size_t createSocket(socket_t fd);
-    size_t registerSocket(SocketObject* socket);
-    SocketObject* getSocket(size_t index);
-    void closeSocket(size_t index);
+    SocketObject* createSocket(socket_t fd);
+    void closeSocket(SocketObject* socket);
 
     // Native function operations
     size_t registerNativeFunction(const std::string& name, NativeFunction func);
@@ -126,6 +109,10 @@ public:
     // Access to current coroutine
     CoroutineObject* currentCoroutine() { return currentCoroutine_; }
 
+    // Registry for internal use (stable storage)
+    void setRegistry(const std::string& key, const Value& value) { registry_[key] = value; }
+    Value getRegistry(const std::string& key) const;
+
     // Garbage collection
     size_t bytesAllocated() const { return bytesAllocated_; }
     void collectGarbage();
@@ -141,6 +128,10 @@ public:
     bool callBinaryMetamethod(const Value& a, const Value& b, const std::string& method);
     bool callValue(int argCount, int retCount);
     std::string getStringValue(const Value& value);
+
+    // Global metatables
+    void setTypeMetatable(Value::Type type, const Value& mt);
+    Value getTypeMetatable(Value::Type type) const;
 
 private:
     // Arithmetic operations
@@ -163,6 +154,7 @@ private:
 
     // Execution state
     bool traceExecution_ = false;  // Whether to print every instruction
+    Value typeMetatables_[Value::NUM_TYPES];
     std::vector<CoroutineObject*> coroutines_; // Coroutine pool (owns objects)
     CoroutineObject* mainCoroutine_;
     CoroutineObject* currentCoroutine_;
@@ -177,15 +169,11 @@ private:
     size_t nextGC_;               // Threshold for next GC
     bool gcEnabled_;              // Can disable GC for debugging
 
+    std::unordered_map<std::string, Value> registry_; // Internal registry
     std::unordered_map<std::string, Value> globals_;  // Global variables
-    std::vector<FunctionObject*> functions_;  // Function table (owns function objects)
-    std::vector<StringObject*> strings_;  // String pool (owns string objects, interned)
-    std::unordered_map<uint32_t, size_t> stringIndices_;  // Hash to index mapping for interning
-    std::vector<TableObject*> tables_;  // Table pool (owns table objects)
-    std::vector<ClosureObject*> closures_;  // Closure pool (owns closure objects)
-    std::vector<UpvalueObject*> upvalues_;  // Upvalue pool (owns upvalue objects)
-    std::vector<FileObject*> files_;  // File pool (owns file objects)
-    std::vector<SocketObject*> sockets_;  // Socket pool (owns socket objects)
+    std::vector<FunctionObject*> functions_;  // Function pool (owned)
+    std::vector<StringObject*> strings_;  // Compile-time string pool (owned)
+    std::unordered_map<std::string, StringObject*> runtimeStrings_; // Runtime string interning
     std::vector<NativeFunction> nativeFunctions_;  // Native function table
 
     // Stack size limits

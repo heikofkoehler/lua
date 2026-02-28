@@ -1,5 +1,6 @@
 #include "vm/vm.hpp"
 #include "value/socket.hpp"
+#include "value/string.hpp"
 #include <iostream>
 
 namespace {
@@ -33,8 +34,8 @@ bool native_socket_create(VM* vm, int argCount) {
     setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
 #endif
 
-    size_t socketIdx = vm->createSocket(fd);
-    vm->push(Value::socket(socketIdx));
+    SocketObject* sock = vm->createSocket(fd);
+    vm->push(Value::socket(sock));
     return true;
 }
 
@@ -53,20 +54,13 @@ bool native_socket_bind(VM* vm, int argCount) {
         return false;
     }
 
-    SocketObject* sock = vm->getSocket(sockVal.asSocketIndex());
+    SocketObject* sock = sockVal.asSocketObj();
     if (!sock) {
         vm->push(Value::boolean(false));
         return true;
     }
 
-    // Handle string index (needs to look up in VM's string pool)
-    std::string address;
-    if (addrVal.isRuntimeString()) {
-        address = vm->getString(addrVal.asStringIndex())->chars();
-    } else {
-        address = vm->rootChunk()->getString(addrVal.asStringIndex())->chars();
-    }
-
+    std::string address = vm->getStringValue(addrVal);
     bool success = sock->bind(address, (int)portVal.asNumber());
     vm->push(Value::boolean(success));
     return true;
@@ -86,7 +80,7 @@ bool native_socket_listen(VM* vm, int argCount) {
         return false;
     }
 
-    SocketObject* sock = vm->getSocket(sockVal.asSocketIndex());
+    SocketObject* sock = sockVal.asSocketObj();
     if (!sock) {
         vm->push(Value::boolean(false));
         return true;
@@ -109,7 +103,7 @@ bool native_socket_accept(VM* vm, int argCount) {
         return false;
     }
 
-    SocketObject* sock = vm->getSocket(sockVal.asSocketIndex());
+    SocketObject* sock = sockVal.asSocketObj();
     if (!sock) {
         vm->push(Value::nil());
         return true;
@@ -121,8 +115,8 @@ bool native_socket_accept(VM* vm, int argCount) {
         return true;
     }
 
-    size_t clientIdx = vm->registerSocket(client);
-    vm->push(Value::socket(clientIdx));
+    vm->addObject(client);
+    vm->push(Value::socket(client));
     return true;
 }
 
@@ -140,19 +134,13 @@ bool native_socket_send(VM* vm, int argCount) {
         return false;
     }
 
-    SocketObject* sock = vm->getSocket(sockVal.asSocketIndex());
+    SocketObject* sock = sockVal.asSocketObj();
     if (!sock) {
         vm->push(Value::number(-1));
         return true;
     }
 
-    std::string data;
-    if (dataVal.isRuntimeString()) {
-        data = vm->getString(dataVal.asStringIndex())->chars();
-    } else {
-        data = vm->rootChunk()->getString(dataVal.asStringIndex())->chars();
-    }
-
+    std::string data = vm->getStringValue(dataVal);
     int sent = sock->send(data);
     vm->push(Value::number(sent));
     return true;
@@ -172,7 +160,7 @@ bool native_socket_receive(VM* vm, int argCount) {
         return false;
     }
 
-    SocketObject* sock = vm->getSocket(sockVal.asSocketIndex());
+    SocketObject* sock = sockVal.asSocketObj();
     if (!sock) {
         vm->push(Value::nil());
         return true;
@@ -182,8 +170,8 @@ bool native_socket_receive(VM* vm, int argCount) {
     if (data.empty()) {
         vm->push(Value::nil());
     } else {
-        size_t strIdx = vm->internString(data);
-        vm->push(Value::runtimeString(strIdx));
+        StringObject* str = vm->internString(data);
+        vm->push(Value::runtimeString(str));
     }
     return true;
 }
@@ -200,7 +188,7 @@ bool native_socket_close(VM* vm, int argCount) {
         return false;
     }
 
-    vm->closeSocket(sockVal.asSocketIndex());
+    vm->closeSocket(sockVal.asSocketObj());
     vm->push(Value::nil());
     return true;
 }

@@ -16,9 +16,9 @@ bool native_coroutine_create(VM* vm, int argCount) {
         return false;
     }
 
-    ClosureObject* closure = vm->getClosure(funcVal.asClosureIndex());
-    size_t coIdx = vm->createCoroutine(closure);
-    vm->push(Value::thread(coIdx));
+    ClosureObject* closure = funcVal.asClosureObj();
+    CoroutineObject* co = vm->createCoroutine(closure);
+    vm->push(Value::thread(co));
     return true;
 }
 
@@ -28,9 +28,6 @@ bool native_coroutine_resume(VM* vm, int argCount) {
         return false;
     }
 
-    // Arguments are on stack: [..., co, arg1, arg2, ...]
-    // argCount includes 'co'
-    
     // Extract arguments
     std::vector<Value> args;
     for (int i = 0; i < argCount - 1; i++) {
@@ -43,11 +40,11 @@ bool native_coroutine_resume(VM* vm, int argCount) {
         return false;
     }
 
-    CoroutineObject* co = vm->getCoroutine(coVal.asThreadIndex());
+    CoroutineObject* co = coVal.asThreadObj();
     if (co->status == CoroutineObject::Status::DEAD) {
         vm->push(Value::boolean(false));
-        size_t errIdx = vm->internString("cannot resume dead coroutine");
-        vm->push(Value::runtimeString(errIdx));
+        StringObject* errStr = vm->internString("cannot resume dead coroutine");
+        vm->push(Value::runtimeString(errStr));
         return true;
     }
 
@@ -58,7 +55,7 @@ bool native_coroutine_resume(VM* vm, int argCount) {
     }
 
     // If this is the first resume, we might need to adjust CallFrame varargs
-    if (co->ip == 0 && co->frames.size() == 1) {
+    if (!co->frames.empty() && co->frames[0].ip == 0 && co->frames.size() == 1) {
         FunctionObject* func = co->frames[0].closure->function();
         int arity = func->arity();
         bool hasVarargs = func->hasVarargs();
@@ -84,15 +81,12 @@ bool native_coroutine_resume(VM* vm, int argCount) {
         }
     } else {
         // Not first resume - we are resuming from a yield.
-        // We need to adjust the values we just pushed to match what the yield expected.
         uint8_t expectedRetCount = co->retCount;
         if (expectedRetCount > 0) {
             size_t expected = static_cast<size_t>(expectedRetCount - 1);
             if (pushedCount > expected) {
-                // Truncate
                 co->stack.resize(co->stack.size() - (pushedCount - expected));
             } else if (pushedCount < expected) {
-                // Pad with nil
                 for (size_t i = 0; i < expected - pushedCount; i++) {
                     co->stack.push_back(Value::nil());
                 }
@@ -100,41 +94,25 @@ bool native_coroutine_resume(VM* vm, int argCount) {
         }
     }
 
-    // Save current coroutine and switch
+    // Switch coroutines
     CoroutineObject* caller = vm->currentCoroutine();
     co->caller = caller;
     co->status = CoroutineObject::Status::RUNNING;
     if (caller) caller->status = CoroutineObject::Status::NORMAL;
 
-    // Use a special VM method to run a coroutine
-    // We need to implement VM::resumeCoroutine(co)
     bool success = vm->resumeCoroutine(co);
 
-    // After resume returns (either finished or yielded)
-    // Results are on co->stack
-    
-    // Switch back status
     if (caller) caller->status = CoroutineObject::Status::RUNNING;
 
     if (!success) {
-        // Error occurred
         vm->push(Value::boolean(false));
-        // Error message should be on co->stack top? 
-        // Actually VM::run already reported it to Log::error.
-        // For coroutines, we might want to capture it.
         vm->push(Value::runtimeString(vm->internString("error in coroutine")));
         return true;
     }
 
-    // Success or Yield
     vm->push(Value::boolean(true));
     
-    // Transfer results from co->stack to caller->stack
     if (co->status == CoroutineObject::Status::SUSPENDED) {
-        // Yielded values are in yieldedValues
-#ifdef DEBUG
-        std::cout << "DEBUG resume SUSPENDED: transferring " << co->yieldedValues.size() << " values" << std::endl;
-#endif
         size_t count = co->yieldedValues.size();
         for (const auto& val : co->yieldedValues) {
             vm->push(val);
@@ -142,15 +120,8 @@ bool native_coroutine_resume(VM* vm, int argCount) {
         vm->currentCoroutine()->lastResultCount = count + 1;
         co->yieldedValues.clear();
     } else {
-        // Returned values
-#ifdef DEBUG
-        std::cout << "DEBUG resume DEAD: transferring " << co->stack.size() << " values" << std::endl;
-#endif
         size_t count = co->stack.size();
         for (const auto& val : co->stack) {
-#ifdef DEBUG
-            std::cout << "  - " << val << std::endl;
-#endif
             vm->push(val);
         }
         vm->currentCoroutine()->lastResultCount = count + 1;
@@ -171,19 +142,14 @@ bool native_coroutine_status(VM* vm, int argCount) {
         return false;
     }
 
-    CoroutineObject* co = vm->getCoroutine(coVal.asThreadIndex());
-    size_t strIdx = vm->internString(co->statusToString());
-    vm->push(Value::runtimeString(strIdx));
+    CoroutineObject* co = coVal.asThreadObj();
+    StringObject* str = vm->internString(co->statusToString());
+    vm->push(Value::runtimeString(str));
     return true;
 }
 
 bool native_coroutine_running(VM* vm, int /*argCount*/) {
-    size_t idx = vm->getCoroutineIndex(vm->currentCoroutine());
-    if (idx != SIZE_MAX) {
-        vm->push(Value::thread(idx));
-    } else {
-        vm->push(Value::nil());
-    }
+    vm->push(Value::thread(vm->currentCoroutine()));
     return true;
 }
 
@@ -194,7 +160,6 @@ bool native_coroutine_yield(VM* vm, int argCount) {
         return false;
     }
 
-    // Move yielded values to co->yieldedValues
     co->yieldedValues.clear();
     for (int i = 0; i < argCount; i++) {
         co->yieldedValues.push_back(vm->pop());
@@ -203,14 +168,9 @@ bool native_coroutine_yield(VM* vm, int argCount) {
 
     co->status = CoroutineObject::Status::SUSPENDED;
     co->yieldCount = argCount;
-    // co->retCount remains what the resume call expected? 
-    // Actually, co->retCount should be set by the CALLER (resumer) to indicate how many values it expects back.
-    // Wait, in Lua, yield() returns values passed to resume().
-    // So the next resume() will push values and we need to know how many.
-    // For now, let's just assume we want all of them.
     co->retCount = 0; 
 
-    return true; // Return to resumer (this causes VM::run to exit and return to VM::resumeCoroutine)
+    return true;
 }
 
 } // anonymous namespace

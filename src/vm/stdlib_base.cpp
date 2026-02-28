@@ -4,6 +4,8 @@
 #include "compiler/codegen.hpp"
 #include "value/function.hpp"
 #include "value/closure.hpp"
+#include "value/table.hpp"
+#include "value/string.hpp"
 #include <iostream>
 #include <fstream>
 #include <sstream>
@@ -90,7 +92,7 @@ bool native_setmetatable(VM* vm, int argCount) {
         return false;
     }
 
-    TableObject* t = vm->getTable(table.asTableIndex());
+    TableObject* t = table.asTableObj();
     t->setMetatable(metatable);
     
     for(int i=0; i<argCount; i++) vm->pop();
@@ -107,8 +109,10 @@ bool native_getmetatable(VM* vm, int argCount) {
     Value mt = Value::nil();
 
     if (obj.isTable()) {
-        TableObject* t = vm->getTable(obj.asTableIndex());
+        TableObject* t = obj.asTableObj();
         mt = t->getMetatable();
+    } else {
+        mt = vm->getTypeMetatable(obj.type());
     }
     
     for(int i=0; i<argCount; i++) vm->pop();
@@ -126,15 +130,6 @@ bool native_tostring(VM* vm, int argCount) {
     // Check for __tostring metamethod
     Value meta = vm->getMetamethod(val, "__tostring");
     if (!meta.isNil()) {
-        // metamethod call will handle its own popping
-        vm->push(meta);
-        vm->push(val);
-        // Wait, we need to pop our original tostring arg first?
-        // standard Lua: tostring(val) calls val:__tostring()
-        // If we callValue here, it will push results.
-        // But native_tostring itself is a native function.
-        
-        // Let's just pop and tail-call?
         vm->pop(); // pop val
         vm->push(meta);
         vm->push(val);
@@ -144,8 +139,7 @@ bool native_tostring(VM* vm, int argCount) {
     // Default conversion
     std::string str = vm->getStringValue(val);
     vm->pop();
-    size_t strIdx = vm->internString(str);
-    vm->push(Value::runtimeString(strIdx));
+    vm->push(Value::runtimeString(vm->internString(str)));
     return true;
 }
 
@@ -206,7 +200,7 @@ bool native_rawget(VM* vm, int argCount) {
         return false;
     }
     
-    TableObject* t = vm->getTable(table.asTableIndex());
+    TableObject* t = table.asTableObj();
     Value res = t->get(key);
     
     for(int i=0; i<argCount; i++) vm->pop();
@@ -233,7 +227,7 @@ bool native_rawset(VM* vm, int argCount) {
         return false;
     }
     
-    TableObject* t = vm->getTable(table.asTableIndex());
+    TableObject* t = table.asTableObj();
     t->set(key, val);
     
     for(int i=0; i<argCount; i++) vm->pop();
@@ -270,7 +264,7 @@ bool native_next(VM* vm, int argCount) {
         return false;
     }
 
-    TableObject* t = vm->getTable(table.asTableIndex());
+    TableObject* t = table.asTableObj();
     std::pair<Value, Value> nextPair = t->next(key);
 
     // Pop args BEFORE pushing
@@ -333,7 +327,7 @@ bool native_ipairs_iter(VM* vm, int argCount) {
     bool found = false;
 
     if (table.isTable()) {
-        TableObject* t = vm->getTable(table.asTableIndex());
+        TableObject* t = table.asTableObj();
         Value val = t->get(Value::number(i));
         
         if (!val.isNil()) {
@@ -396,7 +390,7 @@ bool native_pcall(VM* vm, int argCount) {
         vm->runtimeError("pcall expects at least 1 argument");
         return false;
     }
-    return vm->pcall(argCount - 1);
+    return vm->pcall(argCount);
 }
 
 bool native_xpcall(VM* vm, int argCount) {
@@ -413,7 +407,7 @@ bool native_load(VM* vm, int argCount) {
         return false;
     }
     Value chunkVal = vm->peek(argCount - 1);
-    if (!chunkVal.isString() && !chunkVal.isRuntimeString()) {
+    if (!chunkVal.isString()) {
         vm->runtimeError("load expects string argument");
         return false;
     }
@@ -442,8 +436,8 @@ bool native_load(VM* vm, int argCount) {
 
         FunctionObject* function = new FunctionObject("load", 0, std::move(chunk));
         vm->registerFunction(function);
-        size_t closureIndex = vm->createClosure(function);
-        vm->push(Value::closure(closureIndex));
+        ClosureObject* closure = vm->createClosure(function);
+        vm->push(Value::closure(closure));
         return true;
 
     } catch (const CompileError& e) {
@@ -546,7 +540,7 @@ bool native_loadfile(VM* vm, int argCount) {
         return false;
     }
     Value pathVal = vm->peek(0);
-    if (!pathVal.isString() && !pathVal.isRuntimeString()) {
+    if (!pathVal.isString()) {
         vm->runtimeError("loadfile expects string argument");
         return false;
     }
@@ -558,8 +552,8 @@ bool native_loadfile(VM* vm, int argCount) {
     std::ifstream file(path);
     if (!file.is_open()) {
         vm->push(Value::nil());
-        size_t errIdx = vm->internString("Could not open file: " + path);
-        vm->push(Value::runtimeString(errIdx));
+        StringObject* errStr = vm->internString("Could not open file: " + path);
+        vm->push(Value::runtimeString(errStr));
         return true;
     }
 
@@ -573,8 +567,8 @@ bool native_loadfile(VM* vm, int argCount) {
         auto program = parser.parse();
         if (!program) {
             vm->push(Value::nil());
-            size_t errIdx = vm->internString("Parse error in " + path);
-            vm->push(Value::runtimeString(errIdx));
+            StringObject* errStr = vm->internString("Parse error in " + path);
+            vm->push(Value::runtimeString(errStr));
             return true;
         }
 
@@ -582,26 +576,26 @@ bool native_loadfile(VM* vm, int argCount) {
         auto chunk = codegen.generate(program.get());
         if (!chunk) {
             vm->push(Value::nil());
-            size_t errIdx = vm->internString("Code generation error in " + path);
-            vm->push(Value::runtimeString(errIdx));
+            StringObject* errStr = vm->internString("Code generation error in " + path);
+            vm->push(Value::runtimeString(errStr));
             return true;
         }
 
         FunctionObject* function = new FunctionObject(path, 0, std::move(chunk));
         vm->registerFunction(function);
-        size_t closureIndex = vm->createClosure(function);
-        vm->push(Value::closure(closureIndex));
+        ClosureObject* closure = vm->createClosure(function);
+        vm->push(Value::closure(closure));
         return true;
 
     } catch (const CompileError& e) {
         vm->push(Value::nil());
-        size_t errIdx = vm->internString(e.what());
-        vm->push(Value::runtimeString(errIdx));
+        StringObject* errStr = vm->internString(e.what());
+        vm->push(Value::runtimeString(errStr));
         return true;
     } catch (const std::exception& e) {
         vm->push(Value::nil());
-        size_t errIdx = vm->internString(e.what());
-        vm->push(Value::runtimeString(errIdx));
+        StringObject* errStr = vm->internString(e.what());
+        vm->push(Value::runtimeString(errStr));
         return true;
     }
 }
@@ -638,8 +632,8 @@ void registerBaseLibrary(VM* vm) {
         
         vm->pop();
         
-        size_t strIdx = vm->internString(typeName);
-        vm->push(Value::runtimeString(strIdx));
+        StringObject* str = vm->internString(typeName);
+        vm->push(Value::runtimeString(str));
         return true;
     });
     vm->globals()["type"] = Value::nativeFunction(typeIdx);
@@ -690,18 +684,17 @@ void registerBaseLibrary(VM* vm) {
     vm->globals()["warn"] = Value::nativeFunction(warnIdx);
 
     // Register _VERSION
-    size_t versionIdx = vm->internString("Lua 5.5");
-    vm->globals()["_VERSION"] = Value::runtimeString(versionIdx);
+    StringObject* verStr = vm->internString("Lua 5.5");
+    vm->globals()["_VERSION"] = Value::runtimeString(verStr);
 
     // Initialize package table
-    size_t packageIdx = vm->createTable();
-    TableObject* package = vm->getTable(packageIdx);
-    vm->globals()["package"] = Value::table(packageIdx);
+    TableObject* package = vm->createTable();
+    vm->globals()["package"] = Value::table(package);
 
-    size_t loadedIdx = vm->createTable();
-    package->set(Value::runtimeString(vm->internString("loaded")), Value::table(loadedIdx));
+    TableObject* loaded = vm->createTable();
+    package->set("loaded", Value::table(loaded));
 
-    package->set(Value::runtimeString(vm->internString("path")), Value::runtimeString(vm->internString("./?.lua;./?/init.lua")));
+    package->set("path", Value::runtimeString(vm->internString("./?.lua;./?/init.lua")));
 
     // Define require in Lua
     const char* requireScript = 

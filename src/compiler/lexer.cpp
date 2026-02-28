@@ -59,6 +59,7 @@ Token Lexer::scanToken() {
         case ']': return makeToken(TokenType::RIGHT_BRACKET);
         case ',': return makeToken(TokenType::COMMA);
         case ';': return makeToken(TokenType::SEMICOLON);
+        case ':': return makeToken(TokenType::COLON);
         case '+': return makeToken(TokenType::PLUS);
         case '-': return makeToken(TokenType::MINUS);
         case '*': return makeToken(TokenType::STAR);

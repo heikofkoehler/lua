@@ -23,8 +23,9 @@ bool native_os_time(VM* vm, int argCount) {
         return true;
     }
     // TODO: Support table argument for specific time
-    vm->runtimeError("os.time with arguments not implemented yet");
-    return false;
+    for(int i=0; i<argCount; i++) vm->pop();
+    vm->push(Value::number(static_cast<double>(std::time(nullptr))));
+    return true;
 }
 
 bool native_os_difftime(VM* vm, int argCount) {

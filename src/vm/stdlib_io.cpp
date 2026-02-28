@@ -1,5 +1,7 @@
 #include "vm/vm.hpp"
 #include "value/file.hpp"
+#include "value/table.hpp"
+#include "value/string.hpp"
 #include <iostream>
 
 namespace {
@@ -18,14 +20,12 @@ bool native_io_open(VM* vm, int argCount) {
     Value filenameVal = vm->peek(argCount - 1);
     std::string filename = vm->getStringValue(filenameVal);
     
-    size_t fileIdx = vm->openFile(filename, mode);
-    FileObject* file = vm->getFile(fileIdx);
+    FileObject* file = vm->openFile(filename, mode);
     
-    // Pop args BEFORE pushing result
     for(int i=0; i<argCount; i++) vm->pop();
 
     if (file->isOpen()) {
-        vm->push(Value::file(fileIdx));
+        vm->push(Value::file(file));
     } else {
         vm->push(Value::nil());
         vm->push(Value::runtimeString(vm->internString("could not open file")));
@@ -40,7 +40,7 @@ bool native_io_write(VM* vm, int argCount) {
     if (argCount > 0) {
         Value firstArg = vm->peek(argCount - 1);
         if (firstArg.isFile()) {
-            file = vm->getFile(firstArg.asFileIndex());
+            file = firstArg.asFileObj();
             startArg = 1;
         }
     }
@@ -57,7 +57,6 @@ bool native_io_write(VM* vm, int argCount) {
         }
     }
     
-    // Pop args BEFORE pushing result
     for(int i=0; i<argCount; i++) vm->pop();
     
     vm->push(Value::boolean(true));
@@ -69,7 +68,7 @@ bool native_io_read(VM* vm, int argCount) {
     if (argCount > 0) {
         Value firstArg = vm->peek(argCount - 1);
         if (firstArg.isFile()) {
-            file = vm->getFile(firstArg.asFileIndex());
+            file = firstArg.asFileObj();
         }
     }
     
@@ -87,7 +86,6 @@ bool native_io_read(VM* vm, int argCount) {
         }
     }
     
-    // Pop args BEFORE pushing result
     for(int i=0; i<argCount; i++) vm->pop();
 
     if (hasLine) {
@@ -100,19 +98,18 @@ bool native_io_read(VM* vm, int argCount) {
 }
 
 bool native_io_close(VM* vm, int argCount) {
-    size_t fileIdx = SIZE_MAX;
+    FileObject* file = nullptr;
     if (argCount > 0) {
         Value fileVal = vm->peek(argCount - 1);
         if (fileVal.isFile()) {
-            fileIdx = fileVal.asFileIndex();
+            file = fileVal.asFileObj();
         }
     }
     
-    // Pop args BEFORE pushing result
     for(int i=0; i<argCount; i++) vm->pop();
 
-    if (fileIdx != SIZE_MAX) {
-        vm->closeFile(fileIdx);
+    if (file) {
+        vm->closeFile(file);
     }
     
     vm->push(Value::boolean(true));
@@ -128,12 +125,12 @@ void registerIOLibrary(VM* vm, TableObject* ioTable) {
     vm->addNativeToTable(ioTable, "close", native_io_close);
     
     // Register as globals too for backward compatibility
-    vm->globals()["io_open"] = ioTable->get(Value::runtimeString(vm->internString("open")));
-    vm->globals()["io_write"] = ioTable->get(Value::runtimeString(vm->internString("write")));
-    vm->globals()["io_read"] = ioTable->get(Value::runtimeString(vm->internString("read")));
-    vm->globals()["io_close"] = ioTable->get(Value::runtimeString(vm->internString("close")));
+    vm->globals()["io_open"] = ioTable->get("open");
+    vm->globals()["io_write"] = ioTable->get("write");
+    vm->globals()["io_read"] = ioTable->get("read");
+    vm->globals()["io_close"] = ioTable->get("close");
 
-    ioTable->set(Value::runtimeString(vm->internString("stderr")), Value::nil());
-    ioTable->set(Value::runtimeString(vm->internString("stdout")), Value::nil());
-    ioTable->set(Value::runtimeString(vm->internString("stdin")), Value::nil());
+    ioTable->set("stderr", Value::nil());
+    ioTable->set("stdout", Value::nil());
+    ioTable->set("stdin", Value::nil());
 }
