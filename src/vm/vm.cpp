@@ -539,6 +539,17 @@ bool VM::run(size_t targetFrameCount) {
                 break;
             }
 
+            case OpCode::OP_IDIV: {
+                Value b = pop();
+                Value a = pop();
+                if (a.isNumber() && b.isNumber()) {
+                    push(integerDivide(a, b));
+                } else if (!callBinaryMetamethod(a, b, "__idiv")) {
+                    runtimeError("attempt to perform arithmetic on " + a.typeToString() + " and " + b.typeToString());
+                }
+                break;
+            }
+
             case OpCode::OP_MOD: {
                 Value b = pop();
                 Value a = pop();
@@ -557,6 +568,61 @@ bool VM::run(size_t targetFrameCount) {
                     push(power(a, b));
                 } else if (!callBinaryMetamethod(a, b, "__pow")) {
                     runtimeError("attempt to perform arithmetic on " + a.typeToString() + " and " + b.typeToString());
+                }
+                break;
+            }
+
+            case OpCode::OP_BAND: {
+                Value b = pop();
+                Value a = pop();
+                if (a.isNumber() && b.isNumber()) {
+                    push(bitwiseAnd(a, b));
+                } else if (!callBinaryMetamethod(a, b, "__band")) {
+                    runtimeError("attempt to perform bitwise operation on " + a.typeToString() + " and " + b.typeToString());
+                }
+                break;
+            }
+
+            case OpCode::OP_BOR: {
+                Value b = pop();
+                Value a = pop();
+                if (a.isNumber() && b.isNumber()) {
+                    push(bitwiseOr(a, b));
+                } else if (!callBinaryMetamethod(a, b, "__bor")) {
+                    runtimeError("attempt to perform bitwise operation on " + a.typeToString() + " and " + b.typeToString());
+                }
+                break;
+            }
+
+            case OpCode::OP_BXOR: {
+                Value b = pop();
+                Value a = pop();
+                if (a.isNumber() && b.isNumber()) {
+                    push(bitwiseXor(a, b));
+                } else if (!callBinaryMetamethod(a, b, "__bxor")) {
+                    runtimeError("attempt to perform bitwise operation on " + a.typeToString() + " and " + b.typeToString());
+                }
+                break;
+            }
+
+            case OpCode::OP_SHL: {
+                Value b = pop();
+                Value a = pop();
+                if (a.isNumber() && b.isNumber()) {
+                    push(shiftLeft(a, b));
+                } else if (!callBinaryMetamethod(a, b, "__shl")) {
+                    runtimeError("attempt to perform bitwise operation on " + a.typeToString() + " and " + b.typeToString());
+                }
+                break;
+            }
+
+            case OpCode::OP_SHR: {
+                Value b = pop();
+                Value a = pop();
+                if (a.isNumber() && b.isNumber()) {
+                    push(shiftRight(a, b));
+                } else if (!callBinaryMetamethod(a, b, "__shr")) {
+                    runtimeError("attempt to perform bitwise operation on " + a.typeToString() + " and " + b.typeToString());
                 }
                 break;
             }
@@ -592,6 +658,42 @@ bool VM::run(size_t targetFrameCount) {
             case OpCode::OP_NOT: {
                 Value a = pop();
                 push(logicalNot(a));
+                break;
+            }
+
+            case OpCode::OP_BNOT: {
+                Value a = pop();
+                if (a.isNumber()) {
+                    push(bitwiseNot(a));
+                } else if (!callBinaryMetamethod(a, a, "__bnot")) { // Unary bitwise NOT
+                    runtimeError("attempt to perform bitwise operation on " + a.typeToString());
+                }
+                break;
+            }
+
+            case OpCode::OP_LEN: {
+                Value a = pop();
+                if (a.isString()) {
+                    push(Value::number(static_cast<double>(getStringValue(a).length())));
+                } else if (a.isTable()) {
+                    Value mm = getMetamethod(a, "__len");
+                    if (!mm.isNil()) {
+                        push(mm);
+                        push(a);
+                        callValue(1, 2); // Expect 1 result (1+1=2)
+                    } else {
+                        push(Value::number(static_cast<double>(a.asTableObj()->length())));
+                    }
+                } else {
+                    Value mm = getMetamethod(a, "__len");
+                    if (!mm.isNil()) {
+                        push(mm);
+                        push(a);
+                        callValue(1, 2);
+                    } else {
+                        runtimeError("attempt to get length of a " + a.typeToString() + " value");
+                    }
+                }
                 break;
             }
 
@@ -1628,6 +1730,62 @@ Value VM::power(const Value& a, const Value& b) {
     return Value::number(std::pow(a.asNumber(), b.asNumber()));
 }
 
+Value VM::integerDivide(const Value& a, const Value& b) {
+    if (!a.isNumber() || !b.isNumber()) {
+        runtimeError("Operands must be numbers");
+        return Value::nil();
+    }
+    double divisor = b.asNumber();
+    if (divisor == 0.0) {
+        runtimeError("Division by zero");
+        return Value::nil();
+    }
+    return Value::number(std::floor(a.asNumber() / divisor));
+}
+
+Value VM::bitwiseAnd(const Value& a, const Value& b) {
+    if (!a.isNumber() || !b.isNumber()) {
+        runtimeError("attempt to perform bitwise operation on non-number");
+        return Value::nil();
+    }
+    return Value::integer(a.asInteger() & b.asInteger());
+}
+
+Value VM::bitwiseOr(const Value& a, const Value& b) {
+    if (!a.isNumber() || !b.isNumber()) {
+        runtimeError("attempt to perform bitwise operation on non-number");
+        return Value::nil();
+    }
+    return Value::integer(a.asInteger() | b.asInteger());
+}
+
+Value VM::bitwiseXor(const Value& a, const Value& b) {
+    if (!a.isNumber() || !b.isNumber()) {
+        runtimeError("attempt to perform bitwise operation on non-number");
+        return Value::nil();
+    }
+    return Value::integer(a.asInteger() ^ b.asInteger());
+}
+
+Value VM::shiftLeft(const Value& a, const Value& b) {
+    if (!a.isNumber() || !b.isNumber()) {
+        runtimeError("attempt to perform bitwise operation on non-number");
+        return Value::nil();
+    }
+    return Value::integer(a.asInteger() << b.asInteger());
+}
+
+Value VM::shiftRight(const Value& a, const Value& b) {
+    if (!a.isNumber() || !b.isNumber()) {
+        runtimeError("attempt to perform bitwise operation on non-number");
+        return Value::nil();
+    }
+    // Lua shift right is LOGICAL (fill with zeros) in Lua 5.3+
+    // Mask to 48 bits (payload size) before shifting to avoid sign extension issues
+    uint64_t uv = static_cast<uint64_t>(a.asInteger()) & 0x0000FFFFFFFFFFFFULL;
+    return Value::integer(static_cast<int64_t>(uv >> b.asInteger()));
+}
+
 Value VM::concat(const Value& a, const Value& b) {
     std::string result = getStringValue(a) + getStringValue(b);
     StringObject* str = internString(result);
@@ -1683,6 +1841,14 @@ Value VM::lessEqual(const Value& a, const Value& b) {
 
 Value VM::logicalNot(const Value& a) {
     return Value::boolean(a.isFalsey());
+}
+
+Value VM::bitwiseNot(const Value& a) {
+    if (!a.isNumber()) {
+        runtimeError("attempt to perform bitwise operation on non-number");
+        return Value::nil();
+    }
+    return Value::integer(~a.asInteger());
 }
 
 void VM::runtimeError(const std::string& message) {

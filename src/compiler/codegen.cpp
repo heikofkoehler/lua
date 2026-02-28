@@ -63,6 +63,14 @@ void CodeGenerator::visitUnary(UnaryNode* node) {
             emitOpCode(OpCode::OP_NOT);
             break;
 
+        case TokenType::TILDE:
+            emitOpCode(OpCode::OP_BNOT);
+            break;
+
+        case TokenType::HASH:
+            emitOpCode(OpCode::OP_LEN);
+            break;
+
         default:
             throw CompileError("Unknown unary operator", node->line());
     }
@@ -116,12 +124,36 @@ void CodeGenerator::visitBinary(BinaryNode* node) {
             emitOpCode(OpCode::OP_DIV);
             break;
 
+        case TokenType::SLASH_SLASH:
+            emitOpCode(OpCode::OP_IDIV);
+            break;
+
         case TokenType::PERCENT:
             emitOpCode(OpCode::OP_MOD);
             break;
 
         case TokenType::CARET:
             emitOpCode(OpCode::OP_POW);
+            break;
+
+        case TokenType::AMPERSAND:
+            emitOpCode(OpCode::OP_BAND);
+            break;
+
+        case TokenType::PIPE:
+            emitOpCode(OpCode::OP_BOR);
+            break;
+
+        case TokenType::TILDE:
+            emitOpCode(OpCode::OP_BXOR);
+            break;
+
+        case TokenType::LESS_LESS:
+            emitOpCode(OpCode::OP_SHL);
+            break;
+
+        case TokenType::GREATER_GREATER:
+            emitOpCode(OpCode::OP_SHR);
             break;
 
         case TokenType::DOT_DOT:

@@ -70,6 +70,18 @@ public:
         return map_.size();
     }
 
+    size_t length() const {
+        size_t n = 0;
+        while (true) {
+            auto it = map_.find(Value::number(static_cast<double>(n + 1)));
+            if (it == map_.end() || it->second.isNil()) {
+                break;
+            }
+            n++;
+        }
+        return n;
+    }
+
     // Iteration support
     // Returns pair<key, value>. If key is nil, returns first pair.
     // If next pair doesn't exist (end of iteration), returns pair<nil, nil>.

@@ -139,10 +139,17 @@ private:
     Value subtract(const Value& a, const Value& b);
     Value multiply(const Value& a, const Value& b);
     Value divide(const Value& a, const Value& b);
+    Value integerDivide(const Value& a, const Value& b);
     Value modulo(const Value& a, const Value& b);
     Value power(const Value& a, const Value& b);
+    Value bitwiseAnd(const Value& a, const Value& b);
+    Value bitwiseOr(const Value& a, const Value& b);
+    Value bitwiseXor(const Value& a, const Value& b);
+    Value shiftLeft(const Value& a, const Value& b);
+    Value shiftRight(const Value& a, const Value& b);
     Value concat(const Value& a, const Value& b);
     Value negate(const Value& a);
+    Value bitwiseNot(const Value& a);
 
     // Comparison operations
     Value equal(const Value& a, const Value& b);

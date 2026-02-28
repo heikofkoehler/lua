@@ -27,13 +27,21 @@ enum class OpCode : uint8_t {
     OP_SUB,         // Subtraction: pop b, pop a, push a - b
     OP_MUL,         // Multiplication: pop b, pop a, push a * b
     OP_DIV,         // Division: pop b, pop a, push a / b
+    OP_IDIV,        // Integer division: pop b, pop a, push a // b
     OP_MOD,         // Modulo: pop b, pop a, push a % b
     OP_POW,         // Power: pop b, pop a, push a ^ b
+    OP_BAND,        // Bitwise AND: pop b, pop a, push a & b
+    OP_BOR,         // Bitwise OR: pop b, pop a, push a | b
+    OP_BXOR,        // Bitwise XOR: pop b, pop a, push a ~ b
+    OP_SHL,         // Bitwise left shift: pop b, pop a, push a << b
+    OP_SHR,         // Bitwise right shift: pop b, pop a, push a >> b
     OP_CONCAT,      // Concatenation: pop b, pop a, push a .. b
 
     // Unary operations
     OP_NEG,         // Negation: pop a, push -a
     OP_NOT,         // Logical not: pop a, push !a
+    OP_BNOT,        // Bitwise NOT: pop a, push ~a
+    OP_LEN,         // Length: pop a, push #a
 
     // Comparison operations
     OP_EQUAL,       // Equality: pop b, pop a, push a == b
@@ -98,12 +106,21 @@ inline const char* opcodeName(OpCode op) {
         case OpCode::OP_ADD:           return "OP_ADD";
         case OpCode::OP_SUB:         return "OP_SUB";
         case OpCode::OP_MUL:         return "OP_MUL";
-        case OpCode::OP_DIV:         return "OP_DIV";
-        case OpCode::OP_MOD:         return "OP_MOD";
-        case OpCode::OP_POW:         return "OP_POW";
-        case OpCode::OP_CONCAT:      return "OP_CONCAT";
-        case OpCode::OP_NEG:         return "OP_NEG";
-        case OpCode::OP_NOT:         return "OP_NOT";
+        case OpCode::OP_DIV:           return "OP_DIV";
+        case OpCode::OP_IDIV:          return "OP_IDIV";
+        case OpCode::OP_MOD:           return "OP_MOD";
+        case OpCode::OP_POW:           return "OP_POW";
+        case OpCode::OP_BAND:          return "OP_BAND";
+        case OpCode::OP_BOR:           return "OP_BOR";
+        case OpCode::OP_BXOR:          return "OP_BXOR";
+        case OpCode::OP_SHL:           return "OP_SHL";
+        case OpCode::OP_SHR:           return "OP_SHR";
+        case OpCode::OP_CONCAT:        return "OP_CONCAT";
+        case OpCode::OP_NEG:           return "OP_NEG";
+        case OpCode::OP_NOT:           return "OP_NOT";
+        case OpCode::OP_BNOT:          return "OP_BNOT";
+        case OpCode::OP_LEN:           return "OP_LEN";
+
         case OpCode::OP_EQUAL:         return "OP_EQUAL";
         case OpCode::OP_LESS:          return "OP_LESS";
         case OpCode::OP_LESS_EQUAL:    return "OP_LESS_EQUAL";

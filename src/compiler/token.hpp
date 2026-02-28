@@ -10,8 +10,10 @@ enum class TokenType {
     LEFT_PAREN, RIGHT_PAREN,
     LEFT_BRACE, RIGHT_BRACE,
     LEFT_BRACKET, RIGHT_BRACKET,
-    COMMA, DOT, SEMICOLON, COLON,
+    COMMA, DOT, SEMICOLON, COLON, HASH,
     PLUS, MINUS, STAR, SLASH, PERCENT, CARET,
+    AMPERSAND, PIPE, SLASH_SLASH,
+    LESS_LESS, GREATER_GREATER,
 
     // One or two character tokens
     BANG, BANG_EQUAL,
@@ -63,12 +65,18 @@ inline const char* tokenTypeName(TokenType type) {
         case TokenType::DOT: return "DOT";
         case TokenType::SEMICOLON: return "SEMICOLON";
         case TokenType::COLON: return "COLON";
+        case TokenType::HASH: return "HASH";
         case TokenType::PLUS: return "PLUS";
         case TokenType::MINUS: return "MINUS";
         case TokenType::STAR: return "STAR";
         case TokenType::SLASH: return "SLASH";
         case TokenType::PERCENT: return "PERCENT";
         case TokenType::CARET: return "CARET";
+        case TokenType::AMPERSAND: return "AMPERSAND";
+        case TokenType::PIPE: return "PIPE";
+        case TokenType::SLASH_SLASH: return "SLASH_SLASH";
+        case TokenType::LESS_LESS: return "LESS_LESS";
+        case TokenType::GREATER_GREATER: return "GREATER_GREATER";
         case TokenType::BANG: return "BANG";
         case TokenType::BANG_EQUAL: return "BANG_EQUAL";
         case TokenType::EQUAL: return "EQUAL";

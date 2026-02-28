@@ -5,11 +5,11 @@ This document tracks the missing features and planned improvements to bring this
 ## 1. Language Syntax & Control Flow
 - [x] **Tail Call Optimization (TCO):** Implement `OP_TAILCALL` to prevent stack overflow in deep recursion.
 - [ ] **Goto and Labels:** Add support for `goto` and `::label::` (Lua 5.2+).
-- [ ] **Bitwise Operators:** Add tokens and opcodes for `&`, `|`, `~`, `<<`, `>>`, and `//` (integer division) (Lua 5.3+).
+- [x] **Bitwise Operators:** Add tokens and opcodes for `&`, `|`, `~`, `<<`, `>>`, and `//` (integer division) (Lua 5.3+).
 - [ ] **Generic `for` Loop:** Ensure full support for the `for var in iter, state, var do` iterator protocol.
 
 ## 2. Metamethods & Data Types
-- [ ] **Metamethod Completeness:** Add support for `__call`, `__concat`, `__len`, and bitwise metamethods.
+- [x] **Metamethod Completeness:** Add support for `__call`, `__concat`, `__len`, and bitwise metamethods.
 - [ ] **Weak Tables:** Implement `__mode = "k"` and `__mode = "v"` in the Garbage Collector.
 - [x] **Integer Type:** Distinguish between 64-bit integers and doubles in the `Value` NaN-boxing (Lua 5.3+).
 - [ ] **Userdata:** Implement a general `userdata` type for easier C++ extension development.

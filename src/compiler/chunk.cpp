@@ -124,10 +124,22 @@ size_t Chunk::disassembleInstruction(size_t offset) const {
             return simpleInstruction("OP_MUL", offset);
         case OpCode::OP_DIV:
             return simpleInstruction("OP_DIV", offset);
+        case OpCode::OP_IDIV:
+            return simpleInstruction("OP_IDIV", offset);
         case OpCode::OP_MOD:
             return simpleInstruction("OP_MOD", offset);
         case OpCode::OP_POW:
             return simpleInstruction("OP_POW", offset);
+        case OpCode::OP_BAND:
+            return simpleInstruction("OP_BAND", offset);
+        case OpCode::OP_BOR:
+            return simpleInstruction("OP_BOR", offset);
+        case OpCode::OP_BXOR:
+            return simpleInstruction("OP_BXOR", offset);
+        case OpCode::OP_SHL:
+            return simpleInstruction("OP_SHL", offset);
+        case OpCode::OP_SHR:
+            return simpleInstruction("OP_SHR", offset);
         case OpCode::OP_CONCAT:
             return simpleInstruction("OP_CONCAT", offset);
 
@@ -135,6 +147,8 @@ size_t Chunk::disassembleInstruction(size_t offset) const {
             return simpleInstruction("OP_NEG", offset);
         case OpCode::OP_NOT:
             return simpleInstruction("OP_NOT", offset);
+        case OpCode::OP_BNOT:
+            return simpleInstruction("OP_BNOT", offset);
 
         case OpCode::OP_EQUAL:
             return simpleInstruction("OP_EQUAL", offset);

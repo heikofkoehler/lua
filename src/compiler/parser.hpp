@@ -63,6 +63,10 @@ private:
     std::unique_ptr<ExprNode> logicalOr();
     std::unique_ptr<ExprNode> logicalAnd();
     std::unique_ptr<ExprNode> equality();
+    std::unique_ptr<ExprNode> bitwiseOr();
+    std::unique_ptr<ExprNode> bitwiseXor();
+    std::unique_ptr<ExprNode> bitwiseAnd();
+    std::unique_ptr<ExprNode> bitwiseShift();
     std::unique_ptr<ExprNode> comparison();
     std::unique_ptr<ExprNode> concat();
     std::unique_ptr<ExprNode> term();

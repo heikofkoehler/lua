@@ -561,10 +561,62 @@ std::unique_ptr<ExprNode> Parser::equality() {
 }
 
 std::unique_ptr<ExprNode> Parser::comparison() {
-    auto expr = concat();
+    auto expr = bitwiseOr();
 
     while (match(TokenType::GREATER) || match(TokenType::GREATER_EQUAL) ||
            match(TokenType::LESS) || match(TokenType::LESS_EQUAL)) {
+        TokenType op = previous_.type;
+        int line = previous_.line;
+        auto right = bitwiseOr();
+        expr = std::make_unique<BinaryNode>(std::move(expr), op, std::move(right), line);
+    }
+
+    return expr;
+}
+
+std::unique_ptr<ExprNode> Parser::bitwiseOr() {
+    auto expr = bitwiseXor();
+
+    while (match(TokenType::PIPE)) {
+        TokenType op = previous_.type;
+        int line = previous_.line;
+        auto right = bitwiseXor();
+        expr = std::make_unique<BinaryNode>(std::move(expr), op, std::move(right), line);
+    }
+
+    return expr;
+}
+
+std::unique_ptr<ExprNode> Parser::bitwiseXor() {
+    auto expr = bitwiseAnd();
+
+    while (match(TokenType::TILDE)) {
+        TokenType op = previous_.type;
+        int line = previous_.line;
+        auto right = bitwiseAnd();
+        expr = std::make_unique<BinaryNode>(std::move(expr), op, std::move(right), line);
+    }
+
+    return expr;
+}
+
+std::unique_ptr<ExprNode> Parser::bitwiseAnd() {
+    auto expr = bitwiseShift();
+
+    while (match(TokenType::AMPERSAND)) {
+        TokenType op = previous_.type;
+        int line = previous_.line;
+        auto right = bitwiseShift();
+        expr = std::make_unique<BinaryNode>(std::move(expr), op, std::move(right), line);
+    }
+
+    return expr;
+}
+
+std::unique_ptr<ExprNode> Parser::bitwiseShift() {
+    auto expr = concat();
+
+    while (match(TokenType::LESS_LESS) || match(TokenType::GREATER_GREATER)) {
         TokenType op = previous_.type;
         int line = previous_.line;
         auto right = concat();
@@ -603,7 +655,7 @@ std::unique_ptr<ExprNode> Parser::term() {
 std::unique_ptr<ExprNode> Parser::factor() {
     auto expr = power();
 
-    while (match(TokenType::STAR) || match(TokenType::SLASH) || match(TokenType::PERCENT)) {
+    while (match(TokenType::STAR) || match(TokenType::SLASH) || match(TokenType::SLASH_SLASH) || match(TokenType::PERCENT)) {
         TokenType op = previous_.type;
         int line = previous_.line;
         auto right = power();
@@ -628,7 +680,7 @@ std::unique_ptr<ExprNode> Parser::power() {
 }
 
 std::unique_ptr<ExprNode> Parser::unary() {
-    if (match(TokenType::MINUS) || match(TokenType::NOT)) {
+    if (match(TokenType::MINUS) || match(TokenType::NOT) || match(TokenType::TILDE) || match(TokenType::HASH)) {
         TokenType op = previous_.type;
         int line = previous_.line;
         auto operand = unary();
