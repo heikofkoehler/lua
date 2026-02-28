@@ -37,15 +37,15 @@ bool run(const std::string& source, VM& vm) {
 
         // Code generation
         CodeGenerator codegen;
-        auto chunk = codegen.generate(program.get());
+        auto function = codegen.generate(program.get());
 
-        if (!chunk) {
+        if (!function) {
             std::cerr << "Code generation error" << std::endl;
             return false;
         }
 
         // Execution
-        return vm.run(*chunk);
+        return vm.run(*function);
 
     } catch (const CompileError& e) {
         std::cerr << e.what() << std::endl;
@@ -69,15 +69,15 @@ int compileFile(const std::string& inputPath, const std::string& outputPath) {
         if (!program) return 1;
 
         CodeGenerator codegen;
-        auto chunk = codegen.generate(program.get());
-        if (!chunk) return 1;
+        auto function = codegen.generate(program.get());
+        if (!function) return 1;
 
         std::ofstream os(outputPath, std::ios::binary);
         if (!os.is_open()) {
             std::cerr << "Could not open output file: " << outputPath << std::endl;
             return 1;
         }
-        chunk->serialize(os);
+        function->serialize(os);
         return 0;
     } catch (const std::exception& e) {
         std::cerr << "Error during compilation: " << e.what() << std::endl;
@@ -94,10 +94,10 @@ int runBytecode(const std::string& path, bool verbose) {
             return 1;
         }
 
-        auto chunk = Chunk::deserialize(is);
+        auto function = FunctionObject::deserialize(is);
         VM vm;
         vm.setTraceExecution(verbose);
-        if (!vm.run(*chunk)) {
+        if (!vm.run(*function)) {
             return 1;
         }
         return 0;

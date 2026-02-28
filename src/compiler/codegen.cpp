@@ -5,16 +5,31 @@
 CodeGenerator::CodeGenerator()
     : chunk_(nullptr), currentLine_(1), scopeDepth_(0), localCount_(0), enclosingCompiler_(nullptr), expectedRetCount_(2) {}
 
-std::unique_ptr<Chunk> CodeGenerator::generate(ProgramNode* program) {
+std::unique_ptr<FunctionObject> CodeGenerator::generate(ProgramNode* program, const std::string& name) {
     chunk_ = std::make_unique<Chunk>();
+    upvalues_.clear();
+    locals_.clear();
+    scopeDepth_ = 0;
+    localCount_ = 0;
+    enclosingCompiler_ = nullptr; // Reset to top level
+
+    // Root compiler state initialization
+    // _ENV is the first upvalue by convention in Lua 5.2+ for the top-level chunk.
+    // When compiling any chunk (top-level or via load/require), we ensure _ENV is upvalue 0.
+    Upvalue env;
+    env.name = "_ENV";
+    env.index = 0; 
+    env.isLocal = false; 
+    upvalues_.push_back(env);
 
     // Generate code for the program
+
     program->accept(*this);
 
     // Emit return at end
     emitReturn();
 
-    return std::move(chunk_);
+    return std::make_unique<FunctionObject>(name, 0, std::move(chunk_), static_cast<int>(upvalues_.size()), true);
 }
 
 void CodeGenerator::visitLiteral(LiteralNode* node) {
@@ -217,12 +232,30 @@ void CodeGenerator::visitVariable(VariableExprNode* node) {
         return;
     }
 
-    // 3. Fall back to global variable
-    size_t nameIndex = currentChunk()->addIdentifier(node->name());
+    // 3. Fall back to global variable (resolved via _ENV)
+    size_t nameIndex = currentChunk()->addConstant(Value::string(internString(name)));
     if (nameIndex > UINT8_MAX) {
-        throw CompileError("Too many identifiers in one chunk", currentLine_);
+        throw CompileError("Too many constants in one chunk", currentLine_);
     }
-    emitOpCode(OpCode::OP_GET_GLOBAL);
+
+    int envSlot = resolveLocal("_ENV");
+    if (envSlot != -1) {
+        // _ENV is a local variable
+        emitOpCode(OpCode::OP_GET_LOCAL);
+        emitByte(static_cast<uint8_t>(envSlot));
+        emitOpCode(OpCode::OP_CONSTANT);
+        emitByte(static_cast<uint8_t>(nameIndex));
+        emitOpCode(OpCode::OP_GET_TABLE);
+        return;
+    }
+
+    int envUpvalue = resolveUpvalue("_ENV");
+    if (envUpvalue == -1) {
+        envUpvalue = 0; 
+    }
+    
+    emitOpCode(OpCode::OP_GET_TABUP);
+    emitByte(static_cast<uint8_t>(envUpvalue));
     emitByte(static_cast<uint8_t>(nameIndex));
 }
 
@@ -274,14 +307,36 @@ void CodeGenerator::visitAssignmentStmt(AssignmentStmtNode* node) {
         return;
     }
 
-    // 3. Fall back to global variable
-    size_t nameIndex = currentChunk()->addIdentifier(node->name());
+    // 3. Fall back to global variable (via _ENV)
+    size_t nameIndex = currentChunk()->addConstant(Value::string(internString(node->name())));
     if (nameIndex > UINT8_MAX) {
-        throw CompileError("Too many identifiers in one chunk", currentLine_);
+        throw CompileError("Too many constants in one chunk", currentLine_);
     }
-    emitOpCode(OpCode::OP_SET_GLOBAL);
+
+    int envSlot = resolveLocal("_ENV");
+    if (envSlot != -1) {
+        // _ENV is a local variable
+        emitOpCode(OpCode::OP_GET_LOCAL);
+        emitByte(static_cast<uint8_t>(envSlot));
+        // Stack: [value, env]
+        emitOpCode(OpCode::OP_CONSTANT);
+        emitByte(static_cast<uint8_t>(nameIndex));
+        // Stack: [value, env, key]
+        emitOpCode(OpCode::OP_ROTATE);
+        emitByte(3); 
+        // Stack: [env, key, value]
+        emitOpCode(OpCode::OP_SET_TABLE);
+        return;
+    }
+
+    int envUpvalue = resolveUpvalue("_ENV");
+    if (envUpvalue == -1) {
+        envUpvalue = 0;
+    }
+    
+    emitOpCode(OpCode::OP_SET_TABUP);
+    emitByte(static_cast<uint8_t>(envUpvalue));
     emitByte(static_cast<uint8_t>(nameIndex));
-    emitOpCode(OpCode::OP_POP);
 }
 
 void CodeGenerator::visitLocalDeclStmt(LocalDeclStmtNode* node) {
@@ -436,14 +491,36 @@ void CodeGenerator::visitMultipleAssignmentStmt(MultipleAssignmentStmtNode* node
             continue;
         }
 
-        // Global variable
-        size_t nameIndex = currentChunk()->addIdentifier(name);
+        // Global variable (via _ENV)
+        size_t nameIndex = currentChunk()->addConstant(Value::string(internString(name)));
         if (nameIndex > UINT8_MAX) {
-            throw CompileError("Too many identifiers in one chunk", currentLine_);
+            throw CompileError("Too many constants in one chunk", currentLine_);
         }
-        emitOpCode(OpCode::OP_SET_GLOBAL);
+
+        int envSlot = resolveLocal("_ENV");
+        if (envSlot != -1) {
+            // _ENV is a local variable
+            emitOpCode(OpCode::OP_GET_LOCAL);
+            emitByte(static_cast<uint8_t>(envSlot));
+            // Stack: [value, env]
+            emitOpCode(OpCode::OP_CONSTANT);
+            emitByte(static_cast<uint8_t>(nameIndex));
+            // Stack: [value, env, key]
+            emitOpCode(OpCode::OP_ROTATE);
+            emitByte(3);
+            // Stack: [env, key, value]
+            emitOpCode(OpCode::OP_SET_TABLE);
+            continue;
+        }
+
+        int envUpvalue = resolveUpvalue("_ENV");
+        if (envUpvalue == -1) {
+            envUpvalue = 0;
+        }
+        
+        emitOpCode(OpCode::OP_SET_TABUP);
+        emitByte(static_cast<uint8_t>(envUpvalue));
         emitByte(static_cast<uint8_t>(nameIndex));
-        emitOpCode(OpCode::OP_POP);
     }
 }
 
@@ -1415,9 +1492,20 @@ int CodeGenerator::resolveLocal(const std::string& name) {
 }
 
 int CodeGenerator::resolveUpvalue(const std::string& name) {
+    // 1. Check if it's already an upvalue in the current chunk
+    for (int i = 0; i < static_cast<int>(upvalues_.size()); i++) {
+        // printf("DEBUG: checking upvalue %d: %s against %s\n", i, upvalues_[i].name.c_str(), name.c_str());
+        if (upvalues_[i].name == name) {
+            return i;
+        }
+    }
+
+    // 2. If it's _ENV and we're at the top level, it should have been in step 1.
+    // But if we're inside a function, we need to look up.
     if (enclosingCompiler_ == nullptr) {
         return -1;
     }
+
 
     // Try to find variable in immediate parent's locals
     for (int i = static_cast<int>(enclosingCompiler_->locals.size()) - 1; i >= 0; i--) {
@@ -1569,4 +1657,8 @@ void CodeGenerator::popCompilerState() {
     localCount_ = state.localCount;
     expectedRetCount_ = state.expectedRetCount;
     enclosingCompiler_ = state.enclosing;
+}
+
+size_t CodeGenerator::internString(const std::string& str) {
+    return currentChunk()->addString(str);
 }

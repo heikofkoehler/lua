@@ -14,8 +14,9 @@ class CodeGenerator : public ASTVisitor {
 public:
     CodeGenerator();
 
-    // Generate bytecode from AST
-    std::unique_ptr<Chunk> generate(ProgramNode* program);
+    // Generate bytecode for a program
+    std::unique_ptr<FunctionObject> generate(ProgramNode* program, const std::string& name = "script");
+
 
     // Visitor methods
     void visitLiteral(LiteralNode* node) override;
@@ -148,6 +149,9 @@ private:
     void beginLoop();
     void endLoop();
     void addBreakJump(size_t jump);
+
+    // Constant helpers
+    size_t internString(const std::string& str);
 
     // Get current chunk
     Chunk* currentChunk() { return chunk_.get(); }

@@ -36,7 +36,7 @@ public:
 
     // Execute a chunk of bytecode
     // Returns true if execution succeeded, false on error
-    bool run(const Chunk& chunk);
+    bool run(const FunctionObject& function);
     bool run();
     bool run(size_t targetFrameCount);
     
@@ -94,6 +94,7 @@ public:
     void addNativeToTable(TableObject* table, const char* name, NativeFunction func);
     void initStandardLibrary();
     void runInitializationFrames();
+    void setGlobal(const std::string& name, const Value& value);
 
     // Root chunk access (for native functions to access compile-time strings)
     const Chunk* rootChunk() const { return currentCoroutine_->rootChunk; }

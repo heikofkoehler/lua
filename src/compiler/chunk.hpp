@@ -77,6 +77,7 @@ private:
     size_t constantInstruction(const char* name, size_t offset) const;
     size_t jumpInstruction(const char* name, int sign, size_t offset) const;
     size_t byteInstruction(const char* name, size_t offset) const;
+    size_t twoByteInstruction(const char* name, size_t offset) const;
     size_t callInstruction(const char* name, size_t offset) const;
     size_t yieldInstruction(const char* name, size_t offset) const;
 };

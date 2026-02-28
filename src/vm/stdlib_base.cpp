@@ -5,69 +5,26 @@
 #include "value/function.hpp"
 #include "value/closure.hpp"
 #include "value/table.hpp"
-#include "value/string.hpp"
+#include "value/userdata.hpp"
 #include <iostream>
 #include <fstream>
 #include <sstream>
-#include <thread>
 #include <chrono>
+#include <thread>
 
 namespace {
 
-bool native_print(VM* vm, int argCount) {
-    for (int i = 0; i < argCount; i++) {
-        Value val = vm->peek(argCount - 1 - i);
-        std::cout << vm->getStringValue(val);
-        if (i < argCount - 1) std::cout << "\t";
-    }
-    std::cout << std::endl;
-
-    // Pop arguments
-    for (int i = 0; i < argCount; i++) vm->pop();
-
-    vm->push(Value::nil());
-    return true;
-}
-
-bool native_sleep(VM* vm, int argCount) {
-    if (argCount != 1) {
-        vm->runtimeError("sleep expects 1 argument");
-        return false;
-    }
-    Value val = vm->peek(0);
-    if (!val.isNumber()) {
-        vm->runtimeError("sleep expects number argument (seconds)");
-        return false;
-    }
-    double seconds = val.asNumber();
-    
-    // Pop args
-    for(int i=0; i<argCount; i++) vm->pop();
-
-    std::this_thread::sleep_for(std::chrono::milliseconds(static_cast<long long>(seconds * 1000)));
-    vm->push(Value::nil());
-    return true;
-}
-
 bool native_collectgarbage(VM* vm, int argCount) {
-    bool isCount = false;
-    if (argCount > 0) {
-        Value arg = vm->peek(argCount - 1);
-        if (arg.isString()) {
-            std::string s = vm->getStringValue(arg);
-            if (s == "count") {
-                isCount = true;
-            }
+    if (argCount == 1) {
+        Value var = vm->peek(0);
+        if (var.isString() && vm->getStringValue(var) == "count") {
+            double count = static_cast<double>(vm->bytesAllocated()) / 1024.0;
+            for(int i=0; i<argCount; i++) vm->pop();
+            vm->push(Value::number(count));
+            return true;
         }
     }
-    
-    if (isCount) {
-        double count = static_cast<double>(vm->bytesAllocated()) / 1024.0;
-        for(int i=0; i<argCount; i++) vm->pop();
-        vm->push(Value::number(count));
-        return true;
-    }
-    
+
     vm->collectGarbage();
     for(int i=0; i<argCount; i++) vm->pop();
     vm->push(Value::nil());
@@ -87,14 +44,13 @@ bool native_setmetatable(VM* vm, int argCount) {
         return false;
     }
 
-    if (!metatable.isNil() && !metatable.isTable()) {
-        vm->runtimeError("bad argument #2 to 'setmetatable' (nil or table expected)");
+    if (!metatable.isTable() && !metatable.isNil()) {
+        vm->runtimeError("bad argument #2 to 'setmetatable' (table or nil expected)");
         return false;
     }
 
-    TableObject* t = table.asTableObj();
-    t->setMetatable(metatable);
-    
+    table.asTableObj()->setMetatable(metatable);
+
     for(int i=0; i<argCount; i++) vm->pop();
     vm->push(table);
     return true;
@@ -109,13 +65,12 @@ bool native_getmetatable(VM* vm, int argCount) {
     Value mt = Value::nil();
 
     if (obj.isTable()) {
-        TableObject* t = obj.asTableObj();
-        mt = t->getMetatable();
+        mt = obj.asTableObj()->getMetatable();
     } else {
         mt = vm->getTypeMetatable(obj.type());
     }
-    
-    for(int i=0; i<argCount; i++) vm->pop();
+
+    vm->pop();
     vm->push(mt);
     return true;
 }
@@ -127,16 +82,16 @@ bool native_tostring(VM* vm, int argCount) {
     }
     Value val = vm->peek(0);
     
-    // Check for __tostring metamethod
-    Value meta = vm->getMetamethod(val, "__tostring");
-    if (!meta.isNil()) {
-        vm->pop(); // pop val
-        vm->push(meta);
+    Value mm = vm->getMetamethod(val, "__tostring");
+    if (!mm.isNil()) {
+        vm->push(mm);
         vm->push(val);
-        return vm->callValue(1, 2); // Expect 1 result (1+1=2)
+        if (vm->callValue(1, 2)) {
+            return true;
+        }
+        return false;
     }
-    
-    // Default conversion
+
     std::string str = vm->getStringValue(val);
     vm->pop();
     vm->push(Value::runtimeString(vm->internString(str)));
@@ -148,133 +103,77 @@ bool native_tonumber(VM* vm, int argCount) {
         vm->runtimeError("tonumber expects 1 or 2 arguments");
         return false;
     }
-    
-    Value baseVal = (argCount == 2) ? vm->peek(0) : Value::number(10);
     Value val = vm->peek(argCount - 1);
-    
-    Value result = Value::nil();
-    bool error = false;
 
-    if (val.isNumber() && baseVal.asNumber() == 10) {
-        result = val;
-    } else if (!val.isString()) {
-        result = Value::nil();
-    } else {
-        std::string s = vm->getStringValue(val);
-        int base = static_cast<int>(baseVal.asNumber());
-        
-        if (base < 2 || base > 36) {
-            vm->runtimeError("base out of range");
-            error = true;
+    std::string s = vm->getStringValue(val);
+
+    try {
+        size_t pos;
+        double num = std::stod(s, &pos);
+        if (pos != s.length()) {
+            vm->push(Value::nil());
         } else {
-            try {
-                size_t pos;
-                if (base == 10) {
-                    double num = std::stod(s, &pos);
-                    if (pos == s.length()) result = Value::number(num);
-                } else {
-                    long num = std::stol(s, &pos, base);
-                    if (pos == s.length()) result = Value::number(static_cast<double>(num));
-                }
-            } catch (...) {}
+            vm->push(Value::number(num));
         }
+    } catch (...) {
+        vm->push(Value::nil());
     }
-    
-    if (error) return false;
-    
-    for(int i=0; i<argCount; i++) vm->pop();
-    vm->push(result);
+
+    for (int i = 0; i < argCount; i++) vm->pop();
     return true;
 }
 
-bool native_rawget(VM* vm, int argCount) {
-    if (argCount != 2) {
-        vm->runtimeError("rawget expects 2 arguments");
-        return false;
-    }
-    Value key = vm->peek(0);
-    Value table = vm->peek(1);
-    
-    if (!table.isTable()) {
-        vm->runtimeError("bad argument #1 to 'rawget' (table expected)");
-        return false;
-    }
-    
-    TableObject* t = table.asTableObj();
-    Value res = t->get(key);
-    
-    for(int i=0; i<argCount; i++) vm->pop();
-    vm->push(res);
-    return true;
-}
-
-bool native_rawset(VM* vm, int argCount) {
-    if (argCount != 3) {
-        vm->runtimeError("rawset expects 3 arguments");
-        return false;
-    }
-    Value val = vm->peek(0);
-    Value key = vm->peek(1);
-    Value table = vm->peek(2);
-    
-    if (!table.isTable()) {
-        vm->runtimeError("bad argument #1 to 'rawset' (table expected)");
-        return false;
-    }
-    
-    if (key.isNil()) {
-        vm->runtimeError("table index is nil");
-        return false;
-    }
-    
-    TableObject* t = table.asTableObj();
-    t->set(key, val);
-    
-    for(int i=0; i<argCount; i++) vm->pop();
-    vm->push(table);
-    return true;
-}
-
-bool native_warn(VM* vm, int argCount) {
+bool native_print(VM* vm, int argCount) {
     for (int i = 0; i < argCount; i++) {
         Value val = vm->peek(argCount - 1 - i);
-        std::cerr << "Lua warning: " << vm->getStringValue(val) << std::endl;
+        std::cout << val;
+        if (i < argCount - 1) std::cout << "\t";
     }
-    
-    // Pop arguments
+    std::cout << std::endl;
+
     for (int i = 0; i < argCount; i++) vm->pop();
+    vm->push(Value::nil());
+    return true;
+}
+
+bool native_sleep(VM* vm, int argCount) {
+    if (argCount != 1) {
+        vm->runtimeError("sleep expects 1 argument");
+        return false;
+    }
+    double seconds = vm->peek(0).asNumber();
+    std::this_thread::sleep_for(std::chrono::milliseconds(static_cast<long long>(seconds * 1000)));
     
+    vm->pop();
     vm->push(Value::nil());
     return true;
 }
 
 bool native_next(VM* vm, int argCount) {
-    if (argCount < 1) {
-        vm->runtimeError("next expects at least 1 argument");
+    if (argCount < 1 || argCount > 2) {
+        vm->runtimeError("next expects 1 or 2 arguments");
         return false;
     }
-    Value table = vm->peek(argCount - 1); // First arg
-    Value key = Value::nil();
-    if (argCount >= 2) {
-        key = vm->peek(argCount - 2); // Second arg
-    }
+    Value key = (argCount == 2) ? vm->peek(0) : Value::nil();
+    Value tableVal = vm->peek(argCount - 1);
 
-    if (!table.isTable()) {
+    if (!tableVal.isTable()) {
         vm->runtimeError("bad argument #1 to 'next' (table expected)");
         return false;
     }
 
-    TableObject* t = table.asTableObj();
-    std::pair<Value, Value> nextPair = t->next(key);
+    TableObject* table = tableVal.asTableObj();
+    auto result = table->next(key);
 
-    // Pop args BEFORE pushing
-    for(int i=0; i<argCount; i++) vm->pop();
-
-    if (nextPair.first.isNil()) {
+    for (int i = 0; i < argCount; i++) vm->pop();
+    
+    if (result.first.isNil()) {
         vm->push(Value::nil());
+        vm->currentCoroutine()->lastResultCount = 1;
     } else {
-        vm->push(nextPair.first);
-        vm->push(nextPair.second);
+        vm->push(result.first);
+        vm->push(result.second);
+        vm->currentCoroutine()->lastResultCount = 2;
     }
     return true;
 }
@@ -289,61 +188,34 @@ bool native_pairs(VM* vm, int argCount) {
         vm->runtimeError("bad argument #1 to 'pairs' (table expected)");
         return false;
     }
-    
-    auto it = vm->globals().find("next");
-    if (it == vm->globals().end()) {
-        vm->runtimeError("global 'next' not found");
-        return false;
-    }
-    Value nextFunc = it->second;
-    
-    // Pop argument
+
+    size_t nextIdx = vm->registerNativeFunction("next", native_next);
     vm->pop();
-    
-    vm->push(nextFunc); // next
-    vm->push(table);      // table
-    vm->push(Value::nil()); // initial key
+    vm->push(Value::nativeFunction(nextIdx));
+    vm->push(table);
+    vm->push(Value::nil());
+    vm->currentCoroutine()->lastResultCount = 3;
     return true;
 }
 
 bool native_ipairs_iter(VM* vm, int argCount) {
-    if (argCount != 2) {
-        vm->runtimeError("ipairs iterator expects 2 arguments");
-        return false;
-    }
-    Value index = vm->peek(0);
-    Value table = vm->peek(1);
-    
-    if (!index.isNumber()) {
-        vm->runtimeError("ipairs iterator expects number index");
-        return false;
-    }
-    
-    double i = index.asNumber();
-    i += 1;
-    
-    Value res1 = Value::nil();
-    Value res2 = Value::nil();
-    bool found = false;
+    if (argCount != 2) return false;
+    Value indexVal = vm->peek(0);
+    Value tableVal = vm->peek(1);
 
-    if (table.isTable()) {
-        TableObject* t = table.asTableObj();
-        Value val = t->get(Value::number(i));
-        
-        if (!val.isNil()) {
-            res1 = Value::number(i);
-            res2 = val;
-            found = true;
-        }
-    }
-    
-    for(int i=0; i<argCount; i++) vm->pop();
+    if (!tableVal.isTable()) return false;
+    TableObject* table = tableVal.asTableObj();
+    double nextIndex = indexVal.asNumber() + 1;
+    Value val = table->get(Value::number(nextIndex));
 
-    if (found) {
-        vm->push(res1);
-        vm->push(res2);
-    } else {
+    vm->pop(); vm->pop();
+    if (val.isNil()) {
         vm->push(Value::nil());
+        vm->currentCoroutine()->lastResultCount = 1;
+    } else {
+        vm->push(Value::number(nextIndex));
+        vm->push(val);
+        vm->currentCoroutine()->lastResultCount = 2;
     }
     return true;
 }
@@ -358,155 +230,23 @@ bool native_ipairs(VM* vm, int argCount) {
         vm->runtimeError("bad argument #1 to 'ipairs' (table expected)");
         return false;
     }
-    
-    auto it = vm->globals().find("__ipairs_iter");
-    if (it == vm->globals().end()) {
-        vm->runtimeError("internal error: __ipairs_iter not found");
-        return false;
-    }
-    Value iterFunc = it->second;
-    
-    // Pop argument
+
+    size_t iterIdx = vm->registerNativeFunction("__ipairs_iter", native_ipairs_iter);
     vm->pop();
-    
-    vm->push(iterFunc); // iter
-    vm->push(table);      // table
-    vm->push(Value::number(0)); // initial index
+    vm->push(Value::nativeFunction(iterIdx));
+    vm->push(table);
+    vm->push(Value::number(0));
+    vm->currentCoroutine()->lastResultCount = 3;
     return true;
 }
 
 bool native_error(VM* vm, int argCount) {
     if (argCount < 1) {
-        vm->runtimeError("error expects at least 1 argument");
-        return false;
-    }
-    Value msg = vm->peek(argCount - 1);
-    vm->runtimeError(vm->getStringValue(msg));
-    return false;
-}
-
-bool native_pcall(VM* vm, int argCount) {
-    if (argCount < 1) {
-        vm->runtimeError("pcall expects at least 1 argument");
-        return false;
-    }
-    return vm->pcall(argCount);
-}
-
-bool native_xpcall(VM* vm, int argCount) {
-    if (argCount < 2) {
-        vm->runtimeError("xpcall expects at least 2 arguments (f, msgh)");
-        return false;
-    }
-    return vm->xpcall(argCount);
-}
-
-bool native_load(VM* vm, int argCount) {
-    if (argCount < 1) {
-        vm->runtimeError("load expects at least 1 argument");
-        return false;
-    }
-    Value chunkVal = vm->peek(argCount - 1);
-    if (!chunkVal.isString()) {
-        vm->runtimeError("load expects string argument");
-        return false;
-    }
-    
-    std::string source = vm->getStringValue(chunkVal);
-    
-    for(int i=0; i<argCount; i++) vm->pop();
-
-    try {
-        Lexer lexer(source);
-        Parser parser(lexer);
-        auto program = parser.parse();
-        if (!program) {
-            vm->push(Value::nil());
-            vm->push(Value::runtimeString(vm->internString("parse error")));
-            return true;
-        }
-
-        CodeGenerator codegen;
-        auto chunk = codegen.generate(program.get());
-        if (!chunk) {
-            vm->push(Value::nil());
-            vm->push(Value::runtimeString(vm->internString("code generation error")));
-            return true;
-        }
-
-        FunctionObject* function = new FunctionObject("load", 0, std::move(chunk));
-        vm->registerFunction(function);
-        ClosureObject* closure = vm->createClosure(function);
-        vm->push(Value::closure(closure));
-        return true;
-
-    } catch (const CompileError& e) {
-        vm->push(Value::nil());
-        vm->push(Value::runtimeString(vm->internString(e.what())));
-        return true;
-    } catch (const std::exception& e) {
-        vm->push(Value::nil());
-        vm->push(Value::runtimeString(vm->internString(e.what())));
-        return true;
-    }
-}
-
-bool native_select(VM* vm, int argCount) {
-    if (argCount < 1) {
-        vm->runtimeError("bad argument #1 to 'select' (number expected, got no value)");
-        return false;
-    }
-
-    Value indexVal = vm->peek(argCount - 1);
-    if (indexVal.isString()) {
-        std::string s = vm->getStringValue(indexVal);
-        if (s == "#") {
-            double count = static_cast<double>(argCount - 1);
-            for (int i = 0; i < argCount; i++) vm->pop();
-            vm->push(Value::number(count));
-            return true;
-        }
-    }
-
-    if (!indexVal.isNumber()) {
-        vm->runtimeError("bad argument #1 to 'select' (number expected)");
-        return false;
-    }
-
-    int n = static_cast<int>(indexVal.asNumber());
-    int total = argCount - 1;
-
-    std::vector<Value> results;
-    bool outOfRange = false;
-
-    if (n > 0) {
-        if (n <= total) {
-            for (int i = n - 1; i < total; i++) {
-                results.push_back(vm->peek(total - 1 - i));
-            }
-        }
-    } else if (n < 0) {
-        n = total + n + 1;
-        if (n >= 1) {
-            for (int i = n - 1; i < total; i++) {
-                results.push_back(vm->peek(total - 1 - i));
-            }
-        } else {
-            outOfRange = true;
-        }
+        vm->runtimeError("nil");
     } else {
-        outOfRange = true;
+        vm->runtimeError(vm->peek(argCount - 1).toString());
     }
-
-    if (outOfRange) {
-        vm->runtimeError("bad argument #1 to 'select' (index out of range)");
-        return false;
-    }
-    
-    for (int i = 0; i < argCount; i++) vm->pop();
-    for (const auto& res : results) vm->push(res);
-    vm->currentCoroutine()->lastResultCount = results.size();
-    return true;
+    return false;
 }
 
 bool native_assert(VM* vm, int argCount) {
@@ -514,39 +254,67 @@ bool native_assert(VM* vm, int argCount) {
         vm->runtimeError("bad argument #1 to 'assert' (value expected)");
         return false;
     }
-
-    Value v = vm->peek(argCount - 1);
-
-    if (v.isNil() || (v.isBool() && !v.asBool())) {
-        std::string message = "assertion failed!";
-        if (argCount >= 2) {
-            Value msgVal = vm->peek(argCount - 2);
-            message = vm->getStringValue(msgVal);
-        }
-        vm->runtimeError(message);
+    Value cond = vm->peek(argCount - 1);
+    if (cond.isFalsey()) {
+        std::string msg = (argCount >= 2) ? vm->peek(argCount - 2).toString() : "assertion failed!";
+        vm->runtimeError(msg);
         return false;
     }
-
-    // Success: Return all arguments.
-    // Standard Lua assert returns all its arguments.
-    // They are already on the stack, but we should set lastResultCount
     vm->currentCoroutine()->lastResultCount = argCount;
     return true;
 }
 
-bool native_loadfile(VM* vm, int argCount) {
-    if (argCount != 1) {
-        vm->runtimeError("loadfile expects 1 argument");
+bool native_rawget(VM* vm, int argCount) {
+    if (argCount != 2) {
+        vm->runtimeError("rawget expects 2 arguments");
         return false;
     }
-    Value pathVal = vm->peek(0);
-    if (!pathVal.isString()) {
-        vm->runtimeError("loadfile expects string argument");
+    Value key = vm->peek(0);
+    Value table = vm->peek(1);
+    if (!table.isTable()) {
+        vm->runtimeError("bad argument #1 to 'rawget' (table expected)");
         return false;
     }
+    vm->pop(); vm->pop();
+    vm->push(table.asTableObj()->get(key));
+    return true;
+}
 
-    std::string path = vm->getStringValue(pathVal);
-    
+bool native_rawset(VM* vm, int argCount) {
+    if (argCount != 3) {
+        vm->runtimeError("rawset expects 3 arguments");
+        return false;
+    }
+    Value val = vm->peek(0);
+    Value key = vm->peek(1);
+    Value table = vm->peek(2);
+    if (!table.isTable()) {
+        vm->runtimeError("bad argument #1 to 'rawset' (table expected)");
+        return false;
+    }
+    table.asTableObj()->set(key, val);
+    vm->pop(); vm->pop(); vm->pop();
+    vm->push(table);
+    return true;
+}
+
+bool native_warn(VM* vm, int argCount) {
+    std::cerr << "Lua Warning: ";
+    for (int i = 0; i < argCount; i++) {
+        std::cerr << vm->peek(argCount - 1 - i).toString();
+    }
+    std::cerr << std::endl;
+    for (int i = 0; i < argCount; i++) vm->pop();
+    vm->push(Value::nil());
+    return true;
+}
+
+bool native_loadfile(VM* vm, int argCount) {
+    if (argCount < 1) {
+        vm->runtimeError("loadfile expects at least 1 argument");
+        return false;
+    }
+    std::string path = vm->getStringValue(vm->peek(argCount - 1));
     for(int i=0; i<argCount; i++) vm->pop();
 
     std::ifstream file(path);
@@ -573,17 +341,17 @@ bool native_loadfile(VM* vm, int argCount) {
         }
 
         CodeGenerator codegen;
-        auto chunk = codegen.generate(program.get());
-        if (!chunk) {
+        auto function = codegen.generate(program.get(), path);
+        if (!function) {
             vm->push(Value::nil());
             StringObject* errStr = vm->internString("Code generation error in " + path);
             vm->push(Value::runtimeString(errStr));
             return true;
         }
 
-        FunctionObject* function = new FunctionObject(path, 0, std::move(chunk));
-        vm->registerFunction(function);
-        ClosureObject* closure = vm->createClosure(function);
+        FunctionObject* funcPtr = function.get();
+        vm->registerFunction(function.release());
+        ClosureObject* closure = vm->createClosure(funcPtr);
         vm->push(Value::closure(closure));
         return true;
 
@@ -600,9 +368,95 @@ bool native_loadfile(VM* vm, int argCount) {
     }
 }
 
+bool native_load(VM* vm, int argCount) {
+    if (argCount < 1) {
+        vm->runtimeError("load expects at least 1 argument");
+        return false;
+    }
+    std::string source = vm->getStringValue(vm->peek(argCount - 1));
+    for(int i=0; i<argCount; i++) vm->pop();
+
+    try {
+        Lexer lexer(source);
+        Parser parser(lexer);
+        auto program = parser.parse();
+        if (!program) {
+            vm->push(Value::nil());
+            vm->push(Value::runtimeString(vm->internString("parse error")));
+            return true;
+        }
+
+        CodeGenerator codegen;
+        auto function = codegen.generate(program.get(), "load");
+        if (!function) {
+            vm->push(Value::nil());
+            vm->push(Value::runtimeString(vm->internString("code generation error")));
+            return true;
+        }
+
+        FunctionObject* funcPtr = function.get();
+        vm->registerFunction(function.release());
+        ClosureObject* closure = vm->createClosure(funcPtr);
+        vm->push(Value::closure(closure));
+        return true;
+
+    } catch (const CompileError& e) {
+        vm->push(Value::nil());
+        vm->push(Value::runtimeString(vm->internString(e.what())));
+        return true;
+    } catch (const std::exception& e) {
+        vm->push(Value::nil());
+        vm->push(Value::runtimeString(vm->internString(e.what())));
+        return true;
+    }
+}
+
+bool native_pcall(VM* vm, int argCount) {
+    if (argCount < 1) {
+        vm->runtimeError("pcall expects at least 1 argument");
+        return false;
+    }
+    return vm->pcall(argCount);
+}
+
+bool native_xpcall(VM* vm, int argCount) {
+    if (argCount < 2) {
+        vm->runtimeError("xpcall expects at least 2 arguments");
+        return false;
+    }
+    return vm->xpcall(argCount);
+}
+
+bool native_select(VM* vm, int argCount) {
+    if (argCount < 1) {
+        vm->runtimeError("select expects at least 1 argument");
+        return false;
+    }
+    Value selector = vm->peek(argCount - 1);
+    if (selector.isString() && vm->getStringValue(selector) == "#") {
+        for(int i=0; i<argCount; i++) vm->pop();
+        vm->push(Value::number(argCount - 1));
+        return true;
+    }
+    int index = static_cast<int>(selector.asNumber());
+    if (index < 1 || index > argCount - 1) {
+        vm->runtimeError("bad argument #1 to 'select' (index out of range)");
+        return false;
+    }
+    std::vector<Value> results;
+    for (int i = index; i <= argCount - 1; i++) {
+        results.push_back(vm->peek(argCount - 1 - i));
+    }
+    for(int i=0; i<argCount; i++) vm->pop();
+    for (const auto& val : results) {
+        vm->push(val);
+    }
+    vm->currentCoroutine()->lastResultCount = results.size();
+    return true;
+}
+
 bool native_test_userdata(VM* vm, int argCount) {
     for (int i = 0; i < argCount; i++) vm->pop();
-    // Create a userdata with a dummy pointer
     void* ptr = reinterpret_cast<void*>(0xDEADBEEF);
     class UserdataObject* ud = vm->createUserdata(ptr);
     vm->push(Value::userdata(ud));
@@ -613,25 +467,25 @@ bool native_test_userdata(VM* vm, int argCount) {
 
 void registerBaseLibrary(VM* vm) {
     size_t gcIdx = vm->registerNativeFunction("collectgarbage", native_collectgarbage);
-    vm->globals()["collectgarbage"] = Value::nativeFunction(gcIdx);
+    vm->setGlobal("collectgarbage", Value::nativeFunction(gcIdx));
 
     size_t testUdIdx = vm->registerNativeFunction("__test_userdata", native_test_userdata);
-    vm->globals()["__test_userdata"] = Value::nativeFunction(testUdIdx);
+    vm->setGlobal("__test_userdata", Value::nativeFunction(testUdIdx));
 
     size_t printIdx = vm->registerNativeFunction("print", native_print);
-    vm->globals()["print"] = Value::nativeFunction(printIdx);
+    vm->setGlobal("print", Value::nativeFunction(printIdx));
 
     size_t sleepIdx = vm->registerNativeFunction("sleep", native_sleep);
-    vm->globals()["sleep"] = Value::nativeFunction(sleepIdx);
+    vm->setGlobal("sleep", Value::nativeFunction(sleepIdx));
 
     size_t setmtIdx = vm->registerNativeFunction("setmetatable", native_setmetatable);
-    vm->globals()["setmetatable"] = Value::nativeFunction(setmtIdx);
+    vm->setGlobal("setmetatable", Value::nativeFunction(setmtIdx));
 
     size_t getmtIdx = vm->registerNativeFunction("getmetatable", native_getmetatable);
-    vm->globals()["getmetatable"] = Value::nativeFunction(getmtIdx);
+    vm->setGlobal("getmetatable", Value::nativeFunction(getmtIdx));
     
     size_t tostringIdx = vm->registerNativeFunction("tostring", native_tostring);
-    vm->globals()["tostring"] = Value::nativeFunction(tostringIdx);
+    vm->setGlobal("tostring", Value::nativeFunction(tostringIdx));
     
     size_t typeIdx = vm->registerNativeFunction("type", [](VM* vm, int argCount) -> bool {
         if (argCount != 1) {
@@ -640,74 +494,69 @@ void registerBaseLibrary(VM* vm) {
         }
         Value val = vm->peek(0);
         std::string typeName = val.typeToString();
-        
         vm->pop();
-        
         StringObject* str = vm->internString(typeName);
         vm->push(Value::runtimeString(str));
         return true;
     });
-    vm->globals()["type"] = Value::nativeFunction(typeIdx);
+    vm->setGlobal("type", Value::nativeFunction(typeIdx));
     
     size_t nextIdx = vm->registerNativeFunction("next", native_next);
-    vm->globals()["next"] = Value::nativeFunction(nextIdx);
+    vm->setGlobal("next", Value::nativeFunction(nextIdx));
     
     size_t pairsIdx = vm->registerNativeFunction("pairs", native_pairs);
-    vm->globals()["pairs"] = Value::nativeFunction(pairsIdx);
+    vm->setGlobal("pairs", Value::nativeFunction(pairsIdx));
     
     size_t ipairsIterIdx = vm->registerNativeFunction("__ipairs_iter", native_ipairs_iter);
-    vm->globals()["__ipairs_iter"] = Value::nativeFunction(ipairsIterIdx);
+    vm->setGlobal("__ipairs_iter", Value::nativeFunction(ipairsIterIdx));
     
     size_t ipairsIdx = vm->registerNativeFunction("ipairs", native_ipairs);
-    vm->globals()["ipairs"] = Value::nativeFunction(ipairsIdx);
+    vm->setGlobal("ipairs", Value::nativeFunction(ipairsIdx));
 
     size_t errorIdx = vm->registerNativeFunction("error", native_error);
-    vm->globals()["error"] = Value::nativeFunction(errorIdx);
+    vm->setGlobal("error", Value::nativeFunction(errorIdx));
 
     size_t assertIdx = vm->registerNativeFunction("assert", native_assert);
-    vm->globals()["assert"] = Value::nativeFunction(assertIdx);
+    vm->setGlobal("assert", Value::nativeFunction(assertIdx));
 
     size_t loadfileIdx = vm->registerNativeFunction("loadfile", native_loadfile);
-    vm->globals()["loadfile"] = Value::nativeFunction(loadfileIdx);
+    vm->setGlobal("loadfile", Value::nativeFunction(loadfileIdx));
 
     size_t loadIdx = vm->registerNativeFunction("load", native_load);
-    vm->globals()["load"] = Value::nativeFunction(loadIdx);
+    vm->setGlobal("load", Value::nativeFunction(loadIdx));
 
     size_t pcallIdx = vm->registerNativeFunction("pcall", native_pcall);
-    vm->globals()["pcall"] = Value::nativeFunction(pcallIdx);
+    vm->setGlobal("pcall", Value::nativeFunction(pcallIdx));
 
     size_t xpcallIdx = vm->registerNativeFunction("xpcall", native_xpcall);
-    vm->globals()["xpcall"] = Value::nativeFunction(xpcallIdx);
+    vm->setGlobal("xpcall", Value::nativeFunction(xpcallIdx));
 
     size_t selectIdx = vm->registerNativeFunction("select", native_select);
-    vm->globals()["select"] = Value::nativeFunction(selectIdx);
+    vm->setGlobal("select", Value::nativeFunction(selectIdx));
 
     size_t tonumberIdx = vm->registerNativeFunction("tonumber", native_tonumber);
-    vm->globals()["tonumber"] = Value::nativeFunction(tonumberIdx);
+    vm->setGlobal("tonumber", Value::nativeFunction(tonumberIdx));
 
     size_t rawgetIdx = vm->registerNativeFunction("rawget", native_rawget);
-    vm->globals()["rawget"] = Value::nativeFunction(rawgetIdx);
+    vm->setGlobal("rawget", Value::nativeFunction(rawgetIdx));
 
     size_t rawsetIdx = vm->registerNativeFunction("rawset", native_rawset);
-    vm->globals()["rawset"] = Value::nativeFunction(rawsetIdx);
+    vm->setGlobal("rawset", Value::nativeFunction(rawsetIdx));
 
     size_t warnIdx = vm->registerNativeFunction("warn", native_warn);
-    vm->globals()["warn"] = Value::nativeFunction(warnIdx);
+    vm->setGlobal("warn", Value::nativeFunction(warnIdx));
 
-    // Register _VERSION
     StringObject* verStr = vm->internString("Lua 5.5");
-    vm->globals()["_VERSION"] = Value::runtimeString(verStr);
+    vm->setGlobal("_VERSION", Value::runtimeString(verStr));
 
-    // Initialize package table
     TableObject* package = vm->createTable();
-    vm->globals()["package"] = Value::table(package);
+    vm->setGlobal("package", Value::table(package));
 
     TableObject* loaded = vm->createTable();
     package->set("loaded", Value::table(loaded));
 
     package->set("path", Value::runtimeString(vm->internString("./?.lua;./?/init.lua")));
 
-    // Define require in Lua
     const char* requireScript = 
         "function require(modname)\n"
         "    if package.loaded[modname] then return package.loaded[modname] end\n"

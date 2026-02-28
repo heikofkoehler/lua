@@ -268,11 +268,25 @@ void VM::runInitializationFrames() {
     }
 }
 
+void VM::setGlobal(const std::string& name, const Value& value) {
+    globals_[name] = value;
+    
+    // Also update _G table if it exists
+    auto it = globals_.find("_G");
+    if (it != globals_.end() && it->second.isTable()) {
+        it->second.asTableObj()->set(name, value);
+    }
+}
+
 void VM::initStandardLibrary() {
     if (stdlibInitialized_) return;
     stdlibInitialized_ = true;
 
-    // Register base library (global functions like collectgarbage)
+    // Register _G (global environment) early so libraries can populate it
+    TableObject* gTable = createTable();
+    globals_["_G"] = Value::table(gTable);
+
+    // Register base library
     registerBaseLibrary(this);
 
     // Create 'string' table
@@ -320,15 +334,6 @@ void VM::initStandardLibrary() {
 
     // Run all initialization scripts registered during library loading
     runInitializationFrames();
-
-    // Register _G (global environment)
-    TableObject* gTable = createTable();
-    globals_["_G"] = Value::table(gTable);
-    
-    // Copy all current globals into _G table
-    for (const auto& pair : globals_) {
-        gTable->set(pair.first, pair.second);
-    }
 }
 
 CallFrame& VM::currentFrame() {
@@ -345,18 +350,18 @@ const CallFrame& VM::currentFrame() const {
     return currentCoroutine_->frames.back();
 }
 
-bool VM::run(const Chunk& chunk) {
+bool VM::run(const FunctionObject& function) {
     // Save current state for recursive calls
     const Chunk* oldChunk = currentCoroutine_->chunk;
     const Chunk* oldRoot = currentCoroutine_->rootChunk;
     size_t oldFrameCount = currentCoroutine_->frames.size();
 
-    currentCoroutine_->chunk = &chunk;
+    currentCoroutine_->chunk = function.chunk();
     if (currentCoroutine_->rootChunk == nullptr) {
-        currentCoroutine_->rootChunk = &chunk;
+        currentCoroutine_->rootChunk = function.chunk();
     }
     if (mainCoroutine_->rootChunk == nullptr) {
-        mainCoroutine_->rootChunk = &chunk;
+        mainCoroutine_->rootChunk = function.chunk();
     }
     hadError_ = false;
 
@@ -366,19 +371,53 @@ bool VM::run(const Chunk& chunk) {
     }
 
 #ifdef PRINT_CODE
-    chunk.disassemble("script");
+    function.chunk()->disassemble(function.name());
 #endif
 
-    // Push root call frame for this chunk
-    CallFrame rootFrame;
-    rootFrame.closure = nullptr;
-    rootFrame.chunk = &chunk;
-    rootFrame.callerChunk = nullptr;
-    rootFrame.ip = 0;
-    rootFrame.stackBase = currentCoroutine_->stack.size(); // Use current stack size as base
-    rootFrame.retCount = 0;
-    // varargs is empty
-    currentCoroutine_->frames.push_back(rootFrame);
+    // Create root closure
+    ClosureObject* closure = createClosure(const_cast<FunctionObject*>(&function));
+    
+    // Clear frames for a clean start if this is the first call
+    if (currentCoroutine_->frames.empty()) {
+        currentCoroutine_->stack.clear();
+    }
+    
+    // Initialize root upvalues (the first one is _ENV)
+    if (closure->upvalueCount() > 0) {
+        UpvalueObject* envUpvalue = nullptr;
+        
+        // Try to inherit _ENV from current frame if we're called from Lua
+        if (!currentCoroutine_->frames.empty()) {
+            envUpvalue = currentFrame().closure->getUpvalueObj(0); // Assumes _ENV is always upvalue 0
+        }
+        
+        if (!envUpvalue) {
+            // Top-level call or native caller, use _G
+            Value gTable = Value::nil();
+            auto it = globals_.find("_G");
+            if (it != globals_.end()) {
+                gTable = it->second;
+            } else {
+                TableObject* table = createTable();
+                gTable = Value::table(table);
+                globals_["_G"] = gTable;
+            }
+            
+            envUpvalue = new UpvalueObject(0);
+            envUpvalue->set(currentCoroutine_->stack, gTable);
+            envUpvalue->close(currentCoroutine_->stack);
+            addObject(envUpvalue);
+        }
+        
+        closure->setUpvalue(0, envUpvalue);
+    }
+
+    push(Value::closure(closure));
+    
+    // Use callValue to push the frame correctly
+    if (!callValue(0, 1)) {
+        return false;
+    }
 
     bool result = run();
 
@@ -497,6 +536,35 @@ bool VM::run(size_t targetFrameCount) {
                     }
                 } else {
                     runtimeError("Upvalue access outside of closure");
+                }
+                break;
+            }
+
+            case OpCode::OP_GET_TABUP: {
+                uint8_t upIndex = readByte();
+                Value key = readConstant();
+                UpvalueObject* upvalue = currentFrame().closure->getUpvalueObj(upIndex);
+                Value upTable = upvalue->get(currentCoroutine_->stack);
+                
+                if (upTable.isTable()) {
+                    push(upTable.asTableObj()->get(key));
+                } else {
+                    runtimeError("attempt to index a " + upTable.typeToString() + " value");
+                }
+                break;
+            }
+
+            case OpCode::OP_SET_TABUP: {
+                uint8_t upIndex = readByte();
+                Value key = readConstant();
+                Value value = pop();
+                UpvalueObject* upvalue = currentFrame().closure->getUpvalueObj(upIndex);
+                Value upTable = upvalue->get(currentCoroutine_->stack);
+                
+                if (upTable.isTable()) {
+                    upTable.asTableObj()->set(key, value);
+                } else {
+                    runtimeError("attempt to index a " + upTable.typeToString() + " value");
                 }
                 break;
             }
@@ -823,6 +891,19 @@ bool VM::run(size_t targetFrameCount) {
                 break;
             }
 
+            case OpCode::OP_ROTATE: {
+                uint8_t n = readByte();
+                if (n >= 2 && currentCoroutine_->stack.size() >= n) {
+                    // move the n-th value from top to the top of the stack
+                    // Stack: [..., val_n, val_n-1, ..., val_1] -> [..., val_n-1, ..., val_1, val_n]
+                    size_t idx = currentCoroutine_->stack.size() - n;
+                    Value val = currentCoroutine_->stack[idx];
+                    currentCoroutine_->stack.erase(currentCoroutine_->stack.begin() + idx);
+                    currentCoroutine_->stack.push_back(val);
+                }
+                break;
+            }
+
             case OpCode::OP_JUMP: {
                 uint16_t offset = readByte() | (readByte() << 8);
                 currentFrame().ip += offset;
@@ -860,16 +941,13 @@ bool VM::run(size_t targetFrameCount) {
 
                     if (isLocal) {
                         // Capture local variable from current frame
-                        size_t stackIndex = currentCoroutine_->frames.empty() ? index :
-                            (currentFrame().stackBase + index);
+                        size_t stackIndex = currentFrame().stackBase + index;
                         UpvalueObject* upvalue = captureUpvalue(stackIndex);
                         closure->setUpvalue(i, upvalue);
                     } else {
                         // Capture upvalue from enclosing closure
-                        if (!currentCoroutine_->frames.empty()) {
-                            UpvalueObject* upvalue = currentFrame().closure->getUpvalueObj(index);
-                            closure->setUpvalue(i, upvalue);
-                        }
+                        UpvalueObject* upvalue = currentFrame().closure->getUpvalueObj(index);
+                        closure->setUpvalue(i, upvalue);
                     }
                 }
 
@@ -1907,7 +1985,7 @@ void VM::traceExecution() {
 bool VM::runSource(const std::string& source, const std::string& name) {
     FunctionObject* func = compileSource(source, name);
     if (!func) return false;
-    return run(*func->chunk());
+    return run(*func);
 }
 
 FunctionObject* VM::compileSource(const std::string& source, const std::string& name) {
@@ -1918,18 +1996,17 @@ FunctionObject* VM::compileSource(const std::string& source, const std::string& 
         if (!program) return nullptr;
 
         CodeGenerator codegen;
-        auto chunk = codegen.generate(program.get());
-        if (!chunk) return nullptr;
+        auto function = codegen.generate(program.get(), name);
+        if (!function) return nullptr;
 
 #ifdef PRINT_CODE
-        chunk->disassemble(name);
+        function->chunk()->disassemble(name);
 #endif
 
         // Create a FunctionObject to own the Chunk and keep it alive in the VM's function table
-        // We set arity to 0 and hasVarargs to true so the script can access arguments via '...'
-        FunctionObject* function = new FunctionObject(name, 0, std::move(chunk), 0, true);
-        registerFunction(function);
-        return function;
+        FunctionObject* ptr = function.get();
+        registerFunction(function.release());
+        return ptr;
     } catch (const std::exception& e) {
         std::cerr << "Error in compileSource (" << name << "): " << e.what() << std::endl;
         return nullptr;

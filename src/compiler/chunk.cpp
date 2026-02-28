@@ -165,6 +165,10 @@ size_t Chunk::disassembleInstruction(size_t offset) const {
             return byteInstruction("OP_GET_UPVALUE", offset);
         case OpCode::OP_SET_UPVALUE:
             return byteInstruction("OP_SET_UPVALUE", offset);
+        case OpCode::OP_GET_TABUP:
+            return twoByteInstruction("OP_GET_TABUP", offset);
+        case OpCode::OP_SET_TABUP:
+            return twoByteInstruction("OP_SET_TABUP", offset);
         case OpCode::OP_CLOSE_UPVALUE:
             return simpleInstruction("OP_CLOSE_UPVALUE", offset);
 
@@ -176,6 +180,8 @@ size_t Chunk::disassembleInstruction(size_t offset) const {
             return simpleInstruction("OP_DUP", offset);
         case OpCode::OP_SWAP:
             return simpleInstruction("OP_SWAP", offset);
+        case OpCode::OP_ROTATE:
+            return byteInstruction("OP_ROTATE", offset);
         case OpCode::OP_JUMP:
             return jumpInstruction("OP_JUMP", 1, offset);
         case OpCode::OP_JUMP_IF_FALSE:
@@ -260,6 +266,15 @@ size_t Chunk::byteInstruction(const char* name, size_t offset) const {
 
     std::cout << std::endl;
     return offset + 2;
+}
+
+size_t Chunk::twoByteInstruction(const char* name, size_t offset) const {
+    uint8_t byte1 = code_[offset + 1];
+    uint8_t byte2 = code_[offset + 2];
+    std::cout << std::left << std::setw(16) << name
+              << std::right << std::setw(4) << static_cast<int>(byte1)
+              << " " << std::setw(4) << static_cast<int>(byte2) << std::endl;
+    return offset + 3;
 }
 
 size_t Chunk::callInstruction(const char* name, size_t offset) const {

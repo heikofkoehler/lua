@@ -20,6 +20,8 @@ enum class OpCode : uint8_t {
     OP_SET_LOCAL,   // Set local variable [slot: uint8_t]
     OP_GET_UPVALUE, // Get upvalue [index: uint8_t]
     OP_SET_UPVALUE, // Set upvalue [index: uint8_t]
+    OP_GET_TABUP,   // Get table from upvalue [upIndex: uint8_t, constIndex: uint8_t]
+    OP_SET_TABUP,   // Set table from upvalue [upIndex: uint8_t, constIndex: uint8_t]
     OP_CLOSE_UPVALUE, // Close upvalue at top of stack
 
     // Arithmetic operations (binary)
@@ -57,6 +59,7 @@ enum class OpCode : uint8_t {
     OP_POP,         // Pop and discard top of stack
     OP_DUP,         // Duplicate top of stack
     OP_SWAP,        // Swap top two values on stack
+    OP_ROTATE,      // Rotate top N values on stack [n: uint8_t]
     OP_JUMP,        // Unconditional jump [offset: uint16_t]
     OP_JUMP_IF_FALSE, // Jump if top of stack is falsey [offset: uint16_t]
     OP_LOOP,        // Jump backward [offset: uint16_t]
@@ -102,6 +105,8 @@ inline const char* opcodeName(OpCode op) {
         case OpCode::OP_SET_LOCAL:     return "OP_SET_LOCAL";
         case OpCode::OP_GET_UPVALUE:   return "OP_GET_UPVALUE";
         case OpCode::OP_SET_UPVALUE:   return "OP_SET_UPVALUE";
+        case OpCode::OP_GET_TABUP:     return "OP_GET_TABUP";
+        case OpCode::OP_SET_TABUP:     return "OP_SET_TABUP";
         case OpCode::OP_CLOSE_UPVALUE: return "OP_CLOSE_UPVALUE";
         case OpCode::OP_ADD:           return "OP_ADD";
         case OpCode::OP_SUB:         return "OP_SUB";
@@ -130,6 +135,7 @@ inline const char* opcodeName(OpCode op) {
         case OpCode::OP_POP:           return "OP_POP";
         case OpCode::OP_DUP:           return "OP_DUP";
         case OpCode::OP_SWAP:          return "OP_SWAP";
+        case OpCode::OP_ROTATE:        return "OP_ROTATE";
         case OpCode::OP_JUMP:          return "OP_JUMP";
         case OpCode::OP_JUMP_IF_FALSE: return "OP_JUMP_IF_FALSE";
         case OpCode::OP_LOOP:          return "OP_LOOP";
