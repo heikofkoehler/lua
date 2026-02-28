@@ -1281,6 +1281,10 @@ void CodeGenerator::compileFunction(const std::string& name, const std::vector<s
     // Save current compiler state and start new function compilation
     pushCompilerState();
 
+    // Ensure _ENV is the first upvalue (index 0)
+    // resolveUpvalue will find it in the parent and add it to current upvalues_
+    resolveUpvalue("_ENV");
+
     // Begin scope for function body
     beginScope();
 
@@ -1494,85 +1498,102 @@ int CodeGenerator::resolveLocal(const std::string& name) {
 int CodeGenerator::resolveUpvalue(const std::string& name) {
     // 1. Check if it's already an upvalue in the current chunk
     for (int i = 0; i < static_cast<int>(upvalues_.size()); i++) {
-        // printf("DEBUG: checking upvalue %d: %s against %s\n", i, upvalues_[i].name.c_str(), name.c_str());
         if (upvalues_[i].name == name) {
             return i;
         }
     }
 
-    // 2. If it's _ENV and we're at the top level, it should have been in step 1.
-    // But if we're inside a function, we need to look up.
     if (enclosingCompiler_ == nullptr) {
         return -1;
     }
 
-
-    // Try to find variable in immediate parent's locals
+    // 2. Check parent's locals
     for (int i = static_cast<int>(enclosingCompiler_->locals.size()) - 1; i >= 0; i--) {
         if (enclosingCompiler_->locals[i].name == name) {
-            // Mark the local as captured
             enclosingCompiler_->locals[i].isCaptured = true;
-            // Add upvalue to current function that captures this local
-            return addUpvalue(enclosingCompiler_->locals[i].slot, true);
+            return addUpvalue(name, static_cast<uint8_t>(enclosingCompiler_->locals[i].slot), true);
         }
     }
 
-    // Not found in parent's locals, check parent's upvalues (grandparent capture)
-    // Use helper to recursively search ancestor scopes
+    // 3. Check parent's upvalues
+    for (int i = 0; i < static_cast<int>(enclosingCompiler_->upvalues.size()); i++) {
+        if (enclosingCompiler_->upvalues[i].name == name) {
+            return addUpvalue(name, static_cast<uint8_t>(i), false);
+        }
+    }
+
+    // 4. Recursively try to resolve in ancestor (via parent)
     int ancestorUpvalue = resolveUpvalueHelper(enclosingCompiler_, name);
     if (ancestorUpvalue != -1) {
-        // Parent (or ancestor) has this as an upvalue, reference it
-        return addUpvalue(ancestorUpvalue, false);
+        return addUpvalue(name, static_cast<uint8_t>(ancestorUpvalue), false);
     }
 
     return -1;
 }
 
-int CodeGenerator::resolveUpvalueHelper(CompilerState* compiler, const std::string& name) {
-    if (compiler == nullptr || compiler->enclosing == nullptr) {
+int CodeGenerator::resolveUpvalueHelper(CompilerState* state, const std::string& name) {
+    if (state == nullptr || state->enclosing == nullptr) {
         return -1;
     }
 
-    CompilerState* parent = compiler->enclosing;
+    CompilerState* parent = state->enclosing;
 
     // Check parent's locals
     for (int i = static_cast<int>(parent->locals.size()) - 1; i >= 0; i--) {
         if (parent->locals[i].name == name) {
-            // Found in parent's locals
             parent->locals[i].isCaptured = true;
-
-            // Add upvalue to compiler (the intermediate function) that captures this local
+            
+            // Add upvalue to the intermediate state
+            for (size_t j = 0; j < state->upvalues.size(); j++) {
+                if (state->upvalues[j].name == name) return static_cast<int>(j);
+            }
             Upvalue uv;
-            uv.index = parent->locals[i].slot;
-            uv.isLocal = true;
             uv.name = name;
-            compiler->upvalues.push_back(uv);
-
-            return compiler->upvalues.size() - 1;
+            uv.index = static_cast<uint8_t>(parent->locals[i].slot);
+            uv.isLocal = true;
+            state->upvalues.push_back(uv);
+            return static_cast<int>(state->upvalues.size() - 1);
         }
     }
 
-    // Not in parent's locals, search recursively
+    // Check parent's upvalues
+    for (int i = 0; i < static_cast<int>(parent->upvalues.size()); i++) {
+        if (parent->upvalues[i].name == name) {
+            // Add upvalue to the intermediate state
+            for (size_t j = 0; j < state->upvalues.size(); j++) {
+                if (state->upvalues[j].name == name) return static_cast<int>(j);
+            }
+            Upvalue uv;
+            uv.name = name;
+            uv.index = static_cast<uint8_t>(i);
+            uv.isLocal = false;
+            state->upvalues.push_back(uv);
+            return static_cast<int>(state->upvalues.size() - 1);
+        }
+    }
+
+    // Recursively resolve in ancestor
     int ancestorUpvalue = resolveUpvalueHelper(parent, name);
     if (ancestorUpvalue != -1) {
-        // Found in an ancestor, add upvalue to intermediate compiler
+        for (size_t j = 0; j < state->upvalues.size(); j++) {
+            if (state->upvalues[j].name == name) return static_cast<int>(j);
+        }
         Upvalue uv;
-        uv.index = ancestorUpvalue;
-        uv.isLocal = false;
         uv.name = name;
-        compiler->upvalues.push_back(uv);
-
-        return compiler->upvalues.size() - 1;
+        uv.index = static_cast<uint8_t>(ancestorUpvalue);
+        uv.isLocal = false;
+        state->upvalues.push_back(uv);
+        return static_cast<int>(state->upvalues.size() - 1);
     }
 
     return -1;
 }
 
-int CodeGenerator::addUpvalue(uint8_t index, bool isLocal) {
+int CodeGenerator::addUpvalue(const std::string& name, uint8_t index, bool isLocal) {
     // Check if we already have this upvalue (deduplicate)
     for (size_t i = 0; i < upvalues_.size(); i++) {
-        if (upvalues_[i].index == index && upvalues_[i].isLocal == isLocal) {
-            return i;  // Reuse existing upvalue
+        if (upvalues_[i].name == name) {
+            return static_cast<int>(i);
         }
     }
 
@@ -1583,11 +1604,12 @@ int CodeGenerator::addUpvalue(uint8_t index, bool isLocal) {
 
     // Add new upvalue
     Upvalue uv;
+    uv.name = name;
     uv.index = index;
     uv.isLocal = isLocal;
     upvalues_.push_back(uv);
 
-    return upvalues_.size() - 1;
+    return static_cast<int>(upvalues_.size() - 1);
 }
 
 void CodeGenerator::beginScope() {

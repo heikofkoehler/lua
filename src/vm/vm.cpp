@@ -191,7 +191,7 @@ UpvalueObject* VM::captureUpvalue(size_t stackIndex) {
     }
 
     // Create new upvalue
-    UpvalueObject* upvalue = new UpvalueObject(stackIndex);
+    UpvalueObject* upvalue = new UpvalueObject(currentCoroutine_, stackIndex);
     addObject(upvalue);
 
     // Insert into currentCoroutine_->openUpvalues (keep sorted by stack index for efficient closing)
@@ -291,11 +291,11 @@ void VM::initStandardLibrary() {
 
     // Create 'string' table
     TableObject* stringTable = createTable();
-    globals_["string"] = Value::table(stringTable);
+    setGlobal("string", Value::table(stringTable));
 
     // Create 'table' table
     TableObject* tableTable = createTable();
-    globals_["table"] = Value::table(tableTable);
+    setGlobal("table", Value::table(tableTable));
     registerTableLibrary(this, tableTable);
 
     registerStringLibrary(this, stringTable);
@@ -303,34 +303,34 @@ void VM::initStandardLibrary() {
     // Create 'math' table
     TableObject* mathTable = createTable();
     registerMathLibrary(this, mathTable);
-    globals_["math"] = Value::table(mathTable);
+    setGlobal("math", Value::table(mathTable));
 
     // Create 'os' table
     TableObject* osTable = createTable();
     registerOSLibrary(this, osTable);
-    globals_["os"] = Value::table(osTable);
+    setGlobal("os", Value::table(osTable));
 
     // Create 'io' table
     TableObject* ioTable = createTable();
     void registerIOLibrary(VM* vm, TableObject* ioTable);
     registerIOLibrary(this, ioTable);
-    globals_["io"] = Value::table(ioTable);
+    setGlobal("io", Value::table(ioTable));
 
     // Create 'socket' table
     TableObject* socketTable = createTable();
     registerSocketLibrary(this, socketTable);
-    globals_["socket"] = Value::table(socketTable);
+    setGlobal("socket", Value::table(socketTable));
 
     // Create 'coroutine' table
     TableObject* coroutineTable = createTable();
     registerCoroutineLibrary(this, coroutineTable);
-    globals_["coroutine"] = Value::table(coroutineTable);
+    setGlobal("coroutine", Value::table(coroutineTable));
 
     // Create 'debug' table
     TableObject* debugTable = createTable();
     void registerDebugLibrary(VM* vm, TableObject* debugTable);
     registerDebugLibrary(this, debugTable);
-    globals_["debug"] = Value::table(debugTable);
+    setGlobal("debug", Value::table(debugTable));
 
     // Run all initialization scripts registered during library loading
     runInitializationFrames();
@@ -403,9 +403,7 @@ bool VM::run(const FunctionObject& function) {
                 globals_["_G"] = gTable;
             }
             
-            envUpvalue = new UpvalueObject(0);
-            envUpvalue->set(currentCoroutine_->stack, gTable);
-            envUpvalue->close(currentCoroutine_->stack);
+            envUpvalue = new UpvalueObject(gTable);
             addObject(envUpvalue);
         }
         
@@ -545,7 +543,7 @@ bool VM::run(size_t targetFrameCount) {
                 Value key = readConstant();
                 UpvalueObject* upvalue = currentFrame().closure->getUpvalueObj(upIndex);
                 Value upTable = upvalue->get(currentCoroutine_->stack);
-                
+
                 if (upTable.isTable()) {
                     push(upTable.asTableObj()->get(key));
                 } else {
@@ -553,7 +551,6 @@ bool VM::run(size_t targetFrameCount) {
                 }
                 break;
             }
-
             case OpCode::OP_SET_TABUP: {
                 uint8_t upIndex = readByte();
                 Value key = readConstant();
@@ -935,11 +932,12 @@ bool VM::run(size_t targetFrameCount) {
                 ClosureObject* closure = createClosure(function);
 
                 // Capture upvalues
-                for (int i = 0; i < function->upvalueCount(); i++) {
+                for (size_t i = 0; i < closure->upvalueCount(); i++) {
                     uint8_t isLocal = readByte();
                     uint8_t index = readByte();
 
                     if (isLocal) {
+
                         // Capture local variable from current frame
                         size_t stackIndex = currentFrame().stackBase + index;
                         UpvalueObject* upvalue = captureUpvalue(stackIndex);

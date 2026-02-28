@@ -73,10 +73,7 @@ void VM::markObject(GCObject* object) {
         }
 
         case GCObject::Type::UPVALUE: {
-            UpvalueObject* upvalue = static_cast<UpvalueObject*>(object);
-            if (upvalue->isClosed()) {
-                markValue(upvalue->closedValue());
-            }
+            static_cast<UpvalueObject*>(object)->markReferences();
             break;
         }
 

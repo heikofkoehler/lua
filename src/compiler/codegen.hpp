@@ -133,7 +133,7 @@ private:
     int resolveLocal(const std::string& name);
     int resolveUpvalue(const std::string& name);
     int resolveUpvalueHelper(CompilerState* compiler, const std::string& name);
-    int addUpvalue(uint8_t index, bool isLocal);
+    int addUpvalue(const std::string& name, uint8_t index, bool isLocal);
     void beginScope();
     void endScope();
 

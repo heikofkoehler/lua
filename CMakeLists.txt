@@ -41,6 +41,7 @@ set(SOURCES
     src/common/common.cpp
     src/value/value.cpp
     src/value/table.cpp
+    src/value/upvalue.cpp
     src/value/file.cpp
     src/compiler/lexer.cpp
     src/compiler/parser.cpp

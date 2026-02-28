@@ -17,7 +17,4 @@ void ClosureObject::markReferences() {
 }
 
 // UpvalueObject: Mark the closed value if the upvalue is closed
-void UpvalueObject::markReferences() {
-    // If closed, the value is stored in closed_
-    // The VM will handle marking this value
-}
+// (Implementation moved to upvalue.cpp)
