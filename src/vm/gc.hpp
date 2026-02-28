@@ -14,7 +14,8 @@ public:
         UPVALUE,
         FILE,
         SOCKET,
-        COROUTINE
+        COROUTINE,
+        USERDATA
     };
 
     GCObject(Type type) : type_(type), isMarked_(false), next_(nullptr) {}

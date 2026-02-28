@@ -1,4 +1,5 @@
 #include "vm/vm.hpp"
+#include "value/userdata.hpp"
 
 namespace {
 
@@ -27,6 +28,8 @@ bool native_debug_setmetatable(VM* vm, int argCount) {
 
     if (obj.isTable()) {
         obj.asTableObj()->setMetatable(mt);
+    } else if (obj.isUserdata()) {
+        obj.asUserdataObj()->setMetatable(mt);
     } else {
         vm->setTypeMetatable(obj.type(), mt);
     }

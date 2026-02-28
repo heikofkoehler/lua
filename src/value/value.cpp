@@ -6,6 +6,7 @@
 #include "value/file.hpp"
 #include "value/socket.hpp"
 #include "value/coroutine.hpp"
+#include "value/userdata.hpp"
 #include "compiler/chunk.hpp"
 #include <sstream>
 #include <iomanip>
@@ -30,6 +31,7 @@ std::string Value::typeToString() const {
         case Type::CLOSURE:
         case Type::NATIVE_FUNCTION: return "function";
         case Type::THREAD: return "thread";
+        case Type::USERDATA: return "userdata";
         case Type::FILE:
         case Type::SOCKET: return "userdata";
         default: return "unknown";
@@ -59,6 +61,7 @@ void Value::print(std::ostream& os) const {
         case Type::SOCKET: os << "socket: " << asSocketObj(); break;
         case Type::NATIVE_FUNCTION: os << "<native function>"; break;
         case Type::THREAD: os << "thread: " << asThreadObj(); break;
+        case Type::USERDATA: os << "userdata: " << asUserdataObj(); break;
     }
 }
 

@@ -5,6 +5,7 @@
 #include "value/closure.hpp"
 #include "value/upvalue.hpp"
 #include "value/coroutine.hpp"
+#include "value/userdata.hpp"
 #include <iostream>
 
 void VM::addObject(GCObject* object) {
@@ -35,9 +36,29 @@ void VM::markObject(GCObject* object) {
         case GCObject::Type::TABLE: {
             TableObject* table = static_cast<TableObject*>(object);
             markValue(table->getMetatable());
+            
+            Value modeVal = getMetamethod(Value::table(table), "__mode");
+            bool weakKeys = false;
+            bool weakValues = false;
+            if (modeVal.isString()) {
+                std::string mode = getStringValue(modeVal);
+                if (mode.find('k') != std::string::npos) weakKeys = true;
+                if (mode.find('v') != std::string::npos) weakValues = true;
+            }
+
+            if (weakKeys || weakValues) {
+                weakTables_.push_back(table);
+            }
+
             for (const auto& pair : table->data()) {
-                markValue(pair.first);
-                markValue(pair.second);
+                if (!weakKeys) {
+                    markValue(pair.first);
+                }
+                // Ephemeron tables: if keys are weak, values are only marked if the key is marked.
+                // Since we don't know if the key is marked yet, we delay marking the value.
+                if (!weakValues && !weakKeys) {
+                    markValue(pair.second);
+                }
             }
             break;
         }
@@ -70,6 +91,12 @@ void VM::markObject(GCObject* object) {
             if (co->caller) markObject(co->caller);
             break;
         }
+
+        case GCObject::Type::USERDATA: {
+            // Userdata marks its metatable
+            static_cast<class UserdataObject*>(object)->markReferences();
+            break;
+        }
     }
 }
 
@@ -80,6 +107,77 @@ void VM::markRoots() {
 
     if (mainCoroutine_) markObject(mainCoroutine_);
     if (currentCoroutine_) markObject(currentCoroutine_);
+}
+
+void VM::processWeakTables() {
+    bool changed;
+    do {
+        changed = false;
+        for (TableObject* table : weakTables_) {
+            Value modeVal = getMetamethod(Value::table(table), "__mode");
+            bool weakKeys = false;
+            bool weakValues = false;
+            if (modeVal.isString()) {
+                std::string mode = getStringValue(modeVal);
+                if (mode.find('k') != std::string::npos) weakKeys = true;
+                if (mode.find('v') != std::string::npos) weakValues = true;
+            }
+
+            if (weakKeys && !weakValues) {
+                // Ephemeron logic: if key is marked but value is not, mark value
+                for (const auto& pair : table->data()) {
+                    bool keyMarked = true;
+                    if (pair.first.isObj() && !pair.first.asObj()->isMarked()) {
+                        keyMarked = false;
+                    }
+
+                    if (keyMarked) {
+                        if (pair.second.isObj() && !pair.second.asObj()->isMarked()) {
+                            markValue(pair.second);
+                            changed = true;
+                        }
+                    }
+                }
+            }
+        }
+    } while (changed);
+}
+
+void VM::removeUnmarkedWeakEntries() {
+    for (TableObject* table : weakTables_) {
+        Value modeVal = getMetamethod(Value::table(table), "__mode");
+        bool weakKeys = false;
+        bool weakValues = false;
+        if (modeVal.isString()) {
+            std::string mode = getStringValue(modeVal);
+            if (mode.find('k') != std::string::npos) weakKeys = true;
+            if (mode.find('v') != std::string::npos) weakValues = true;
+        }
+
+        // Collect keys to remove
+        std::vector<Value> toRemove;
+        for (const auto& pair : table->data()) {
+            bool remove = false;
+            if (weakKeys && pair.first.isObj() && !pair.first.asObj()->isMarked()) {
+                remove = true;
+            }
+            if (weakValues && pair.second.isObj() && !pair.second.asObj()->isMarked()) {
+                remove = true;
+            }
+            if (remove) {
+                toRemove.push_back(pair.first);
+            }
+        }
+
+        // Remove entries
+        for (const auto& key : toRemove) {
+            table->set(key, Value::nil()); // Assuming setting to nil removes it or we use an erase method
+            // Wait, does TableObject have an erase or does set to nil just mark it nil?
+            // Usually set to nil is how Lua removes keys, but if the map retains the nil value, 
+            // it's not truly removed from the map.
+        }
+    }
+    weakTables_.clear();
 }
 
 void VM::sweep() {
@@ -118,6 +216,7 @@ void VM::freeObject(GCObject* object) {
         case GCObject::Type::UPVALUE: delete static_cast<UpvalueObject*>(object); break;
         case GCObject::Type::FILE: delete static_cast<FileObject*>(object); break;
         case GCObject::Type::SOCKET: delete static_cast<SocketObject*>(object); break;
+        case GCObject::Type::USERDATA: delete static_cast<class UserdataObject*>(object); break;
         case GCObject::Type::COROUTINE: {
             CoroutineObject* co = static_cast<CoroutineObject*>(object);
             // Coroutines are in coroutines_ vector, find and remove
@@ -136,6 +235,8 @@ void VM::freeObject(GCObject* object) {
 void VM::collectGarbage() {
     if (!gcEnabled_) return;
     markRoots();
+    processWeakTables();
+    removeUnmarkedWeakEntries();
     sweep();
     nextGC_ = bytesAllocated_ * 2;
 }

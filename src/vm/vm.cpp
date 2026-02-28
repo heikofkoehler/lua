@@ -2,6 +2,7 @@
 #include "compiler/lexer.hpp"
 #include "compiler/parser.hpp"
 #include "compiler/codegen.hpp"
+#include "value/userdata.hpp"
 #include <iostream>
 #include <cmath>
 
@@ -127,6 +128,16 @@ TableObject* VM::createTable() {
     TableObject* table = new TableObject();
     addObject(table);
     return table;
+}
+
+UserdataObject* VM::createUserdata(void* data) {
+    if (bytesAllocated_ > nextGC_) {
+        collectGarbage();
+    }
+
+    UserdataObject* userdata = new UserdataObject(data);
+    addObject(userdata);
+    return userdata;
 }
 
 ClosureObject* VM::createClosure(FunctionObject* function) {
@@ -1249,6 +1260,9 @@ Value VM::getMetamethod(const Value& obj, const std::string& method) {
     if (obj.isTable()) {
         TableObject* table = obj.asTableObj();
         mt = table->getMetatable();
+    } else if (obj.isUserdata()) {
+        UserdataObject* userdata = obj.asUserdataObj();
+        mt = userdata->metatable();
     } else {
         mt = getTypeMetatable(obj.type());
     }

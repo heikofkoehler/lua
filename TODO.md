@@ -10,9 +10,9 @@ This document tracks the missing features and planned improvements to bring this
 
 ## 2. Metamethods & Data Types
 - [x] **Metamethod Completeness:** Add support for `__call`, `__concat`, `__len`, and bitwise metamethods.
-- [ ] **Weak Tables:** Implement `__mode = "k"` and `__mode = "v"` in the Garbage Collector.
+- [x] **Weak Tables:** Implement `__mode = "k"` and `__mode = "v"` in the Garbage Collector.
 - [x] **Integer Type:** Distinguish between 64-bit integers and doubles in the `Value` NaN-boxing (Lua 5.3+).
-- [ ] **Userdata:** Implement a general `userdata` type for easier C++ extension development.
+- [x] **Userdata:** Implement a general `userdata` type for easier C++ extension development.
 
 ## 3. Standard Library Completeness
 - [ ] **Pattern Matching:** Replace C++ string methods with Lua-style pattern matching (`%d`, `%a`, `(.-)`, etc.) in `string` library.

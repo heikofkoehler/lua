@@ -15,6 +15,7 @@ class ClosureObject;
 class FileObject;
 class SocketObject;
 class CoroutineObject;
+class UserdataObject;
 
 // NaN-boxing implementation
 // Uses 64-bit representation to store all value types efficiently
@@ -43,10 +44,11 @@ public:
         SOCKET,   // Pointer to SocketObject
         RUNTIME_STRING, // Pointer to StringObject
         NATIVE_FUNCTION, // Native function index
-        THREAD    // Pointer to CoroutineObject
+        THREAD,   // Pointer to CoroutineObject
+        USERDATA  // Pointer to UserdataObject
     };
 
-    static constexpr int NUM_TYPES = 12;
+    static constexpr int NUM_TYPES = 13;
 
 private:
     explicit Value(uint64_t bits) : bits_(bits) {}
@@ -118,6 +120,10 @@ public:
         return pointerValue(TAG_THREAD, thread);
     }
 
+    static Value userdata(UserdataObject* userdata) {
+        return pointerValue(TAG_USERDATA, userdata);
+    }
+
     // Type checking
     bool isNil() const { return bits_ == (QNAN | TAG_NIL); }
     bool isBool() const { return (bits_ & (QNAN | TAG_MASK)) == (QNAN | TAG_BOOL); }
@@ -144,6 +150,7 @@ public:
     bool isSocket() const { return (bits_ & (QNAN | TAG_MASK)) == (QNAN | TAG_SOCKET); }
     bool isNativeFunction() const { return (bits_ & (QNAN | TAG_MASK)) == (QNAN | TAG_NATIVE_FUNCTION); }
     bool isThread() const { return (bits_ & (QNAN | TAG_MASK)) == (QNAN | TAG_THREAD); }
+    bool isUserdata() const { return (bits_ & (QNAN | TAG_MASK)) == (QNAN | TAG_USERDATA); }
     
     bool isFunction() const {
         return isFunctionObject() || isClosure() || isNativeFunction();
@@ -153,7 +160,8 @@ public:
         if (isNumber()) return false;
         uint64_t tag = bits_ & (QNAN | TAG_MASK);
         return tag == (QNAN | TAG_TABLE) || tag == (QNAN | TAG_CLOSURE) || tag == (QNAN | TAG_FILE) || 
-               tag == (QNAN | TAG_SOCKET) || tag == (QNAN | TAG_RUNTIME_STRING) || tag == (QNAN | TAG_THREAD);
+               tag == (QNAN | TAG_SOCKET) || tag == (QNAN | TAG_RUNTIME_STRING) || tag == (QNAN | TAG_THREAD) ||
+               tag == (QNAN | TAG_USERDATA);
     }
 
     Type type() const {
@@ -169,6 +177,7 @@ public:
         if (isSocket()) return Type::SOCKET;
         if (isNativeFunction()) return Type::NATIVE_FUNCTION;
         if (isThread()) return Type::THREAD;
+        if (isUserdata()) return Type::USERDATA;
         return Type::NIL;
     }
 
@@ -207,6 +216,7 @@ public:
     FileObject* asFileObj() const { return reinterpret_cast<FileObject*>(bits_ & PAYLOAD_MASK); }
     SocketObject* asSocketObj() const { return reinterpret_cast<SocketObject*>(bits_ & PAYLOAD_MASK); }
     CoroutineObject* asThreadObj() const { return reinterpret_cast<CoroutineObject*>(bits_ & PAYLOAD_MASK); }
+    UserdataObject* asUserdataObj() const { return reinterpret_cast<UserdataObject*>(bits_ & PAYLOAD_MASK); }
 
     // Equality and Hashing
     bool operator==(const Value& other) const;
@@ -252,6 +262,7 @@ private:
     static constexpr uint64_t TAG_NATIVE_FUNCTION = 0x000B000000000000ULL;
     static constexpr uint64_t TAG_THREAD   = 0x000C000000000000ULL;
     static constexpr uint64_t TAG_INTEGER  = 0x000D000000000000ULL;
+    static constexpr uint64_t TAG_USERDATA = 0x000E000000000000ULL;
     
     static constexpr uint64_t TAG_MASK     = 0x000F000000000000ULL;
     static constexpr uint64_t PAYLOAD_MASK = 0x0000FFFFFFFFFFFFULL;

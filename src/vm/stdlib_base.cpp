@@ -600,12 +600,23 @@ bool native_loadfile(VM* vm, int argCount) {
     }
 }
 
+bool native_test_userdata(VM* vm, int argCount) {
+    for (int i = 0; i < argCount; i++) vm->pop();
+    // Create a userdata with a dummy pointer
+    void* ptr = reinterpret_cast<void*>(0xDEADBEEF);
+    class UserdataObject* ud = vm->createUserdata(ptr);
+    vm->push(Value::userdata(ud));
+    return true;
+}
+
 } // anonymous namespace
 
 void registerBaseLibrary(VM* vm) {
-    // Register collectgarbage as a global function
     size_t gcIdx = vm->registerNativeFunction("collectgarbage", native_collectgarbage);
     vm->globals()["collectgarbage"] = Value::nativeFunction(gcIdx);
+
+    size_t testUdIdx = vm->registerNativeFunction("__test_userdata", native_test_userdata);
+    vm->globals()["__test_userdata"] = Value::nativeFunction(testUdIdx);
 
     size_t printIdx = vm->registerNativeFunction("print", native_print);
     vm->globals()["print"] = Value::nativeFunction(printIdx);

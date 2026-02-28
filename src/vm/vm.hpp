@@ -65,6 +65,9 @@ public:
     // Table operations
     TableObject* createTable();
 
+    // Userdata operations
+    class UserdataObject* createUserdata(void* data);
+
     // Closure operations
     ClosureObject* createClosure(FunctionObject* function);
 
@@ -122,6 +125,8 @@ public:
     void sweep();
     void freeObject(GCObject* object);
     void addObject(GCObject* object);
+    void processWeakTables();
+    void removeUnmarkedWeakEntries();
 
     // Metamethod helper
     Value getMetamethod(const Value& obj, const std::string& method);
@@ -175,6 +180,7 @@ private:
     size_t bytesAllocated_;       // Total bytes allocated
     size_t nextGC_;               // Threshold for next GC
     bool gcEnabled_;              // Can disable GC for debugging
+    std::vector<class TableObject*> weakTables_;
 
     std::unordered_map<std::string, Value> registry_; // Internal registry
     std::unordered_map<std::string, Value> globals_;  // Global variables
