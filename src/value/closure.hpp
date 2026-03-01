@@ -22,11 +22,7 @@ public:
     size_t upvalueCount() const { return upvalues_.size(); }
 
     // Set upvalue pointer
-    void setUpvalue(size_t index, UpvalueObject* upvalue) {
-        if (index < upvalues_.size()) {
-            upvalues_[index] = upvalue;
-        }
-    }
+    void setUpvalue(size_t index, UpvalueObject* upvalue);
 
     // Get upvalue object
     UpvalueObject* getUpvalueObj(size_t index) const {

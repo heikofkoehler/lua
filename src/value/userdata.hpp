@@ -16,16 +16,10 @@ public:
     void setData(void* data) { data_ = data; }
 
     Value metatable() const { return metatable_; }
-    void setMetatable(const Value& mt) { metatable_ = mt; }
+    void setMetatable(const Value& mt);
 
     // GC interface
-    void markReferences() override {
-        // Mark the metatable, but the raw C++ pointer is opaque to the GC
-        if (metatable_.isObj()) {
-            metatable_.asObj()->mark();
-            metatable_.asObj()->markReferences();
-        }
-    }
+    void markReferences() override;
 
     size_t size() const override {
         return sizeof(UserdataObject);

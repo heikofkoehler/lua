@@ -121,18 +121,32 @@ public:
     Value getRegistry(const std::string& key) const;
 
     // Garbage collection
+    enum class GCState {
+        PAUSE,
+        MARK,
+        ATOMIC,
+        SWEEP,
+    };
+
     size_t bytesAllocated() const { return bytesAllocated_; }
     void setMemoryLimit(size_t limit) { memoryLimit_ = limit; }
     void collectGarbage();
+    void gcStep();
     void checkGC(size_t additionalBytes = 0);
     void markRoots();
     void markValue(const Value& value);
     void markObject(GCObject* object);
+    void grayObject(GCObject* object);
     void sweep();
     void freeObject(GCObject* object);
     void addObject(GCObject* object);
     void processWeakTables();
     void removeUnmarkedWeakEntries();
+
+    // Write barriers
+    void writeBarrier(GCObject* object, const Value& value);
+    void writeBarrier(GCObject* object, GCObject* value);
+    void writeBarrierBackward(GCObject* object, GCObject* value);
 
     // Metamethod helper
     Value getMetamethod(const Value& obj, const std::string& method);
@@ -208,7 +222,9 @@ private:
     bool stdlibInitialized_;      // Whether standard library has been initialized
 
     // Garbage collection
+    GCState gcState_;             // Current incremental GC state
     GCObject* gcObjects_;         // Linked list of all GC objects
+    std::vector<GCObject*> grayStack_; // Worklist for marking
     size_t bytesAllocated_;       // Total bytes allocated
     size_t nextGC_;               // Threshold for next GC
     size_t memoryLimit_;          // Maximum bytes allowed before Emergency GC

@@ -27,6 +27,7 @@ VM::VM() :
 #endif
            mainCoroutine_(nullptr), currentCoroutine_(nullptr), 
            hadError_(false), inPcall_(false), isHandlingError_(false), lastErrorMessage_(""), stdlibInitialized_(false),
+           gcState_(GCState::PAUSE),
            gcObjects_(nullptr), bytesAllocated_(0), nextGC_(1024 * 1024), 
            memoryLimit_(100 * 1024 * 1024), // Default 100MB limit
            gcEnabled_(true) {
@@ -606,7 +607,9 @@ bool VM::run(size_t targetFrameCount) {
 #ifdef DEBUG
                 std::cout << "DEBUG SET_LOCAL: slot=" << (int)slot << " actual=" << actualSlot << " val=" << peek(0) << std::endl;
 #endif
-                currentCoroutine_->stack[actualSlot] = peek(0);
+                Value val = peek(0);
+                if (val.isObj()) writeBarrierBackward(currentCoroutine_, val.asObj());
+                currentCoroutine_->stack[actualSlot] = val;
                 break;
             }
 
@@ -1797,7 +1800,9 @@ bool VM::callValue(int argCount, int retCount, bool isTailCall) {
             
             // Move callee and args down
             for (int i = 0; i <= argCount; i++) {
-                currentCoroutine_->stack[oldStackBase - 1 + i] = currentCoroutine_->stack[calleePos + i];
+                Value val = currentCoroutine_->stack[calleePos + i];
+                if (val.isObj()) writeBarrierBackward(currentCoroutine_, val.asObj());
+                currentCoroutine_->stack[oldStackBase - 1 + i] = val;
             }
             
             // Pop the rest

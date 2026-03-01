@@ -43,12 +43,14 @@ set(SOURCES
     src/value/table.cpp
     src/value/upvalue.cpp
     src/value/file.cpp
+    src/value/closure.cpp
+    src/value/userdata.cpp
+    src/value/coroutine.cpp
     src/compiler/lexer.cpp
     src/compiler/parser.cpp
     src/compiler/chunk.cpp
     src/compiler/codegen.cpp
     src/vm/vm.cpp
-    src/vm/gc.cpp
     src/vm/gc_impl.cpp
     src/vm/stdlib_base.cpp
     src/vm/stdlib_string.cpp

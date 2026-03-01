@@ -161,6 +161,9 @@ bool native_debug_setlocal(VM* vm, int argCount) {
     for(int i=0; i<argCount; i++) vm->pop();
 
     if (found) {
+        if (newValue.isObj()) {
+            vm->writeBarrierBackward(vm->currentCoroutine(), newValue.asObj());
+        }
         vm->currentCoroutine()->stack[frame->stackBase + slot] = newValue;
         vm->push(Value::runtimeString(vm->internString(name)));
     } else {

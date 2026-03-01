@@ -1,6 +1,24 @@
 #include "value/table.hpp"
 #include "vm/vm.hpp"
 
+void TableObject::set(const Value& key, const Value& value) {
+    if (key.isNil()) {
+        // Cannot use nil as a key in Lua
+        return;
+    }
+    
+    if (value.isNil()) {
+        // Setting to nil removes the key
+        map_.erase(key);
+    } else {
+        if (VM::currentVM) {
+            VM::currentVM->writeBarrier(this, key);
+            VM::currentVM->writeBarrier(this, value);
+        }
+        map_[key] = value;
+    }
+}
+
 void TableObject::set(const std::string& key, const Value& value) {
     // Find existing string key by content
     for (auto it = map_.begin(); it != map_.end(); ++it) {
@@ -8,6 +26,7 @@ void TableObject::set(const std::string& key, const Value& value) {
             if (value.isNil()) {
                 map_.erase(it);
             } else {
+                if (VM::currentVM) VM::currentVM->writeBarrier(this, value);
                 it->second = value;
             }
             return;
@@ -17,8 +36,17 @@ void TableObject::set(const std::string& key, const Value& value) {
     // Not found, add new entry if not nil
     if (!value.isNil() && VM::currentVM) {
         StringObject* str = VM::currentVM->internString(key);
+        VM::currentVM->writeBarrier(this, str);
+        VM::currentVM->writeBarrier(this, value);
         map_[Value::runtimeString(str)] = value;
     }
+}
+
+void TableObject::setMetatable(const Value& mt) {
+    if (mt.isObj() && VM::currentVM) {
+        VM::currentVM->writeBarrier(this, mt.asObj());
+    }
+    metatable_ = mt;
 }
 
 Value TableObject::get(const std::string& key) const {
@@ -75,4 +103,8 @@ std::pair<Value, Value> TableObject::next(const Value& key) const {
         }
         return {it->first, it->second};
     }
+}
+
+void TableObject::markReferences() {
+    // Table marking is handled by blackenObject in incremental GC
 }

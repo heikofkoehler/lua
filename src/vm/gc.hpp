@@ -18,17 +18,23 @@ public:
         USERDATA
     };
 
-    GCObject(Type type) : type_(type), isMarked_(false), next_(nullptr) {}
+    enum class Color {
+        WHITE,
+        GRAY,
+        BLACK
+    };
+
+    GCObject(Type type) : type_(type), color_(Color::WHITE), next_(nullptr) {}
     virtual ~GCObject() = default;
 
-    // Mark this object as reachable
-    void mark() { isMarked_ = true; }
+    // Tri-color marking colors
+    Color color() const { return color_; }
+    void setColor(Color color) { color_ = color; }
 
-    // Check if object is marked
-    bool isMarked() const { return isMarked_; }
-
-    // Reset mark bit (for next GC cycle)
-    void unmark() { isMarked_ = false; }
+    // Compatibility helpers
+    bool isMarked() const { return color_ != Color::WHITE; }
+    void mark() { color_ = Color::BLACK; }
+    void unmark() { color_ = Color::WHITE; }
 
     // Get object type
     Type type() const { return type_; }
@@ -46,7 +52,7 @@ public:
 
 private:
     Type type_;
-    bool isMarked_;
+    Color color_;
     GCObject* next_;  // Intrusive linked list
 };
 

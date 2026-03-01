@@ -30,18 +30,7 @@ public:
     ~TableObject() = default;
 
     // Table operations
-    void set(const Value& key, const Value& value) {
-        if (key.isNil()) {
-            // Cannot use nil as a key in Lua
-            return;
-        }
-        if (value.isNil()) {
-            // Setting to nil removes the key
-            map_.erase(key);
-        } else {
-            map_[key] = value;
-        }
-    }
+    void set(const Value& key, const Value& value);
 
     void set(const std::string& key, const Value& value);
 
@@ -89,7 +78,7 @@ public:
     }
 
     // Metatable operations
-    void setMetatable(const Value& mt) { metatable_ = mt; }
+    void setMetatable(const Value& mt);
     Value getMetatable() const { return metatable_; }
 
     // GC interface: mark all keys and values
