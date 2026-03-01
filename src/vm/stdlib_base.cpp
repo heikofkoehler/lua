@@ -12,6 +12,12 @@
 #include <chrono>
 #include <thread>
 
+#ifdef _WIN32
+#include <windows.h>
+#else
+#include <dlfcn.h>
+#endif
+
 namespace {
 
 bool native_collectgarbage(VM* vm, int argCount) {
@@ -488,6 +494,74 @@ bool native_test_userdata(VM* vm, int argCount) {
     return true;
 }
 
+bool native_package_loadlib(VM* vm, int argCount) {
+    if (argCount != 2) {
+        vm->runtimeError("loadlib expects 2 arguments");
+        return false;
+    }
+    Value funcname_val = vm->peek(0);
+    Value libname_val = vm->peek(1);
+    
+    if (!libname_val.isString() || !funcname_val.isString()) {
+        vm->runtimeError("loadlib expects string arguments");
+        return false;
+    }
+
+    std::string libname = vm->getStringValue(libname_val);
+    std::string funcname = vm->getStringValue(funcname_val);
+    
+    vm->pop();
+    vm->pop();
+
+    void* handle = nullptr;
+    void* func = nullptr;
+    std::string errorMsg;
+    std::string errorType;
+
+#ifdef _WIN32
+    handle = LoadLibraryA(libname.c_str());
+    if (!handle) {
+        errorMsg = "cannot open " + libname + ": LoadLibrary failed";
+        errorType = "open";
+    } else {
+        func = (void*)GetProcAddress((HMODULE)handle, funcname.c_str());
+        if (!func) {
+            errorMsg = "no field " + funcname + " in " + libname;
+            errorType = "init";
+        }
+    }
+#else
+    handle = dlopen(libname.c_str(), RTLD_NOW | RTLD_LOCAL);
+    if (!handle) {
+        const char* err = dlerror();
+        errorMsg = err ? err : "unknown error";
+        errorType = "open";
+    } else {
+        func = dlsym(handle, funcname.c_str());
+        if (!func) {
+            const char* err = dlerror();
+            errorMsg = err ? err : "unknown error";
+            errorType = "init";
+        }
+    }
+#endif
+
+    if (!func) {
+        vm->push(Value::nil());
+        vm->push(Value::runtimeString(vm->internString(errorMsg)));
+        vm->push(Value::runtimeString(vm->internString(errorType)));
+        vm->currentCoroutine()->lastResultCount = 3;
+        return true;
+    }
+
+    // Register the C function
+    NativeFunction nativeFunc = reinterpret_cast<NativeFunction>(func);
+    size_t funcIndex = vm->registerNativeFunction(funcname, nativeFunc);
+    vm->push(Value::nativeFunction(funcIndex));
+    vm->currentCoroutine()->lastResultCount = 1;
+    return true;
+}
+
 } // anonymous namespace
 
 void registerBaseLibrary(VM* vm) {
@@ -576,6 +650,8 @@ void registerBaseLibrary(VM* vm) {
 
     TableObject* package = vm->createTable();
     vm->setGlobal("package", Value::table(package));
+    
+    vm->addNativeToTable(package, "loadlib", native_package_loadlib);
 
     TableObject* loaded = vm->createTable();
     package->set("loaded", Value::table(loaded));

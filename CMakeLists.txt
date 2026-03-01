@@ -76,6 +76,21 @@ set_target_properties(lua PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}
 )
 
+# Dummy shared library for loadlib testing
+add_library(dummy_module SHARED tests/dummy_module.cpp)
+target_include_directories(dummy_module PRIVATE ${CMAKE_SOURCE_DIR}/src)
+
+if(APPLE)
+    set_target_properties(dummy_module PROPERTIES LINK_FLAGS "-undefined dynamic_lookup")
+endif()
+
+# Don't prefix with "lib" on Unix to match standard Lua extension module naming, and output to build dir
+set_target_properties(dummy_module PROPERTIES 
+    PREFIX ""
+    LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}
+    RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}
+)
+
 # Custom test target
 add_custom_target(test
     COMMAND ./run_all_tests.sh ../build/lua

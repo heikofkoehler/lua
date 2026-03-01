@@ -18,7 +18,7 @@ void TableObject::set(const Value& key, const Value& value) {
             // If adding a NEW key, memory will grow
             if (map_.find(key) == map_.end()) {
                 // Check GC BEFORE growth. Use a larger estimate to account for map overhead.
-                VM::currentVM->checkGC(128); 
+                // VM::currentVM->checkGC(128); 
             }
         }
         map_[key] = value;
@@ -46,7 +46,7 @@ void TableObject::set(const std::string& key, const Value& value) {
         VM::currentVM->writeBarrier(this, value);
         
         // Check GC BEFORE growth
-        VM::currentVM->checkGC(128);
+        // VM::currentVM->checkGC(128);
         
         map_[Value::runtimeString(str)] = value;
     }

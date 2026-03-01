@@ -184,7 +184,7 @@ bool VM::run(size_t targetFrameCount) {
             case OpCode::OP_SET_TABUP: {
                 uint8_t upIndex = readByte();
                 Value key = readConstant();
-                Value value = pop();
+                Value value = peek(0); // Peek instead of pop to root it
 
                 if (currentCoroutine_->frames.empty() || currentFrame().closure == nullptr) {
                     runtimeError("Upvalue access outside of closure");
@@ -207,6 +207,8 @@ bool VM::run(size_t targetFrameCount) {
                 } else {
                     runtimeError("attempt to index a " + upTable.typeToString() + " value");
                 }
+                
+                pop(); // Pop after setting
                 break;
             }
             case OpCode::OP_CLOSE_UPVALUE: {
@@ -795,14 +797,15 @@ bool VM::run(size_t targetFrameCount) {
             }
 
             case OpCode::OP_SET_TABLE: {
-                Value value = pop();
-                Value key = pop();
-                Value tableValue = pop();
+                Value value = peek(0);
+                Value key = peek(1);
+                Value tableValue = peek(2);
 
                 if (tableValue.isTable()) {
                     TableObject* table = tableValue.asTableObj();
                     if (table->has(key)) {
                         table->set(key, value);
+                        pop(); pop(); pop();
                         break;
                     }
                 }
@@ -815,11 +818,12 @@ bool VM::run(size_t targetFrameCount) {
                     } else {
                         runtimeError("attempt to index a " + tableValue.typeToString() + " value");
                     }
+                    pop(); pop(); pop();
                 } else if (newIndex.isFunction()) {
-                    push(newIndex);
-                    push(tableValue);
-                    push(key);
-                    push(value);
+                    // To call mm(table, key, value), we need to insert mm below the 3 arguments
+                    // Stack currently has: [..., tableValue, key, value]
+                    // We need it to be: [..., mm, tableValue, key, value]
+                    currentCoroutine_->stack.insert(currentCoroutine_->stack.end() - 3, newIndex);
                     callValue(3, 1); // Expect 0 results (0 + 1 = 1)
                 } else if (newIndex.isTable()) {
                     TableObject* niTable = newIndex.asTableObj();
@@ -828,6 +832,7 @@ bool VM::run(size_t targetFrameCount) {
                     } else {
                         niTable->set(key, value);
                     }
+                    pop(); pop(); pop();
                 } else {
                     if (tableValue.isTable()) {
                         TableObject* table = tableValue.asTableObj();
@@ -835,6 +840,7 @@ bool VM::run(size_t targetFrameCount) {
                     } else {
                         runtimeError("attempt to index a " + tableValue.typeToString() + " value");
                     }
+                    pop(); pop(); pop();
                 }
                 break;
             }
