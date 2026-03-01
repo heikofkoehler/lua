@@ -37,7 +37,8 @@ end
 
 -- Set a VERY small limit that should definitely fail eventually
 print("\n--- Testing very small limit ---")
-collectgarbage("setmemorylimit", collectgarbage("count") * 1024 + 1000) -- Current + 1KB
+local setmem_opt = "setmemorylimit"
+collectgarbage(setmem_opt, collectgarbage("count") * 1024 + 1000) -- Current + 1KB
 local success2, err2 = pcall(function()
     local x = {}
     for i=1,1000 do 
@@ -45,7 +46,7 @@ local success2, err2 = pcall(function()
     end
 end)
 
-collectgarbage("setmemorylimit", 100 * 1024 * 1024) -- Reset immediately
+collectgarbage(setmem_opt, 100 * 1024 * 1024) -- Reset immediately
 
 print("Very small limit success:", success2)
 if not success2 then

@@ -37,6 +37,7 @@ public:
     // Execute a chunk of bytecode
     // Returns true if execution succeeded, false on error
     bool run(const FunctionObject& function);
+    bool run(const FunctionObject& function, const std::vector<Value>& args);
     bool run();
     bool run(size_t targetFrameCount);
     
@@ -46,6 +47,7 @@ public:
 
     // Execute Lua source code
     bool runSource(const std::string& source, const std::string& name = "script");
+    bool runSource(const std::string& source, const std::string& name, const std::vector<Value>& args);
     FunctionObject* compileSource(const std::string& source, const std::string& name = "script");
 
     // Reset VM state
@@ -79,6 +81,7 @@ public:
     // Upvalue operations
     UpvalueObject* captureUpvalue(size_t stackIndex);
     void closeUpvalues(size_t lastStackIndex);
+    void setupRootUpvalues(ClosureObject* closure);
 
     // File operations
     FileObject* openFile(const std::string& filename, const std::string& mode);

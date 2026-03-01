@@ -125,10 +125,10 @@ void registerIOLibrary(VM* vm, TableObject* ioTable) {
     vm->addNativeToTable(ioTable, "close", native_io_close);
     
     // Register as globals too for backward compatibility
-    vm->globals()["io_open"] = ioTable->get("open");
-    vm->globals()["io_write"] = ioTable->get("write");
-    vm->globals()["io_read"] = ioTable->get("read");
-    vm->globals()["io_close"] = ioTable->get("close");
+    vm->setGlobal("io_open", ioTable->get("open"));
+    vm->setGlobal("io_write", ioTable->get("write"));
+    vm->setGlobal("io_read", ioTable->get("read"));
+    vm->setGlobal("io_close", ioTable->get("close"));
 
     ioTable->set("stderr", Value::nil());
     ioTable->set("stdout", Value::nil());

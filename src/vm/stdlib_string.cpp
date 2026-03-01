@@ -502,10 +502,13 @@ bool native_string_gmatch(VM* vm, int argCount) {
     
     for (int i = 0; i < argCount; i++) vm->pop();
 
-    FunctionObject* func = vm->compileSource(script, "gmatch_factory");
+    FunctionObject* func = vm->compileSource(script, "string.gmatch");
     if (!func) return false;
-    
-    vm->push(Value::closure(vm->createClosure(func)));
+
+    ClosureObject* closure = vm->createClosure(func);
+    vm->setupRootUpvalues(closure);
+
+    vm->push(Value::closure(closure));
     vm->push(strVal);
     vm->push(patVal);
     

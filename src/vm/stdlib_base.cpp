@@ -97,9 +97,19 @@ bool native_tostring(VM* vm, int argCount) {
     
     Value mm = vm->getMetamethod(val, "__tostring");
     if (!mm.isNil()) {
+        // Pop the original argument first so it doesn't get counted as a result
+        vm->pop();
+        
         vm->push(mm);
         vm->push(val);
+        
+        size_t prevFrames = vm->currentCoroutine()->frames.size();
         if (vm->callValue(1, 2)) {
+            if (vm->currentCoroutine()->frames.size() > prevFrames) {
+                if (!vm->run(prevFrames)) return false;
+            }
+            // Result is now on top of the stack
+            vm->currentCoroutine()->lastResultCount = 1;
             return true;
         }
         return false;
@@ -365,6 +375,7 @@ bool native_loadfile(VM* vm, int argCount) {
         FunctionObject* funcPtr = function.get();
         vm->registerFunction(function.release());
         ClosureObject* closure = vm->createClosure(funcPtr);
+        vm->setupRootUpvalues(closure);
         vm->push(Value::closure(closure));
         return true;
 
@@ -410,6 +421,7 @@ bool native_load(VM* vm, int argCount) {
         FunctionObject* funcPtr = function.get();
         vm->registerFunction(function.release());
         ClosureObject* closure = vm->createClosure(funcPtr);
+        vm->setupRootUpvalues(closure);
         vm->push(Value::closure(closure));
         return true;
 

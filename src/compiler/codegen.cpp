@@ -261,9 +261,10 @@ void CodeGenerator::visitVariable(VariableExprNode* node) {
 
     int envUpvalue = resolveUpvalue("_ENV");
     if (envUpvalue == -1) {
-        envUpvalue = 0; 
+        // Fallback to upvalue 0 if _ENV not explicitly found
+        envUpvalue = 0;
     }
-    
+
     emitOpCode(OpCode::OP_GET_TABUP);
     emitByte(static_cast<uint8_t>(envUpvalue));
     emitByte(static_cast<uint8_t>(nameIndex));
@@ -286,7 +287,9 @@ void CodeGenerator::visitExprStmt(ExprStmtNode* node) {
     expectedRetCount_ = oldRetCount;
 
     // If it was NOT a call, it pushed 1 value, so we still need to pop.
-    if (dynamic_cast<CallExprNode*>(node->expr()) == nullptr) {
+    bool isCall = dynamic_cast<CallExprNode*>(node->expr()) != nullptr ||
+                  dynamic_cast<MethodCallExprNode*>(node->expr()) != nullptr;
+    if (!isCall) {
         emitOpCode(OpCode::OP_POP);
     }
 }
@@ -343,6 +346,7 @@ void CodeGenerator::visitAssignmentStmt(AssignmentStmtNode* node) {
 
     int envUpvalue = resolveUpvalue("_ENV");
     if (envUpvalue == -1) {
+        // Fallback to upvalue 0 if _ENV not explicitly found
         envUpvalue = 0;
     }
     
@@ -417,15 +421,14 @@ void CodeGenerator::visitMultipleLocalDeclStmt(MultipleLocalDeclStmtNode* node) 
     // 3. Pad with nil if fewer values than variables (but not covered by multires)
     if (initCount < varCount) {
         auto* lastInit = initCount > 0 ? initializers[initCount - 1].get() : nullptr;
-        bool lastIsCall = lastInit && dynamic_cast<CallExprNode*>(lastInit);
-        
+        bool lastIsCall = lastInit && (dynamic_cast<CallExprNode*>(lastInit) != nullptr || dynamic_cast<MethodCallExprNode*>(lastInit) != nullptr);
+
         if (!lastIsCall) {
             for (size_t i = initCount; i < varCount; i++) {
                 emitOpCode(OpCode::OP_NIL);
             }
         }
-    } else if (initCount > varCount) {
-        // 4. Discard excess values if more values than variables
+    } else if (initCount > varCount) {        // 4. Discard excess values if more values than variables
         for (size_t i = varCount; i < initCount; i++) {
             emitOpCode(OpCode::OP_POP);
         }
@@ -466,11 +469,11 @@ void CodeGenerator::visitMultipleAssignmentStmt(MultipleAssignmentStmtNode* node
 
     expectedRetCount_ = oldRetCount;
 
-    // 3. Pad with nil or discard excess
+    // 3. Pad with nil if fewer values than variables
     if (valCount < varCount) {
-        auto* lastVal = valCount > 0 ? values[valCount - 1].get() : nullptr;
-        bool lastIsCall = lastVal && dynamic_cast<CallExprNode*>(lastVal);
-        
+        auto* lastVal = valCount > 0 ? node->values()[valCount - 1].get() : nullptr;
+        bool lastIsCall = lastVal && (dynamic_cast<CallExprNode*>(lastVal) != nullptr || dynamic_cast<MethodCallExprNode*>(lastVal) != nullptr);
+
         if (!lastIsCall) {
             for (size_t i = valCount; i < varCount; i++) {
                 emitOpCode(OpCode::OP_NIL);
@@ -529,6 +532,7 @@ void CodeGenerator::visitMultipleAssignmentStmt(MultipleAssignmentStmtNode* node
 
         int envUpvalue = resolveUpvalue("_ENV");
         if (envUpvalue == -1) {
+            // Fallback to upvalue 0 if _ENV not explicitly found
             envUpvalue = 0;
         }
         
@@ -892,8 +896,6 @@ void CodeGenerator::visitForInStmt(ForInStmtNode* node) {
     // Begin scope for iterator state and loop variables
     beginScope();
 
-    beginLoop();  // Start loop context for break statements
-
     // Evaluate iterator expression
     // We expect 3 values: iterator, state, control_var
     // If iterator expression is a call, we can ask for 3 values.
@@ -904,9 +906,18 @@ void CodeGenerator::visitForInStmt(ForInStmtNode* node) {
     expectedRetCount_ = 4; // 3 results (3+1=4)
     node->iterator()->accept(*this);
     expectedRetCount_ = oldRetCount; // Restore
-    
-    // Store iterator state in hidden locals
-    // They are already on stack in order [iter, state, control]
+
+    // If it wasn't a call that pushed 3 values, we might only have 1 or 2.
+    // However, currently our CodeGen doesn't automatically pad for non-calls.
+    // Let's check if we need to pad.
+    // (Actually, a better way is to always ensure 3 values are on stack)
+    // For now, let's assume it only pushed 1 if not a call.
+    if (!dynamic_cast<CallExprNode*>(node->iterator())) {
+        emitOpCode(OpCode::OP_NIL); // state
+        emitOpCode(OpCode::OP_NIL); // control
+    }
+
+    // Store iterator state in hidden locals    // They are already on stack in order [iter, state, control]
     addLocal("(for iterator)");
     addLocal("(for state)");
     addLocal("(for control)");
@@ -922,6 +933,8 @@ void CodeGenerator::visitForInStmt(ForInStmtNode* node) {
         addLocal(name);
     }
     
+    beginLoop();  // Start loop context for break statements
+
     size_t loopStart = currentChunk()->size();
 
     // Call iterator(state, control)
@@ -1271,16 +1284,57 @@ void CodeGenerator::visitFunctionDecl(FunctionDeclNode* node) {
     // Compile function and emit OP_CLOSURE
     compileFunction(node->name(), node->params(), node->body(), node->hasVarargs());
 
-    // Store in global variable
-    size_t nameIndex = currentChunk()->addIdentifier(node->name());
-    if (nameIndex > UINT8_MAX) {
-        throw CompileError("Too many identifiers in one chunk", currentLine_);
+    // Three-level resolution: local → upvalue → global
+    
+    // 1. Try to resolve as local variable
+    int slot = resolveLocal(node->name());
+    if (slot != -1) {
+        emitOpCode(OpCode::OP_SET_LOCAL);
+        emitByte(static_cast<uint8_t>(slot));
+        emitOpCode(OpCode::OP_POP);
+        return;
     }
-    emitOpCode(OpCode::OP_SET_GLOBAL);
-    emitByte(static_cast<uint8_t>(nameIndex));
 
-    // Pop the function value (SET_GLOBAL leaves it on stack)
-    emitOpCode(OpCode::OP_POP);
+    // 2. Try to resolve as upvalue
+    int upvalue = resolveUpvalue(node->name());
+    if (upvalue != -1) {
+        emitOpCode(OpCode::OP_SET_UPVALUE);
+        emitByte(static_cast<uint8_t>(upvalue));
+        emitOpCode(OpCode::OP_POP);
+        return;
+    }
+
+    // 3. Fall back to global variable (via _ENV)
+    size_t nameIndex = currentChunk()->addConstant(Value::string(internString(node->name())));
+    if (nameIndex > UINT8_MAX) {
+        throw CompileError("Too many constants in one chunk", currentLine_);
+    }
+
+    int envSlot = resolveLocal("_ENV");
+    if (envSlot != -1) {
+        // _ENV is a local variable
+        emitOpCode(OpCode::OP_GET_LOCAL);
+        emitByte(static_cast<uint8_t>(envSlot));
+        // Stack: [value, env]
+        emitOpCode(OpCode::OP_CONSTANT);
+        emitByte(static_cast<uint8_t>(nameIndex));
+        // Stack: [value, env, key]
+        emitOpCode(OpCode::OP_ROTATE);
+        emitByte(3);
+        // Stack: [env, key, value]
+        emitOpCode(OpCode::OP_SET_TABLE);
+        return;
+    }
+
+    int envUpvalue = resolveUpvalue("_ENV");
+    if (envUpvalue == -1) {
+        // This should not happen since _ENV is upvalue 0 in the top-level
+        envUpvalue = 0; 
+    }
+
+    emitOpCode(OpCode::OP_SET_TABUP);
+    emitByte(static_cast<uint8_t>(envUpvalue));
+    emitByte(static_cast<uint8_t>(nameIndex));
 }
 
 void CodeGenerator::visitFunctionExpr(FunctionExprNode* node) {
@@ -1296,9 +1350,12 @@ void CodeGenerator::compileFunction(const std::string& name, const std::vector<s
     // Save current compiler state and start new function compilation
     pushCompilerState();
 
-    // Ensure _ENV is the first upvalue (index 0)
-    // resolveUpvalue will find it in the parent and add it to current upvalues_
-    resolveUpvalue("_ENV");
+    // When compiling any chunk (top-level or via load/require), we ensure _ENV is upvalue 0.
+    // resolveUpvalue will find it in the parent or create it as a root upvalue.
+    int envIdx = resolveUpvalue("_ENV");
+    if (envIdx != 0) {
+        // This should not happen if _ENV is always the first thing we resolve
+    }
 
     // Begin scope for function body
     beginScope();

@@ -173,6 +173,56 @@ bool native_coroutine_yield(VM* vm, int argCount) {
     return true;
 }
 
+bool native_coroutine_wrap(VM* vm, int argCount) {
+    if (argCount != 1) {
+        vm->runtimeError("coroutine.wrap expects 1 argument");
+        return false;
+    }
+    
+    Value func = vm->pop();
+    if (!func.isClosure() && !func.isNativeFunction()) {
+        vm->runtimeError("coroutine.wrap expects a function");
+        return false;
+    }
+    
+    // Create the coroutine
+    vm->push(func);
+    if (!native_coroutine_create(vm, 1)) return false;
+    Value co = vm->pop();
+
+    // Create a closure that captures 'co' and calls resume
+    std::string wrapScript = 
+        "local co = ...\n"
+        "return function(...)\n"
+        "    local res = {coroutine.resume(co, ...)}\n"
+        "    if not res[1] then error(res[2]) end\n"
+        "    return table.unpack(res, 2)\n"
+        "end\n";
+        
+    FunctionObject* wrapperFunc = vm->compileSource(wrapScript, "coroutine.wrap");
+    if (!wrapperFunc) return false;
+
+    // Create closure for the wrapper
+    ClosureObject* wrapperClosure = vm->createClosure(wrapperFunc);
+    vm->setupRootUpvalues(wrapperClosure);
+    
+    // Call it with 'co' as argument to get the actual returned function
+    vm->push(Value::closure(wrapperClosure));
+    vm->push(co);
+    
+    // Use targetFrameCount to return from callValue after the wrapper is created
+    size_t baseFrames = vm->currentCoroutine()->frames.size();
+    if (!vm->callValue(1, 2)) return false;
+    
+    if (vm->currentCoroutine()->frames.size() > baseFrames) {
+        if (!vm->run(baseFrames)) return false;
+    }
+    
+    // The result (the actual function returned by wrapScript) is now on stack. 
+    vm->currentCoroutine()->lastResultCount = 1;
+    return true;
+}
+
 } // anonymous namespace
 
 void registerCoroutineLibrary(VM* vm, TableObject* coroutineTable) {
@@ -181,4 +231,5 @@ void registerCoroutineLibrary(VM* vm, TableObject* coroutineTable) {
     vm->addNativeToTable(coroutineTable, "status", native_coroutine_status);
     vm->addNativeToTable(coroutineTable, "running", native_coroutine_running);
     vm->addNativeToTable(coroutineTable, "yield", native_coroutine_yield);
+    vm->addNativeToTable(coroutineTable, "wrap", native_coroutine_wrap);
 }

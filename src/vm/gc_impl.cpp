@@ -12,6 +12,12 @@ void VM::addObject(GCObject* object) {
     object->setNext(gcObjects_);
     gcObjects_ = object;
     bytesAllocated_ += object->size();
+
+    // If we're in the MARK phase, new objects must be grayed 
+    // to ensure they are not swept at the end of the cycle.
+    if (gcState_ == GCState::MARK || gcState_ == GCState::ATOMIC) {
+        grayObject(object);
+    }
 }
 
 void VM::markValue(const Value& value) {

@@ -51,7 +51,6 @@ bool run(const std::string& source, VM& vm) {
         std::cerr << e.what() << std::endl;
         return false;
     } catch (const RuntimeError& e) {
-        std::cerr << e.what() << std::endl;
         return false;
     } catch (const std::exception& e) {
         std::cerr << "Error: " << e.what() << std::endl;
