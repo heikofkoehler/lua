@@ -17,7 +17,7 @@ struct LocalVarInfo {
 };
 
 class VM;
-typedef bool (*JITFunc)(VM* vm);
+typedef int64_t (*JITFunc)(VM* vm);
 
 class FunctionObject {
 public:

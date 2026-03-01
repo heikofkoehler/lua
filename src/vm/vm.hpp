@@ -29,6 +29,7 @@ class JITCompiler;
 using NativeFunction = bool (*)(VM* vm, int argCount);
 
 class VM {
+    friend class JITCompiler;
 public:
     VM();
     ~VM();

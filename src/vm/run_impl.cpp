@@ -12,7 +12,7 @@
 bool VM::run(size_t targetFrameCount) {
     // Main execution loop
     while (true) {
-        if (currentCoroutine_->frames.empty()) {
+        if (currentCoroutine_->frames.size() <= targetFrameCount) {
             return !hadError_;
         }
         
@@ -54,8 +54,13 @@ bool VM::run(size_t targetFrameCount) {
         if (currentFrame().closure && currentFrame().ip == 0) {
             JITFunc jitCode = currentFrame().closure->function()->getJITCode();
             if (jitCode) {
-                // TODO: Execute JIT code once templates are implemented
-                // For now, continue interpreting
+                int64_t res = jitCode(this);
+                if (res != -1) {
+                    // printf("DEBUG: JIT fallback at IP %lld for %s\n", res, currentFrame().closure->function()->name().c_str());
+                    currentFrame().ip = static_cast<size_t>(res);
+                    // JIT code already updated stack top in CoroutineObject
+                }
+                continue;
             }
         }
 #endif
@@ -576,6 +581,7 @@ bool VM::run(size_t targetFrameCount) {
                     FunctionObject* func = currentFrame().closure->function();
                     if (!func->getJITCode() && func->incrementHotness() >= 50) {
 #ifdef USE_JIT
+                        printf("DEBUG: Triggering JIT for %s\n", func->name().c_str());
                         jit()->compile(func);
 #endif
                     }
@@ -618,7 +624,7 @@ bool VM::run(size_t targetFrameCount) {
                 Value callee = peek(argCount);
                 if (callee.isClosure()) {
                     FunctionObject* func = callee.asClosureObj()->function();
-                    if (!func->getJITCode() && func->incrementHotness() >= 500) {
+                    if (!func->getJITCode() && func->incrementHotness() >= 10) {
 #ifdef USE_JIT
                         // printf("DEBUG: Function %s is HOT (call), compiling...\n", func->name().c_str());
                         jit()->compile(func);
@@ -648,7 +654,7 @@ bool VM::run(size_t targetFrameCount) {
                 Value callee = peek(actualArgCount);
                 if (callee.isClosure()) {
                     FunctionObject* func = callee.asClosureObj()->function();
-                    if (!func->getJITCode() && func->incrementHotness() >= 500) {
+                    if (!func->getJITCode() && func->incrementHotness() >= 10) {
 #ifdef USE_JIT
                         // printf("DEBUG: Function %s is HOT (call_multi), compiling...\n", func->name().c_str());
                         jit()->compile(func);
