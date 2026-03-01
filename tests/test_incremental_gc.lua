@@ -32,6 +32,7 @@ report("Memory after incremental steps")
 -- Force full collection
 print("Forcing full collection...")
 collectgarbage("collect")
+collectgarbage("collect") -- Run twice to collect objects that became unreachable during MARK phase
 report("Final memory")
 
 -- Verify write barriers
