@@ -1,12 +1,12 @@
 -- Debug test
 print("Test 1")
-local file = io_open("test.txt", "w")
-io_write(file, "ABC")
-io_close(file)
+local file = io.open("test.txt", "w")
+file:write("ABC")
+file:close()
 
 print("Test 2")
-local file2 = io_open("test.txt", "r")
-local content = io_read(file2)
-io_close(file2)
+local file2 = io.open("test.txt", "r")
+local content = file2:read()
+file2:close()
 
 print("Test 3")

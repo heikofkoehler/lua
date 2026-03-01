@@ -116,6 +116,71 @@ bool native_io_close(VM* vm, int argCount) {
     return true;
 }
 
+bool native_io_seek(VM* vm, int argCount) {
+    if (argCount < 1) {
+        vm->runtimeError("file:seek expects at least 1 argument");
+        return false;
+    }
+    
+    Value fileVal = vm->peek(argCount - 1);
+    if (!fileVal.isFile()) {
+        vm->runtimeError("file:seek expects a file object");
+        return false;
+    }
+    FileObject* file = fileVal.asFileObj();
+    
+    std::string whence = "cur";
+    int64_t offset = 0;
+    
+    if (argCount >= 2) {
+        Value whenceVal = vm->peek(argCount - 2);
+        if (whenceVal.isString()) whence = vm->getStringValue(whenceVal);
+    }
+    
+    if (argCount >= 3) {
+        Value offsetVal = vm->peek(argCount - 3);
+        if (offsetVal.isNumber()) offset = static_cast<int64_t>(offsetVal.asNumber());
+    }
+    
+    for(int i=0; i<argCount; i++) vm->pop();
+    
+    int64_t newPosition = 0;
+    if (file->seek(whence, offset, newPosition)) {
+        vm->push(Value::number(static_cast<double>(newPosition)));
+    } else {
+        vm->push(Value::nil());
+        vm->push(Value::runtimeString(vm->internString("seek failed")));
+    }
+    return true;
+}
+
+bool native_io_flush(VM* vm, int argCount) {
+    FileObject* file = nullptr;
+    if (argCount > 0) {
+        Value fileVal = vm->peek(argCount - 1);
+        if (fileVal.isFile()) {
+            file = fileVal.asFileObj();
+        }
+    }
+    
+    for(int i=0; i<argCount; i++) vm->pop();
+
+    if (file && file->flush()) {
+        vm->push(Value::boolean(true));
+    } else {
+        vm->push(Value::nil());
+        vm->push(Value::runtimeString(vm->internString("flush failed")));
+    }
+    return true;
+}
+
+bool native_io_setvbuf(VM* vm, int argCount) {
+    for(int i=0; i<argCount; i++) vm->pop();
+    // Dummy implementation for compatibility
+    vm->push(Value::boolean(true));
+    return true;
+}
+
 } // anonymous namespace
 
 void registerIOLibrary(VM* vm, TableObject* ioTable) {
@@ -123,7 +188,21 @@ void registerIOLibrary(VM* vm, TableObject* ioTable) {
     vm->addNativeToTable(ioTable, "write", native_io_write);
     vm->addNativeToTable(ioTable, "read", native_io_read);
     vm->addNativeToTable(ioTable, "close", native_io_close);
+    vm->addNativeToTable(ioTable, "flush", native_io_flush);
     
+    // Create FILE metatable to support methods like file:read()
+    TableObject* fileMeta = vm->createTable();
+    TableObject* fileMethods = vm->createTable();
+    vm->addNativeToTable(fileMethods, "read", native_io_read);
+    vm->addNativeToTable(fileMethods, "write", native_io_write);
+    vm->addNativeToTable(fileMethods, "close", native_io_close);
+    vm->addNativeToTable(fileMethods, "seek", native_io_seek);
+    vm->addNativeToTable(fileMethods, "flush", native_io_flush);
+    vm->addNativeToTable(fileMethods, "setvbuf", native_io_setvbuf);
+    
+    fileMeta->set("__index", Value::table(fileMethods));
+    vm->setTypeMetatable(Value::Type::FILE, Value::table(fileMeta));
+
     // Register as globals too for backward compatibility
     vm->setGlobal("io_open", ioTable->get("open"));
     vm->setGlobal("io_write", ioTable->get("write"));

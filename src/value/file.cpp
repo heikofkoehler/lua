@@ -75,3 +75,32 @@ void FileObject::close() {
         isOpen_ = false;
     }
 }
+
+bool FileObject::seek(const std::string& whence, int64_t offset, int64_t& newPosition) {
+    if (!isOpen()) return false;
+    
+    std::ios_base::seekdir dir;
+    if (whence == "set") dir = std::ios_base::beg;
+    else if (whence == "cur") dir = std::ios_base::cur;
+    else if (whence == "end") dir = std::ios_base::end;
+    else return false;
+
+    // Clear EOF flag before seeking
+    stream_->clear();
+
+    stream_->seekg(offset, dir);
+    stream_->seekp(offset, dir);
+    
+    if (stream_->fail()) return false;
+    
+    newPosition = stream_->tellg();
+    if (newPosition == -1) newPosition = stream_->tellp();
+    
+    return newPosition != -1;
+}
+
+bool FileObject::flush() {
+    if (!isOpen()) return false;
+    stream_->flush();
+    return stream_->good();
+}

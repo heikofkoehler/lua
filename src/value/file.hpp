@@ -45,6 +45,12 @@ public:
     // Close file
     void close();
 
+    // Seek in file
+    bool seek(const std::string& whence, int64_t offset, int64_t& newPosition);
+
+    // Flush file
+    bool flush();
+
     // Get filename for debugging
     const std::string& filename() const { return filename_; }
 

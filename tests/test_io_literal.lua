@@ -1,3 +1,3 @@
 -- Test with literal strings
-local file = io_open("test.txt", "w")
+local file = io.open("test.txt", "w")
 print(file)

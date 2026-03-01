@@ -2,19 +2,23 @@
 
 -- Write to file
 print("Writing to output.txt...")
-local outfile = io_open("output.txt", "w")
-io_write(outfile, "Hello from Lua!")
-io_write(outfile, " ")
-io_write(outfile, "This is line 2")
-io_close(outfile)
+local outfile = io.open("output.txt", "w")
+outfile:write("Hello from Lua!")
+outfile:write(" ")
+outfile:write("This is line 2")
+outfile:flush()
+outfile:close()
 print("Done writing")
 
 -- Read from file
 print("Reading from output.txt...")
-local infile = io_open("output.txt", "r")
-local data = io_read(infile)
-io_close(infile)
+local infile = io.open("output.txt", "r")
+local data = infile:read()
+infile:seek("set", 0)
+local data2 = infile:read()
+infile:close()
 
 -- Print what we read
 print("File contents:")
 print(data)
+assert(data == data2)
