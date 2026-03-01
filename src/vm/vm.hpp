@@ -25,6 +25,7 @@
 // Returns true on success, false on error
 // Pops argCount arguments from stack, pushes results onto stack
 class VM;
+class JITCompiler;
 using NativeFunction = bool (*)(VM* vm, int argCount);
 
 class VM {
@@ -118,6 +119,9 @@ public:
     // Access to current coroutine
     CoroutineObject* currentCoroutine() { return currentCoroutine_; }
     CallFrame* getFrame(int level);
+
+    // JIT related
+    JITCompiler* jit() { return jit_.get(); }
 
     // Registry for internal use (stable storage)
     void setRegistry(const std::string& key, const Value& value) { registry_[key] = value; }
@@ -223,6 +227,9 @@ private:
     bool isHandlingError_;        // TRUE if we're currently processing an error
     std::string lastErrorMessage_; // Last runtime error message
     bool stdlibInitialized_;      // Whether standard library has been initialized
+
+    // JIT related
+    std::unique_ptr<JITCompiler> jit_;
 
     // Garbage collection
     GCState gcState_;             // Current incremental GC state

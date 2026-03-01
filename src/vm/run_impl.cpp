@@ -1,4 +1,5 @@
 #include "vm/vm.hpp"
+#include "vm/jit.hpp"
 #include "value/string.hpp"
 #include "value/table.hpp"
 #include "value/closure.hpp"
@@ -48,6 +49,16 @@ bool VM::run(size_t targetFrameCount) {
         if (traceExecution_) {
             traceExecution();
         }
+
+#ifdef USE_JIT
+        if (currentFrame().closure && currentFrame().ip == 0) {
+            JITFunc jitCode = currentFrame().closure->function()->getJITCode();
+            if (jitCode) {
+                // TODO: Execute JIT code once templates are implemented
+                // For now, continue interpreting
+            }
+        }
+#endif
         
         uint8_t instruction = readByte();
         OpCode op = static_cast<OpCode>(instruction);
@@ -559,6 +570,16 @@ bool VM::run(size_t targetFrameCount) {
             case OpCode::OP_LOOP: {
                 uint16_t offset = readByte() | (readByte() << 8);
                 currentFrame().ip -= offset;
+
+                // JIT Hotness tracking
+                if (currentFrame().closure) {
+                    FunctionObject* func = currentFrame().closure->function();
+                    if (!func->getJITCode() && func->incrementHotness() >= 50) {
+#ifdef USE_JIT
+                        jit()->compile(func);
+#endif
+                    }
+                }
                 break;
             }
 
@@ -592,6 +613,19 @@ bool VM::run(size_t targetFrameCount) {
             case OpCode::OP_CALL: {
                 uint8_t argCount = readByte();
                 uint8_t retCount = readByte();  // Number of return values to keep (0 = all)
+                
+                // JIT Hotness tracking
+                Value callee = peek(argCount);
+                if (callee.isClosure()) {
+                    FunctionObject* func = callee.asClosureObj()->function();
+                    if (!func->getJITCode() && func->incrementHotness() >= 500) {
+#ifdef USE_JIT
+                        // printf("DEBUG: Function %s is HOT (call), compiling...\n", func->name().c_str());
+                        jit()->compile(func);
+#endif
+                    }
+                }
+
                 size_t prevFrames = currentCoroutine_->frames.size();
                 if (!callValue(argCount, retCount)) {
                     return false;
@@ -609,6 +643,19 @@ bool VM::run(size_t targetFrameCount) {
                 uint8_t retCount = readByte();
                 // actual argCount = fixedArgs + lastResultCount
                 int actualArgCount = static_cast<int>(fixedArgCount) + static_cast<int>(currentCoroutine_->lastResultCount);
+
+                // JIT Hotness tracking
+                Value callee = peek(actualArgCount);
+                if (callee.isClosure()) {
+                    FunctionObject* func = callee.asClosureObj()->function();
+                    if (!func->getJITCode() && func->incrementHotness() >= 500) {
+#ifdef USE_JIT
+                        // printf("DEBUG: Function %s is HOT (call_multi), compiling...\n", func->name().c_str());
+                        jit()->compile(func);
+#endif
+                    }
+                }
+
                 size_t prevFrames = currentCoroutine_->frames.size();
                 if (!callValue(actualArgCount, retCount)) {
                     return false;

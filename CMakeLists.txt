@@ -6,18 +6,23 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
-# Enable warnings
-if(MSVC)
-    add_compile_options(/W4 /WX)
-else()
-    add_compile_options(-Wall -Wextra -Wpedantic -Werror)
-endif()
-
 # Debug flags
 option(DEBUG "Enable general debug output" OFF)
 option(DEBUG_LOG_GC "Enable garbage collector logging" OFF)
 option(DEBUG_TRACE_EXECUTION "Enable VM execution tracing" OFF)
 option(DEBUG_PRINT_CODE "Enable bytecode disassembly" OFF)
+option(USE_JIT "Enable JIT compilation" ON)
+
+if(USE_JIT)
+    add_compile_definitions(USE_JIT)
+    include(FetchContent)
+    FetchContent_Declare(
+        asmjit
+        GIT_REPOSITORY https://github.com/asmjit/asmjit.git
+        GIT_TAG master
+    )
+    FetchContent_MakeAvailable(asmjit)
+endif()
 
 if(DEBUG)
     add_compile_definitions(DEBUG)
@@ -52,6 +57,7 @@ set(SOURCES
     src/compiler/codegen.cpp
     src/vm/vm.cpp
     src/vm/run_impl.cpp
+    src/vm/jit.cpp
     src/vm/gc_impl.cpp
     src/vm/stdlib_base.cpp
     src/vm/stdlib_string.cpp
@@ -68,6 +74,17 @@ set(SOURCES
 # Create executable
 add_executable(lua ${SOURCES})
 
+# Target-specific compile options
+if(MSVC)
+    target_compile_options(lua PRIVATE /W4 /WX)
+else()
+    target_compile_options(lua PRIVATE -Wall -Wextra -Wpedantic -Werror -Wno-gnu-anonymous-struct -Wno-nested-anon-types)
+endif()
+
+if(USE_JIT)
+    target_link_libraries(lua PRIVATE asmjit::asmjit)
+endif()
+
 # Include directories
 target_include_directories(lua PRIVATE ${CMAKE_SOURCE_DIR}/src)
 
@@ -79,6 +96,12 @@ set_target_properties(lua PROPERTIES
 # Dummy shared library for loadlib testing
 add_library(dummy_module SHARED tests/dummy_module.cpp)
 target_include_directories(dummy_module PRIVATE ${CMAKE_SOURCE_DIR}/src)
+
+if(MSVC)
+    target_compile_options(dummy_module PRIVATE /W4 /WX)
+else()
+    target_compile_options(dummy_module PRIVATE -Wall -Wextra -Wpedantic -Werror -Wno-gnu-anonymous-struct -Wno-nested-anon-types)
+endif()
 
 if(APPLE)
     set_target_properties(dummy_module PROPERTIES LINK_FLAGS "-undefined dynamic_lookup")

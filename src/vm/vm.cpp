@@ -1,4 +1,5 @@
 #include "vm/vm.hpp"
+#include "vm/jit.hpp"
 #include "compiler/lexer.hpp"
 #include "compiler/parser.hpp"
 #include "compiler/codegen.hpp"
@@ -27,6 +28,7 @@ VM::VM() :
            memoryLimit_(100 * 1024 * 1024), // Default 100MB limit
            gcEnabled_(true) {
     currentVM = this;
+    jit_ = std::make_unique<JITCompiler>(this);
     for (int i = 0; i < Value::NUM_TYPES; i++) {
         typeMetatables_[i] = Value::nil();
     }
