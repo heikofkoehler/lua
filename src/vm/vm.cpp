@@ -1120,7 +1120,13 @@ bool VM::resumeCoroutine(CoroutineObject* co) {
     co->status = CoroutineObject::Status::RUNNING;
     co->caller = oldCo;
 
-    bool result = run(oldCo->frames.size());
+    // Run until the coroutine returns or yields.
+    // We should run until the frame count returns to what it was BEFORE we resumed.
+    // If it was suspended, it had N frames. We want it to run until it finishes those N frames (or yields).
+    // So target should be the number of frames BEFORE the current top frame was pushed.
+    // But since it was suspended at some IP in the top frame, we want to run until THAT frame is popped.
+    size_t targetFrames = co->frames.empty() ? 0 : co->frames.size() - 1;
+    bool result = run(targetFrames);
 
     currentCoroutine_ = oldCo;
     return result;

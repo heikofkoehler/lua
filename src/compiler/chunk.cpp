@@ -195,6 +195,10 @@ size_t Chunk::disassembleInstruction(size_t offset) const {
             return callInstruction("OP_CALL", offset);
         case OpCode::OP_CALL_MULTI:
             return callInstruction("OP_CALL_MULTI", offset);
+        case OpCode::OP_TAILCALL:
+            return byteInstruction("OP_TAILCALL", offset);
+        case OpCode::OP_TAILCALL_MULTI:
+            return byteInstruction("OP_TAILCALL_MULTI", offset);
         case OpCode::OP_RETURN_VALUE:
             return byteInstruction("OP_RETURN_VALUE", offset);
 
