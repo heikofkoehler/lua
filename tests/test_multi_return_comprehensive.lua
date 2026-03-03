@@ -51,5 +51,18 @@ local r2 = conditional(false)
 print(r2)  -- Should print 99
 
 -- TODO: Multiple assignment (local a, b = getTwoNumbers())
--- TODO: Return expansion in function calls (print(getTwoNumbers()) should print both)
--- TODO: Return values in last position of function call
+local a1, b1 = getTwoNumbers()
+assert(a1 == 10 and b1 == 20, "multiple assignment should capture both return values")
+
+-- Return expansion in function calls
+function identity(...) return ... end
+local x1, x2 = identity(getTwoNumbers())
+assert(x1 == 10 and x2 == 20, "return expansion should pass all values through")
+
+-- Return values in last position of function call
+local function wrap(a,b) return a,b end
+local w1, w2 = wrap(1, getTwoNumbers())
+assert(w1 == 1 and w2 == 10, "only first return should be used when not last argument")
+
+-- (original TODO comments removed)
+

@@ -17,14 +17,81 @@ bool native_os_clock(VM* vm, int argCount) {
     return true;
 }
 
+// Helper to convert a Lua value to an integer, verifying it's a whole number.
+// On error the function will push a suitable runtime error message and return false.
+static bool getIntField(VM* vm, TableObject* tbl, const char* name, bool required, long long& out) {
+    Value key = Value::runtimeString(vm->internString(name));
+    Value v = tbl->get(key);
+    if (v.isNil()) {
+        if (required) {
+            vm->runtimeError("missing");
+            return false;
+        }
+        out = 0;
+        return true;
+    }
+    if (!v.isNumber()) {
+        vm->runtimeError("not an integer");
+        return false;
+    }
+    double d = v.asNumber();
+    if (std::floor(d) != d) {
+        vm->runtimeError("not an integer");
+        return false;
+    }
+    out = static_cast<long long>(d);
+    return true;
+}
+
 bool native_os_time(VM* vm, int argCount) {
     if (argCount == 0) {
         vm->push(Value::number(static_cast<double>(std::time(nullptr))));
         return true;
     }
-    // TODO: Support table argument for specific time
+
+    // Table argument case: build a tm struct from the table fields.
+    Value arg = vm->peek(argCount - 1);
+    if (!arg.isTable()) {
+        vm->runtimeError("bad argument #1 to 'time' (table expected)");
+        return false;
+    }
+    TableObject* tbl = arg.asTableObj();
+
+    long long year, month, day, hour, minv, sec;
+    if (!getIntField(vm, tbl, "year", true, year) ||
+        !getIntField(vm, tbl, "month", true, month) ||
+        !getIntField(vm, tbl, "day", true, day) ||
+        !getIntField(vm, tbl, "hour", false, hour) ||
+        !getIntField(vm, tbl, "min", false, minv) ||
+        !getIntField(vm, tbl, "sec", false, sec)) {
+        return false; // error message already pushed
+    }
+
+    // Convert to struct tm. tm_year is years since 1900 and is stored in a C int.
+    long long tm_year = year - 1900;
+    if (tm_year < std::numeric_limits<int>::min() || tm_year > std::numeric_limits<int>::max()) {
+        vm->runtimeError("field 'year' is out-of-bound");
+        return false;
+    }
+
+    struct tm tms = {};
+    tms.tm_year = static_cast<int>(tm_year);
+    // tm_mon is 0-based
+    tms.tm_mon = static_cast<int>(month - 1);
+    tms.tm_mday = static_cast<int>(day);
+    tms.tm_hour = static_cast<int>(hour);
+    tms.tm_min = static_cast<int>(minv);
+    tms.tm_sec = static_cast<int>(sec);
+    tms.tm_isdst = -1;
+
+    time_t tt = mktime(&tms);
+    if (tt == (time_t)-1) {
+        vm->runtimeError("cannot be represented");
+        return false;
+    }
+
     for(int i=0; i<argCount; i++) vm->pop();
-    vm->push(Value::number(static_cast<double>(std::time(nullptr))));
+    vm->push(Value::number(static_cast<double>(tt)));
     return true;
 }
 

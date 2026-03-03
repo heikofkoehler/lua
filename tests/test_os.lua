@@ -7,6 +7,18 @@ local t2 = t1 + 5
 local diff = os.difftime(t2, t1)
 assert(diff == 5, "os.difftime should return the difference in seconds")
 
+-- table argument support
+local tnow = os.time{year=1970, month=1, day=1}
+assert(type(tnow) == "number", "os.time(table) should return a number")
+
+-- verify basic error behavior from Lua 5.5 suite
+local ok, err = pcall(function() os.time{year=1000, month=1, day=1, hour='x'} end)
+assert(not ok and string.find(err, "not an integer"))
+
+ok, err = pcall(function() os.time{hour=12} end)
+assert(not ok and string.find(err, "missing"))
+
+
 -- os.clock
 local c = os.clock()
 assert(type(c) == "number", "os.clock() should return a number")
