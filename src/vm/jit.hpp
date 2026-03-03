@@ -26,10 +26,8 @@ private:
 
 class JITCompiler {
 public:
-    JITCompiler(VM* vm) : vm_(vm) {}
+    JITCompiler(VM* /*vm*/) {}
     JITFunc compile(FunctionObject*) { return nullptr; }
-private:
-    VM* vm_;
 };
 
 #endif

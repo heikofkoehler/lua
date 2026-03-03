@@ -36,6 +36,8 @@ public:
     void visitLocalDeclStmt(LocalDeclStmtNode* node) override;
     void visitMultipleLocalDeclStmt(MultipleLocalDeclStmtNode* node) override;
     void visitMultipleAssignmentStmt(MultipleAssignmentStmtNode* node) override;
+    void visitGlobalDeclStmt(GlobalDeclStmtNode* node) override;
+    void visitMultipleGlobalDeclStmt(MultipleGlobalDeclStmtNode* node) override;
     void visitIfStmt(IfStmtNode* node) override;
     void visitWhileStmt(WhileStmtNode* node) override;
     void visitRepeatStmt(RepeatStmtNode* node) override;
@@ -43,6 +45,7 @@ public:
     void visitForInStmt(ForInStmtNode* node) override;
     void visitFunctionDecl(FunctionDeclNode* node) override;
     void visitFunctionExpr(FunctionExprNode* node) override;
+    void visitGroupExpr(GroupExprNode* node) override;
     void visitReturn(ReturnStmtNode* node) override;
     void visitBreak(BreakStmtNode* node) override;
     void visitGoto(GotoStmtNode* node) override;
@@ -57,6 +60,8 @@ private:
         int depth;
         int slot;
         bool isCaptured;  // True if captured by a closure
+        bool isConstant;
+        bool isClose;
         size_t startPC;   // Instruction offset where local enters scope
     };
 
@@ -64,6 +69,7 @@ private:
     struct Upvalue {
         uint8_t index;      // Parent slot/upvalue index
         bool isLocal;       // true = local, false = upvalue
+        bool isConstant;    // true if captured variable is constant
         std::string name;   // For debugging
     };
 
@@ -124,6 +130,7 @@ private:
     // Bytecode emission
     void emitByte(uint8_t byte);
     void emitBytes(uint8_t byte1, uint8_t byte2);
+    void emitBytes(uint8_t byte1, uint8_t byte2, uint8_t byte3, uint8_t byte4);
     void emitOpCode(OpCode op);
     void emitConstant(const Value& value);
     void emitReturn();
@@ -134,11 +141,12 @@ private:
     void emitLoop(size_t loopStart);
 
     // Variable handling
-    void addLocal(const std::string& name);
+    void addLocal(const std::string& name, bool isConstant = false, bool isClose = false);
     int resolveLocal(const std::string& name);
+    void checkConstantAssign(const std::string& name, int line);
     int resolveUpvalue(const std::string& name);
     int resolveUpvalueHelper(CompilerState* compiler, const std::string& name);
-    int addUpvalue(const std::string& name, uint8_t index, bool isLocal);
+    int addUpvalue(const std::string& name, uint8_t index, bool isLocal, bool isConstant);
     void beginScope();
     void endScope();
 

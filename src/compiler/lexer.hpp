@@ -42,13 +42,14 @@ private:
 
     // Token creation
     Token makeToken(TokenType type) const;
-    Token errorToken(const std::string& message) const;
+    Token errorToken(const std::string& message, const std::string& near = "") const;
 
     // Skip whitespace and comments
     void skipWhitespace();
 
     // Lexeme scanners
     Token string();
+    Token longString();
     Token number();
     Token identifier();
 

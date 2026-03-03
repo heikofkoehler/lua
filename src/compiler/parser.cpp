@@ -10,15 +10,9 @@ std::unique_ptr<ProgramNode> Parser::parse() {
     auto program = std::make_unique<ProgramNode>();
 
     while (!isAtEnd()) {
-        try {
-            auto stmt = statement();
-            if (stmt) {
-                program->addStatement(std::move(stmt));
-            }
-        } catch (const CompileError& e) {
-            hadError_ = true;
-            Log::error(e.what());
-            synchronize();
+        auto stmt = statement();
+        if (stmt) {
+            program->addStatement(std::move(stmt));
         }
     }
 
@@ -28,7 +22,6 @@ std::unique_ptr<ProgramNode> Parser::parse() {
 
     return program;
 }
-
 void Parser::advance() {
     previous_ = current_;
 
@@ -83,10 +76,22 @@ void Parser::errorAt(const Token& token, const std::string& message) {
     hadError_ = true;
 
     std::string errorMsg = message;
-    if (token.type == TokenType::EOF_TOKEN) {
-        errorMsg = "at end: " + message;
-    } else if (token.type != TokenType::ERROR) {
-        errorMsg = "at '" + token.lexeme + "': " + message;
+    std::string near = token.near;
+    
+    if (near.empty()) {
+        if (token.type == TokenType::EOF_TOKEN) {
+            near = "<eof>";
+        } else if (token.type != TokenType::ERROR) {
+            near = "'" + token.lexeme + "'";
+        }
+    } else {
+        if (near != "<eof>") {
+            near = "'" + near + "'";
+        }
+    }
+
+    if (!near.empty()) {
+        errorMsg += " near " + near;
     }
 
     throw CompileError(errorMsg, token.line);
@@ -113,13 +118,18 @@ void Parser::synchronize() {
         advance();
     }
 }
-
 std::unique_ptr<StmtNode> Parser::statement() {
+    if (match(TokenType::SEMICOLON)) {
+        return nullptr;
+    }
     if (match(TokenType::LOCAL)) {
         if (match(TokenType::FUNCTION)) {
             return localFunctionDeclaration();
         }
         return localDeclaration();
+    }
+    if (match(TokenType::GLOBAL)) {
+        return globalDeclaration();
     }
     if (match(TokenType::IF)) {
         return ifStatement();
@@ -152,7 +162,9 @@ std::unique_ptr<StmtNode> Parser::statement() {
         int line = previous_.line;
         std::vector<std::unique_ptr<StmtNode>> body;
         while (!check(TokenType::END) && !isAtEnd()) {
-            body.push_back(statement());
+            if (auto stmt = statement()) {
+                body.push_back(std::move(stmt));
+            }
         }
         consume(TokenType::END, "Expected 'end' after 'do' block");
         return std::make_unique<BlockStmtNode>(std::move(body), line);
@@ -180,33 +192,45 @@ std::unique_ptr<StmtNode> Parser::assignmentOrExpression() {
     // Parse first expression
     auto firstExpr = expression();
 
-    // Check for multiple assignment: a, b, c = ...
+    // Check for assignment (list of variables followed by =)
     if (match(TokenType::COMMA)) {
-        // Collect all left-hand side variables
-        std::vector<std::string> names;
+        std::vector<std::unique_ptr<ExprNode>> targets;
+        targets.push_back(std::move(firstExpr));
 
-        // First expression must be a variable
-        if (auto* varExpr = dynamic_cast<VariableExprNode*>(firstExpr.get())) {
-            names.push_back(varExpr->name());
-        } else {
-            error("Multiple assignment requires variable names on left side");
-            return std::make_unique<ExprStmtNode>(std::move(firstExpr), line);
-        }
-
-        // Parse remaining variables: b, c
         do {
-            if (!check(TokenType::IDENTIFIER)) {
-                errorAtCurrent("Expected variable name in assignment list");
-                return nullptr;
-            }
-            names.push_back(current_.lexeme);
-            advance();
+            targets.push_back(expression());
         } while (match(TokenType::COMMA));
 
-        // Expect '='
-        if (!match(TokenType::EQUAL)) {
+        if (match(TokenType::EQUAL)) {
+            // Verify all targets are valid
+            for (const auto& target : targets) {
+                if (dynamic_cast<VariableExprNode*>(target.get()) == nullptr &&
+                    dynamic_cast<IndexExprNode*>(target.get()) == nullptr) {
+                    error("Invalid assignment target");
+                }
+            }
+
+            // Parse value list: 1, 2, 3
+            std::vector<std::unique_ptr<ExprNode>> values;
+            do {
+                values.push_back(expression());
+            } while (match(TokenType::COMMA));
+
+            return std::make_unique<MultipleAssignmentStmtNode>(
+                std::move(targets), std::move(values), line
+            );
+        } else {
             error("Expected '=' after variable list");
             return nullptr;
+        }
+    } else if (match(TokenType::EQUAL)) {
+        std::vector<std::unique_ptr<ExprNode>> targets;
+        targets.push_back(std::move(firstExpr));
+        
+        // Verify target is valid
+        if (dynamic_cast<VariableExprNode*>(targets[0].get()) == nullptr &&
+            dynamic_cast<IndexExprNode*>(targets[0].get()) == nullptr) {
+            error("Invalid assignment target");
         }
 
         // Parse value list: 1, 2, 3
@@ -216,45 +240,46 @@ std::unique_ptr<StmtNode> Parser::assignmentOrExpression() {
         } while (match(TokenType::COMMA));
 
         return std::make_unique<MultipleAssignmentStmtNode>(
-            std::move(names), std::move(values), line
+            std::move(targets), std::move(values), line
         );
-    }
-
-    // Single assignment (existing code)
-    if (match(TokenType::EQUAL)) {
-        if (auto* varExpr = dynamic_cast<VariableExprNode*>(firstExpr.get())) {
-            auto value = expression();
-            return std::make_unique<AssignmentStmtNode>(varExpr->name(), std::move(value), line);
-        } else if (auto* indexExpr = dynamic_cast<IndexExprNode*>(firstExpr.get())) {
-            auto value = expression();
-            return std::make_unique<IndexAssignmentStmtNode>(
-                indexExpr->releaseTable(),
-                indexExpr->releaseKey(),
-                std::move(value),
-                line
-            );
-        } else {
-            error("Invalid assignment target");
-        }
     }
 
     // Expression statement
     return std::make_unique<ExprStmtNode>(std::move(firstExpr), line);
 }
 
+Parser::Attribute Parser::attribute() {
+    Attribute attr;
+    if (match(TokenType::LESS)) {
+        consume(TokenType::IDENTIFIER, "Expected attribute name");
+        if (previous_.lexeme == "const") {
+            attr.isConstant = true;
+        } else if (previous_.lexeme == "close") {
+            attr.isClose = true;
+            attr.isConstant = true; // <close> variables are also constant
+        } else {
+            errorAt(previous_, "unknown attribute '" + previous_.lexeme + "'");
+        }
+        consume(TokenType::GREATER, "Expected '>' after attribute");
+    }
+    return attr;
+}
+
 std::unique_ptr<StmtNode> Parser::localDeclaration() {
     int line = previous_.line;
 
-    // Parse variable list: local a, b, c
-    std::vector<std::string> names;
+    // Parse variable list: local a <attr>, b <attr>, c
+    std::vector<MultipleLocalDeclStmtNode::VarInfo> vars;
 
     do {
         if (!check(TokenType::IDENTIFIER)) {
             errorAtCurrent("Expected variable name");
             return nullptr;
         }
-        names.push_back(current_.lexeme);
+        std::string name = current_.lexeme;
         advance();
+        Attribute attr = attribute();
+        vars.push_back({name, attr.isConstant, attr.isClose});
     } while (match(TokenType::COMMA));
 
     // Parse initializer list (if present)
@@ -265,18 +290,65 @@ std::unique_ptr<StmtNode> Parser::localDeclaration() {
         } while (match(TokenType::COMMA));
     }
 
-    // Single variable: use existing node for backward compatibility
-    if (names.size() == 1) {
+    // Single variable
+    if (vars.size() == 1) {
         auto init = initializers.empty()
             ? std::make_unique<LiteralNode>(Value::nil(), line)
             : std::move(initializers[0]);
-        return std::make_unique<LocalDeclStmtNode>(names[0], std::move(init), line);
+        return std::make_unique<LocalDeclStmtNode>(
+            vars[0].name, std::move(init), line, false, vars[0].isConstant, vars[0].isClose
+        );
     }
 
-    // Multiple variables: use new node
+    // Multiple variables
     return std::make_unique<MultipleLocalDeclStmtNode>(
-        std::move(names), std::move(initializers), line
+        std::move(vars), std::move(initializers), line
     );
+}
+
+std::unique_ptr<StmtNode> Parser::globalDeclaration() {
+    int line = previous_.line;
+
+    // Check for global <const> *
+    if (match(TokenType::LESS)) {
+        consume(TokenType::IDENTIFIER, "Expected attribute name");
+        bool isConstant = (previous_.lexeme == "const");
+        consume(TokenType::GREATER, "Expected '>' after attribute");
+        
+        if (match(TokenType::STAR)) {
+            // global <attr> *
+            return std::make_unique<GlobalDeclStmtNode>("*", isConstant, line);
+        } else {
+            // This was probably meant for a variable but we don't allow it yet 
+            // without a name before the attribute in this simple implementation
+            error("Expected '*' or variable name before attribute");
+            return nullptr;
+        }
+    }
+
+    // Parse variable list: global a <attr>, b <attr>, c
+    std::vector<MultipleGlobalDeclStmtNode::VarInfo> vars;
+
+    do {
+        if (match(TokenType::STAR)) {
+            vars.push_back({"*", false});
+        } else {
+            if (!check(TokenType::IDENTIFIER)) {
+                errorAtCurrent("Expected variable name");
+                return nullptr;
+            }
+            std::string name = current_.lexeme;
+            advance();
+            Attribute attr = attribute();
+            vars.push_back({name, attr.isConstant});
+        }
+    } while (match(TokenType::COMMA));
+
+    if (vars.size() == 1) {
+        return std::make_unique<GlobalDeclStmtNode>(vars[0].name, vars[0].isConstant, line);
+    }
+
+    return std::make_unique<MultipleGlobalDeclStmtNode>(std::move(vars), line);
 }
 
 std::unique_ptr<StmtNode> Parser::localFunctionDeclaration() {
@@ -306,7 +378,7 @@ std::unique_ptr<StmtNode> Parser::ifStatement() {
     std::vector<std::unique_ptr<StmtNode>> thenBranch;
     while (!check(TokenType::ELSEIF) && !check(TokenType::ELSE) &&
            !check(TokenType::END) && !isAtEnd()) {
-        thenBranch.push_back(statement());
+        if (auto s = statement()) thenBranch.push_back(std::move(s));
     }
 
     auto ifNode = std::make_unique<IfStmtNode>(std::move(condition), std::move(thenBranch), line);
@@ -319,7 +391,7 @@ std::unique_ptr<StmtNode> Parser::ifStatement() {
         std::vector<std::unique_ptr<StmtNode>> elseIfBody;
         while (!check(TokenType::ELSEIF) && !check(TokenType::ELSE) &&
                !check(TokenType::END) && !isAtEnd()) {
-            elseIfBody.push_back(statement());
+            if (auto s = statement()) elseIfBody.push_back(std::move(s));
         }
 
         ifNode->addElseIfBranch(std::move(elseIfCondition), std::move(elseIfBody));
@@ -329,7 +401,7 @@ std::unique_ptr<StmtNode> Parser::ifStatement() {
     if (match(TokenType::ELSE)) {
         std::vector<std::unique_ptr<StmtNode>> elseBranch;
         while (!check(TokenType::END) && !isAtEnd()) {
-            elseBranch.push_back(statement());
+            if (auto s = statement()) elseBranch.push_back(std::move(s));
         }
         ifNode->setElseBranch(std::move(elseBranch));
     }
@@ -348,10 +420,11 @@ std::unique_ptr<StmtNode> Parser::whileStatement() {
     // Parse body
     std::vector<std::unique_ptr<StmtNode>> body;
     while (!check(TokenType::END) && !isAtEnd()) {
-        body.push_back(statement());
+        if (auto s = statement()) body.push_back(std::move(s));
     }
 
     consume(TokenType::END, "Expected 'end' after while body");
+
     return std::make_unique<WhileStmtNode>(std::move(condition), std::move(body), line);
 }
 
@@ -361,7 +434,7 @@ std::unique_ptr<StmtNode> Parser::repeatStatement() {
     // Parse body
     std::vector<std::unique_ptr<StmtNode>> body;
     while (!check(TokenType::UNTIL) && !isAtEnd()) {
-        body.push_back(statement());
+        if (auto s = statement()) body.push_back(std::move(s));
     }
 
     consume(TokenType::UNTIL, "Expected 'until' after repeat body");
@@ -408,7 +481,7 @@ std::unique_ptr<StmtNode> Parser::forStatement() {
         // Parse body
         std::vector<std::unique_ptr<StmtNode>> body;
         while (!check(TokenType::END) && !isAtEnd()) {
-            body.push_back(statement());
+            if (auto s = statement()) body.push_back(std::move(s));
         }
 
         consume(TokenType::END, "Expected 'end' after for body");
@@ -443,7 +516,7 @@ std::unique_ptr<StmtNode> Parser::forStatement() {
         // Parse body
         std::vector<std::unique_ptr<StmtNode>> body;
         while (!check(TokenType::END) && !isAtEnd()) {
-            body.push_back(statement());
+            if (auto s = statement()) body.push_back(std::move(s));
         }
 
         consume(TokenType::END, "Expected 'end' after for body");
@@ -497,7 +570,7 @@ Parser::FunctionBody Parser::parseFunctionBody(const std::string& context) {
 
     // Parse body
     while (!check(TokenType::END) && !isAtEnd()) {
-        fb.body.push_back(statement());
+        if (auto s = statement()) fb.body.push_back(std::move(s));
     }
 
     consume(TokenType::END, "Expected 'end' after function body");
@@ -512,9 +585,10 @@ std::unique_ptr<StmtNode> Parser::returnStatement() {
     std::vector<std::unique_ptr<ExprNode>> values;
 
     // Check if there's an expression to return
-    // Return with no values if we see: end, else, elseif, until, or end of file
+    // Return with no values if we see: end, else, elseif, until, semicolon, or end of file
     if (!check(TokenType::END) && !check(TokenType::ELSE) &&
-        !check(TokenType::ELSEIF) && !check(TokenType::UNTIL) && !isAtEnd()) {
+        !check(TokenType::ELSEIF) && !check(TokenType::UNTIL) && 
+        !check(TokenType::SEMICOLON) && !isAtEnd()) {
         // Parse first expression
         values.push_back(expression());
 
@@ -683,26 +757,12 @@ std::unique_ptr<ExprNode> Parser::term() {
 }
 
 std::unique_ptr<ExprNode> Parser::factor() {
-    auto expr = power();
+    auto expr = unary();
 
     while (match(TokenType::STAR) || match(TokenType::SLASH) || match(TokenType::SLASH_SLASH) || match(TokenType::PERCENT)) {
         TokenType op = previous_.type;
         int line = previous_.line;
-        auto right = power();
-        expr = std::make_unique<BinaryNode>(std::move(expr), op, std::move(right), line);
-    }
-
-    return expr;
-}
-
-std::unique_ptr<ExprNode> Parser::power() {
-    auto expr = unary();
-
-    // Right-associative
-    if (match(TokenType::CARET)) {
-        TokenType op = previous_.type;
-        int line = previous_.line;
-        auto right = power();  // Recursive call for right-associativity
+        auto right = unary();
         expr = std::make_unique<BinaryNode>(std::move(expr), op, std::move(right), line);
     }
 
@@ -717,7 +777,21 @@ std::unique_ptr<ExprNode> Parser::unary() {
         return std::make_unique<UnaryNode>(op, std::move(operand), line);
     }
 
-    return postfix();
+    return power();
+}
+
+std::unique_ptr<ExprNode> Parser::power() {
+    auto expr = postfix();
+
+    // Right-associative
+    if (match(TokenType::CARET)) {
+        TokenType op = previous_.type;
+        int line = previous_.line;
+        auto right = unary();  // Allows a^-b and right-associativity via unary->power
+        expr = std::make_unique<BinaryNode>(std::move(expr), op, std::move(right), line);
+    }
+
+    return expr;
 }
 
 std::unique_ptr<ExprNode> Parser::postfix() {
@@ -727,7 +801,7 @@ std::unique_ptr<ExprNode> Parser::postfix() {
     while (true) {
         int line = current_.line;
 
-        // Function call: expr(args)
+        // Function call: expr(args), expr{table}, expr"string"
         if (match(TokenType::LEFT_PAREN)) {
             std::vector<std::unique_ptr<ExprNode>> args;
 
@@ -738,6 +812,16 @@ std::unique_ptr<ExprNode> Parser::postfix() {
             }
 
             consume(TokenType::RIGHT_PAREN, "Expected ')' after arguments");
+            expr = std::make_unique<CallExprNode>(std::move(expr), std::move(args), line);
+        } else if (check(TokenType::LEFT_BRACE)) {
+            // expr{table}
+            std::vector<std::unique_ptr<ExprNode>> args;
+            args.push_back(primary()); // table constructor is handled by primary()
+            expr = std::make_unique<CallExprNode>(std::move(expr), std::move(args), line);
+        } else if (match(TokenType::STRING)) {
+            // expr"string"
+            std::vector<std::unique_ptr<ExprNode>> args;
+            args.push_back(std::make_unique<StringLiteralNode>(previous_.lexeme, previous_.line));
             expr = std::make_unique<CallExprNode>(std::move(expr), std::move(args), line);
         }
         // Table indexing: expr[key]
@@ -757,7 +841,7 @@ std::unique_ptr<ExprNode> Parser::postfix() {
             auto key = std::make_unique<StringLiteralNode>(fieldName, line);
             expr = std::make_unique<IndexExprNode>(std::move(expr), std::move(key), line);
         }
-        // Method call: expr:method(args)
+        // Method call: expr:method(args), expr:method{table}, expr:method"string"
         else if (match(TokenType::COLON)) {
             if (!check(TokenType::IDENTIFIER)) {
                 error("Expected method name after ':'");
@@ -766,14 +850,22 @@ std::unique_ptr<ExprNode> Parser::postfix() {
             advance();
             std::string methodName = previous_.lexeme;
             
-            consume(TokenType::LEFT_PAREN, "Expected '(' after method name");
             std::vector<std::unique_ptr<ExprNode>> args;
-            if (!check(TokenType::RIGHT_PAREN)) {
-                do {
-                    args.push_back(expression());
-                } while (match(TokenType::COMMA));
+            if (match(TokenType::LEFT_PAREN)) {
+                if (!check(TokenType::RIGHT_PAREN)) {
+                    do {
+                        args.push_back(expression());
+                    } while (match(TokenType::COMMA));
+                }
+                consume(TokenType::RIGHT_PAREN, "Expected ')' after arguments");
+            } else if (check(TokenType::LEFT_BRACE)) {
+                args.push_back(primary());
+            } else if (match(TokenType::STRING)) {
+                args.push_back(std::make_unique<StringLiteralNode>(previous_.lexeme, previous_.line));
+            } else {
+                error("Expected '(' or '{' or string after method name");
+                return expr;
             }
-            consume(TokenType::RIGHT_PAREN, "Expected ')' after arguments");
             
             expr = std::make_unique<MethodCallExprNode>(std::move(expr), methodName, std::move(args), line);
         }
@@ -854,7 +946,7 @@ std::unique_ptr<ExprNode> Parser::primary() {
                     entry.value = expression();
                     entries.push_back(std::move(entry));
                 }
-            } while (match(TokenType::COMMA) || match(TokenType::SEMICOLON));
+            } while ((match(TokenType::COMMA) || match(TokenType::SEMICOLON)) && !check(TokenType::RIGHT_BRACE));
         }
 
         consume(TokenType::RIGHT_BRACE, "Expected '}' after table constructor");
@@ -877,7 +969,7 @@ std::unique_ptr<ExprNode> Parser::primary() {
     if (match(TokenType::LEFT_PAREN)) {
         auto expr = expression();
         consume(TokenType::RIGHT_PAREN, "Expected ')' after expression");
-        return expr;
+        return std::make_unique<GroupExprNode>(std::move(expr), line);
     }
 
     errorAtCurrent("Expected expression");

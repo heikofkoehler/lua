@@ -30,7 +30,7 @@ enum class TokenType {
     // Keywords
     AND, BREAK, DO, ELSE, ELSEIF,
     END, FALSE, FOR, FUNCTION, GOTO, IF,
-    IN, LOCAL, NIL, NOT, OR,
+    IN, LOCAL, GLOBAL, NIL, NOT, OR,
     REPEAT, RETURN, THEN, TRUE, UNTIL,
     WHILE,
 
@@ -43,13 +43,18 @@ struct Token {
     TokenType type;
     std::string lexeme;
     int line;
+    std::string near; // Context for errors
 
     Token(TokenType type, const std::string& lexeme, int line)
-        : type(type), lexeme(lexeme), line(line) {}
+        : type(type), lexeme(lexeme), line(line), near("") {}
+
+    // For backward compatibility and simple cases
+    Token(TokenType type, const std::string& lexeme)
+        : type(type), lexeme(lexeme), line(-1), near("") {}
 
     // For error tokens
-    Token(TokenType type, const std::string& message)
-        : type(type), lexeme(message), line(-1) {}
+    Token(TokenType type, const std::string& message, int line, const std::string& near)
+        : type(type), lexeme(message), line(line), near(near) {}
 };
 
 // Get human-readable name for token type
@@ -106,6 +111,7 @@ inline const char* tokenTypeName(TokenType type) {
         case TokenType::IF: return "IF";
         case TokenType::IN: return "IN";
         case TokenType::LOCAL: return "LOCAL";
+        case TokenType::GLOBAL: return "GLOBAL";
         case TokenType::NIL: return "NIL";
         case TokenType::NOT: return "NOT";
         case TokenType::OR: return "OR";

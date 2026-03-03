@@ -9,6 +9,7 @@
 enum class OpCode : uint8_t {
     // Constants
     OP_CONSTANT,    // Load constant from constant pool [index: uint8_t]
+    OP_CONSTANT_LONG, // Load constant from constant pool [index: 24-bit integer]
     OP_NIL,         // Push nil
     OP_TRUE,        // Push true
     OP_FALSE,       // Push false
@@ -66,14 +67,16 @@ enum class OpCode : uint8_t {
 
     // Functions
     OP_CLOSURE,     // Load function constant [index: uint8_t]
+    OP_CLOSURE_LONG,// Load function constant [index: 24-bit integer]
     OP_CALL,          // call function [arg_count: uint8_t, ret_count: uint8_t]
     OP_CALL_MULTI,    // call with variable args (last arg was multires) [fixed_arg_count: uint8_t, ret_count: uint8_t]
     OP_TAILCALL,      // tail call function [arg_count: uint8_t] (always returns all results to caller)
     OP_TAILCALL_MULTI,// tail call with variable args [fixed_arg_count: uint8_t]
-    OP_RETURN_VALUE,  // return with values from function [count: uint8_t] (0 means all from lastResultCount)
+    OP_RETURN_VALUE,  // return with values from function [count: uint8_t]
+    OP_RETURN_VALUE_MULTI, // return with fixed values + multires [fixed_count: uint8_t]
 
-    // Tables
-    OP_NEW_TABLE,   // Create new table, push onto stack
+    // New tables
+    OP_NEW_TABLE,   // Create new table and push to stack
     OP_GET_TABLE,   // Get table[key]: pop key, pop table, push value
     OP_SET_TABLE,   // Set table[key] = value: pop value, pop key, pop table
     OP_SET_TABLE_MULTI, // Set table[key] = lastResultCount values (for table constructors)
@@ -96,6 +99,7 @@ enum class OpCode : uint8_t {
 inline const char* opcodeName(OpCode op) {
     switch (op) {
         case OpCode::OP_CONSTANT:    return "OP_CONSTANT";
+        case OpCode::OP_CONSTANT_LONG: return "OP_CONSTANT_LONG";
         case OpCode::OP_NIL:         return "OP_NIL";
         case OpCode::OP_TRUE:        return "OP_TRUE";
         case OpCode::OP_FALSE:       return "OP_FALSE";
@@ -140,11 +144,13 @@ inline const char* opcodeName(OpCode op) {
         case OpCode::OP_JUMP_IF_FALSE: return "OP_JUMP_IF_FALSE";
         case OpCode::OP_LOOP:          return "OP_LOOP";
         case OpCode::OP_CLOSURE:       return "OP_CLOSURE";
+        case OpCode::OP_CLOSURE_LONG:  return "OP_CLOSURE_LONG";
         case OpCode::OP_CALL:          return "OP_CALL";
         case OpCode::OP_CALL_MULTI:    return "OP_CALL_MULTI";
         case OpCode::OP_TAILCALL:      return "OP_TAILCALL";
         case OpCode::OP_TAILCALL_MULTI: return "OP_TAILCALL_MULTI";
         case OpCode::OP_RETURN_VALUE:  return "OP_RETURN_VALUE";
+        case OpCode::OP_RETURN_VALUE_MULTI: return "OP_RETURN_VALUE_MULTI";
         case OpCode::OP_NEW_TABLE:     return "OP_NEW_TABLE";
         case OpCode::OP_GET_TABLE:     return "OP_GET_TABLE";
         case OpCode::OP_SET_TABLE:     return "OP_SET_TABLE";

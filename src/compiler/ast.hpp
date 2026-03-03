@@ -219,6 +219,20 @@ private:
     bool hasVarargs_;
 };
 
+// Group expression: (expr)
+class GroupExprNode : public ExprNode {
+public:
+    GroupExprNode(std::unique_ptr<ExprNode> expr, int line)
+        : ExprNode(line), expr_(std::move(expr)) {}
+
+    void accept(ASTVisitor& visitor) override;
+
+    ExprNode* expr() const { return expr_.get(); }
+
+private:
+    std::unique_ptr<ExprNode> expr_;
+};
+
 // Statement Nodes
 class StmtNode : public ASTNode {
 protected:
@@ -280,54 +294,100 @@ private:
 // Local variable declaration: local variable = expression
 class LocalDeclStmtNode : public StmtNode {
 public:
-    LocalDeclStmtNode(const std::string& name, std::unique_ptr<ExprNode> initializer, int line, bool isFunction = false)
-        : StmtNode(line), name_(name), initializer_(std::move(initializer)), isFunction_(isFunction) {}
+    LocalDeclStmtNode(const std::string& name, std::unique_ptr<ExprNode> initializer, int line, 
+                     bool isFunction = false, bool isConstant = false, bool isClose = false)
+        : StmtNode(line), name_(name), initializer_(std::move(initializer)), 
+          isFunction_(isFunction), isConstant_(isConstant), isClose_(isClose) {}
 
     void accept(ASTVisitor& visitor) override;
 
     const std::string& name() const { return name_; }
     ExprNode* initializer() const { return initializer_.get(); }
     bool isFunction() const { return isFunction_; }
+    bool isConstant() const { return isConstant_; }
+    bool isClose() const { return isClose_; }
 
 private:
     std::string name_;
     std::unique_ptr<ExprNode> initializer_;
     bool isFunction_;
+    bool isConstant_;
+    bool isClose_;
 };
 
 // Multiple local variable declaration: local a, b, c = 1, 2, 3
 class MultipleLocalDeclStmtNode : public StmtNode {
 public:
-    MultipleLocalDeclStmtNode(std::vector<std::string> names,
+    struct VarInfo {
+        std::string name;
+        bool isConstant;
+        bool isClose;
+    };
+
+    MultipleLocalDeclStmtNode(std::vector<VarInfo> vars,
                              std::vector<std::unique_ptr<ExprNode>> initializers,
                              int line)
-        : StmtNode(line), names_(std::move(names)), initializers_(std::move(initializers)) {}
+        : StmtNode(line), vars_(std::move(vars)), initializers_(std::move(initializers)) {}
 
     void accept(ASTVisitor& visitor) override;
 
-    const std::vector<std::string>& names() const { return names_; }
+    const std::vector<VarInfo>& vars() const { return vars_; }
     const std::vector<std::unique_ptr<ExprNode>>& initializers() const { return initializers_; }
 
 private:
-    std::vector<std::string> names_;
+    std::vector<VarInfo> vars_;
     std::vector<std::unique_ptr<ExprNode>> initializers_;
+};
+
+// Global declaration: global a, b, c
+class GlobalDeclStmtNode : public StmtNode {
+public:
+    GlobalDeclStmtNode(const std::string& name, bool isConstant, int line)
+        : StmtNode(line), name_(name), isConstant_(isConstant) {}
+
+    void accept(ASTVisitor& visitor) override;
+
+    const std::string& name() const { return name_; }
+    bool isConstant() const { return isConstant_; }
+
+private:
+    std::string name_;
+    bool isConstant_;
+};
+
+class MultipleGlobalDeclStmtNode : public StmtNode {
+public:
+    struct VarInfo {
+        std::string name;
+        bool isConstant;
+    };
+
+    MultipleGlobalDeclStmtNode(std::vector<VarInfo> vars, int line)
+        : StmtNode(line), vars_(std::move(vars)) {}
+
+    void accept(ASTVisitor& visitor) override;
+
+    const std::vector<VarInfo>& vars() const { return vars_; }
+
+private:
+    std::vector<VarInfo> vars_;
 };
 
 // Multiple assignment: x, y, z = 1, 2, 3
 class MultipleAssignmentStmtNode : public StmtNode {
 public:
-    MultipleAssignmentStmtNode(std::vector<std::string> names,
+    MultipleAssignmentStmtNode(std::vector<std::unique_ptr<ExprNode>> targets,
                               std::vector<std::unique_ptr<ExprNode>> values,
                               int line)
-        : StmtNode(line), names_(std::move(names)), values_(std::move(values)) {}
+        : StmtNode(line), targets_(std::move(targets)), values_(std::move(values)) {}
 
     void accept(ASTVisitor& visitor) override;
 
-    const std::vector<std::string>& names() const { return names_; }
+    const std::vector<std::unique_ptr<ExprNode>>& targets() const { return targets_; }
     const std::vector<std::unique_ptr<ExprNode>>& values() const { return values_; }
 
 private:
-    std::vector<std::string> names_;
+    std::vector<std::unique_ptr<ExprNode>> targets_;
     std::vector<std::unique_ptr<ExprNode>> values_;
 };
 
@@ -579,12 +639,15 @@ public:
     virtual void visitTableConstructor(TableConstructorNode* node) = 0;
             virtual void visitIndexExpr(IndexExprNode* node) = 0;
             virtual void visitFunctionExpr(FunctionExprNode* node) = 0;
-        
-            virtual void visitExprStmt(ExprStmtNode* node) = 0;
-            virtual void visitAssignmentStmt(AssignmentStmtNode* node) = 0;    virtual void visitIndexAssignmentStmt(IndexAssignmentStmtNode* node) = 0;
+            virtual void visitGroupExpr(GroupExprNode* node) = 0;
+
+    virtual void visitExprStmt(ExprStmtNode* node) = 0;    virtual void visitAssignmentStmt(AssignmentStmtNode* node) = 0;
+    virtual void visitIndexAssignmentStmt(IndexAssignmentStmtNode* node) = 0;
     virtual void visitLocalDeclStmt(LocalDeclStmtNode* node) = 0;
     virtual void visitMultipleLocalDeclStmt(MultipleLocalDeclStmtNode* node) = 0;
     virtual void visitMultipleAssignmentStmt(MultipleAssignmentStmtNode* node) = 0;
+    virtual void visitGlobalDeclStmt(GlobalDeclStmtNode* node) = 0;
+    virtual void visitMultipleGlobalDeclStmt(MultipleGlobalDeclStmtNode* node) = 0;
     virtual void visitIfStmt(IfStmtNode* node) = 0;
     virtual void visitWhileStmt(WhileStmtNode* node) = 0;
     virtual void visitRepeatStmt(RepeatStmtNode* node) = 0;
@@ -644,6 +707,10 @@ inline void FunctionExprNode::accept(ASTVisitor& visitor) {
     visitor.visitFunctionExpr(this);
 }
 
+inline void GroupExprNode::accept(ASTVisitor& visitor) {
+    visitor.visitGroupExpr(this);
+}
+
 inline void ExprStmtNode::accept(ASTVisitor& visitor) {
     visitor.visitExprStmt(this);
 }
@@ -666,6 +733,14 @@ inline void MultipleLocalDeclStmtNode::accept(ASTVisitor& visitor) {
 
 inline void MultipleAssignmentStmtNode::accept(ASTVisitor& visitor) {
     visitor.visitMultipleAssignmentStmt(this);
+}
+
+inline void GlobalDeclStmtNode::accept(ASTVisitor& visitor) {
+    visitor.visitGlobalDeclStmt(this);
+}
+
+inline void MultipleGlobalDeclStmtNode::accept(ASTVisitor& visitor) {
+    visitor.visitMultipleGlobalDeclStmt(this);
 }
 
 inline void IfStmtNode::accept(ASTVisitor& visitor) {

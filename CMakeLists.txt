@@ -11,7 +11,7 @@ option(DEBUG "Enable general debug output" OFF)
 option(DEBUG_LOG_GC "Enable garbage collector logging" OFF)
 option(DEBUG_TRACE_EXECUTION "Enable VM execution tracing" OFF)
 option(DEBUG_PRINT_CODE "Enable bytecode disassembly" OFF)
-option(USE_JIT "Enable JIT compilation" ON)
+option(USE_JIT "Enable JIT compilation" OFF)
 
 if(USE_JIT)
     add_compile_definitions(USE_JIT)

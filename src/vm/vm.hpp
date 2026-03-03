@@ -100,6 +100,8 @@ public:
     void initStandardLibrary();
     void runInitializationFrames();
     void setGlobal(const std::string& name, const Value& value);
+    Value getGlobal(const std::string& name) const;
+    void registerModule(const std::string& name, TableObject* module);
 
     // Root chunk access (for native functions to access compile-time strings)
     const Chunk* rootChunk() const { return currentCoroutine_->rootChunk; }

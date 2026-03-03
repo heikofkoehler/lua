@@ -38,12 +38,19 @@ private:
     void errorAt(const Token& token, const std::string& message);
     void synchronize();
 
+    struct Attribute {
+        bool isConstant = false;
+        bool isClose = false;
+    };
+    Attribute attribute();
+
     // Parsing methods (in order of precedence, lowest to highest)
     std::unique_ptr<StmtNode> statement();
     std::unique_ptr<StmtNode> expressionStatement();
     std::unique_ptr<StmtNode> assignmentOrExpression();
     std::unique_ptr<StmtNode> localDeclaration();
     std::unique_ptr<StmtNode> localFunctionDeclaration();
+    std::unique_ptr<StmtNode> globalDeclaration();
     std::unique_ptr<StmtNode> ifStatement();
     std::unique_ptr<StmtNode> whileStatement();
     std::unique_ptr<StmtNode> repeatStatement();

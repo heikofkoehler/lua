@@ -139,16 +139,17 @@ bool native_tonumber(VM* vm, int argCount) {
     try {
         size_t pos;
         double num = std::stod(s, &pos);
+        for (int i = 0; i < argCount; i++) vm->pop();
         if (pos != s.length()) {
             vm->push(Value::nil());
         } else {
             vm->push(Value::number(num));
         }
     } catch (...) {
+        for (int i = 0; i < argCount; i++) vm->pop();
         vm->push(Value::nil());
     }
 
-    for (int i = 0; i < argCount; i++) vm->pop();
     return true;
 }
 
@@ -469,19 +470,36 @@ bool native_select(VM* vm, int argCount) {
         vm->push(Value::number(argCount - 1));
         return true;
     }
-    int index = static_cast<int>(selector.asNumber());
-    if (index < 1 || index > argCount - 1) {
+    int index;
+    if (selector.isNumber()) {
+        index = static_cast<int>(selector.asNumber());
+    } else {
+        vm->runtimeError("bad argument #1 to 'select' (number expected)");
+        return false;
+    }
+
+    int numArgs = argCount - 1;
+    if (index < 0) {
+        index = numArgs + index + 1;
+    }
+
+    if (index < 1) {
         vm->runtimeError("bad argument #1 to 'select' (index out of range)");
         return false;
     }
+
     std::vector<Value> results;
-    for (int i = index; i <= argCount - 1; i++) {
-        results.push_back(vm->peek(argCount - 1 - i));
+    if (index <= numArgs) {
+        for (int i = index; i <= numArgs; i++) {
+            results.push_back(vm->peek(numArgs - i));
+        }
     }
+
     for(int i=0; i<argCount; i++) vm->pop();
-    for (const auto& val : results) {
-        vm->push(val);
+    for (const auto& res : results) {
+        vm->push(res);
     }
+    return true;
     vm->currentCoroutine()->lastResultCount = results.size();
     return true;
 }

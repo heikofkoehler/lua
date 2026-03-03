@@ -205,16 +205,46 @@ void registerDebugLibrary(VM* vm, TableObject* debugTable) {
             vm->push(Value::nil());
             return true;
         }
-        Value f = vm->peek(0);
+        Value f = vm->peek(argCount - 1);
         TableObject* info = vm->createTable();
         
-        if (f.isClosure()) {
-            FunctionObject* func = f.asClosureObj()->function();
+        ClosureObject* closure = nullptr;
+        int line = -1;
+
+        if (f.isNumber()) {
+            int level = static_cast<int>(f.asNumber());
+            // level 1 in Lua is the caller of getinfo, which is getFrame(0) in our VM
+            CallFrame* frame = vm->getFrame(level - 1);
+            if (frame) {
+                closure = frame->closure;
+                if (closure) {
+                    // Back up IP by 1 because it usually points to the NEXT instruction
+                    // after the call to getinfo.
+                    size_t ip = (frame->ip > 0) ? frame->ip - 1 : 0;
+                    line = frame->closure->function()->chunk()->getLine(ip);
+                }
+            } else {
+                for(int i=0; i<argCount; i++) vm->pop();
+                vm->push(Value::nil());
+                return true;
+            }
+        } else if (f.isClosure()) {
+            closure = f.asClosureObj();
+        } else if (f.isNativeFunction()) {
+            info->set("what", Value::runtimeString(vm->internString("C")));
+            for(int i=0; i<argCount; i++) vm->pop();
+            vm->push(Value::table(info));
+            return true;
+        }
+
+        if (closure) {
+            FunctionObject* func = closure->function();
             info->set("name", Value::runtimeString(vm->internString(func->name())));
             info->set("what", Value::runtimeString(vm->internString("Lua")));
             info->set("nups", Value::number(func->upvalueCount()));
-        } else if (f.isNativeFunction()) {
-            info->set("what", Value::runtimeString(vm->internString("C")));
+            if (line != -1) {
+                info->set("currentline", Value::number(line));
+            }
         }
         
         for(int i=0; i<argCount; i++) vm->pop();

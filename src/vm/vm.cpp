@@ -323,7 +323,9 @@ void VM::initStandardLibrary() {
 
     // Register _G (global environment) early so libraries can populate it
     TableObject* gTable = createTable();
-    globals_["_G"] = Value::table(gTable);
+    Value gVal = Value::table(gTable);
+    globals_["_G"] = gVal;
+    gTable->set("_G", gVal);
 
     // Register base library
     extern void registerBaseLibrary(VM* vm);
@@ -334,48 +336,56 @@ void VM::initStandardLibrary() {
     extern void registerMathLibrary(VM* vm, TableObject* mathTable);
     registerMathLibrary(this, mathTable);
     setGlobal("math", Value::table(mathTable));
+    registerModule("math", mathTable);
 
     // Create 'string' table
     TableObject* stringTable = createTable();
     extern void registerStringLibrary(VM* vm, TableObject* stringTable);
     registerStringLibrary(this, stringTable);
     setGlobal("string", Value::table(stringTable));
+    registerModule("string", stringTable);
 
     // Create 'table' table
     TableObject* tableTable = createTable();
     extern void registerTableLibrary(VM* vm, TableObject* tableTable);
     registerTableLibrary(this, tableTable);
     setGlobal("table", Value::table(tableTable));
+    registerModule("table", tableTable);
 
     // Create 'os' table
     TableObject* osTable = createTable();
     extern void registerOSLibrary(VM* vm, TableObject* osTable);
     registerOSLibrary(this, osTable);
     setGlobal("os", Value::table(osTable));
+    registerModule("os", osTable);
 
     // Create 'io' table
     TableObject* ioTable = createTable();
     extern void registerIOLibrary(VM* vm, TableObject* ioTable);
     registerIOLibrary(this, ioTable);
     setGlobal("io", Value::table(ioTable));
+    registerModule("io", ioTable);
 
     // Create 'socket' table
     TableObject* socketTable = createTable();
     extern void registerSocketLibrary(VM* vm, TableObject* socketTable);
     registerSocketLibrary(this, socketTable);
     setGlobal("socket", Value::table(socketTable));
+    registerModule("socket", socketTable);
 
     // Create 'coroutine' table
     TableObject* coroutineTable = createTable();
     extern void registerCoroutineLibrary(VM* vm, TableObject* coroutineTable);
     registerCoroutineLibrary(this, coroutineTable);
     setGlobal("coroutine", Value::table(coroutineTable));
+    registerModule("coroutine", coroutineTable);
 
     // Create 'debug' table
     TableObject* debugTable = createTable();
     extern void registerDebugLibrary(VM* vm, TableObject* debugTable);
     registerDebugLibrary(this, debugTable);
     setGlobal("debug", Value::table(debugTable));
+    registerModule("debug", debugTable);
 }
 
 void VM::runInitializationFrames() {
@@ -386,6 +396,24 @@ void VM::runInitializationFrames() {
             for (size_t i = 0; i < currentCoroutine_->lastResultCount; i++) {
                 pop();
             }
+        }
+    }
+}
+
+Value VM::getGlobal(const std::string& name) const {
+    auto it = globals_.find(name);
+    if (it != globals_.end()) {
+        return it->second;
+    }
+    return Value::nil();
+}
+
+void VM::registerModule(const std::string& name, TableObject* module) {
+    Value package = getGlobal("package");
+    if (package.isTable()) {
+        Value loaded = package.asTableObj()->get("loaded");
+        if (loaded.isTable()) {
+            loaded.asTableObj()->set(name, Value::table(module));
         }
     }
 }
@@ -944,7 +972,7 @@ std::string VM::getStringValue(const Value& value) {
         } else {
             str = currentFrame().chunk->getString(value.asStringIndex());
         }
-        return str ? str->chars() : "";
+        return str ? std::string(str->chars(), str->length()) : "";
     }
     return value.toString();
 }

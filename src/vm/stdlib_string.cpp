@@ -610,11 +610,59 @@ bool native_string_gsub(VM* vm, int argCount) {
 }
 
 bool native_string_format(VM* vm, int argCount) {
-    if (argCount < 1) return false;
+    if (argCount < 1) {
+        vm->runtimeError("string.format expects at least 1 argument");
+        return false;
+    }
     std::string fmt = vm->getStringValue(vm->peek(argCount - 1));
-    // Very basic format stub
+    std::string result;
+    int argIndex = 1;
+    
+    for (size_t i = 0; i < fmt.length(); i++) {
+        if (fmt[i] == '%' && i + 1 < fmt.length()) {
+            i++;
+            char spec = fmt[i];
+            if (spec == '%') {
+                result += '%';
+            } else {
+                if (argIndex >= argCount) {
+                    vm->runtimeError("bad argument to 'format' (no value)");
+                    return false;
+                }
+                Value arg = vm->peek(argCount - 1 - argIndex);
+                if (spec == 's') {
+                    result += vm->getStringValue(arg);
+                } else if (spec == 'd' || spec == 'i') {
+                    if (!arg.isNumber()) {
+                        vm->runtimeError("bad argument to 'format' (number expected)");
+                        return false;
+                    }
+                    result += std::to_string(arg.asInteger());
+                } else if (spec == 'f') {
+                    if (!arg.isNumber()) {
+                        vm->runtimeError("bad argument to 'format' (number expected)");
+                        return false;
+                    }
+                    result += std::to_string(arg.asNumber());
+                } else if (spec == 'c') {
+                    if (!arg.isNumber()) {
+                        vm->runtimeError("bad argument to 'format' (number expected)");
+                        return false;
+                    }
+                    result += static_cast<char>(arg.asInteger());
+                } else {
+                    result += '%';
+                    result += spec; // Unhandled format specifier
+                }
+                argIndex++;
+            }
+        } else {
+            result += fmt[i];
+        }
+    }
+    
     for (int i = 0; i < argCount; i++) vm->pop();
-    vm->push(Value::runtimeString(vm->internString(fmt)));
+    vm->push(Value::runtimeString(vm->internString(result)));
     return true;
 }
 

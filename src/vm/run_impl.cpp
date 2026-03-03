@@ -74,6 +74,13 @@ bool VM::run(size_t targetFrameCount) {
                 push(constant);
                 break;
             }
+            case OpCode::OP_CONSTANT_LONG: {
+                uint32_t index = readByte();
+                index |= (readByte() << 8);
+                index |= (readByte() << 16);
+                push(currentFrame().chunk->constants()[index]);
+                break;
+            }
 
             case OpCode::OP_NIL:
                 push(Value::nil());
@@ -616,6 +623,35 @@ bool VM::run(size_t targetFrameCount) {
                 break;
             }
 
+            case OpCode::OP_CLOSURE_LONG: {
+                uint32_t constantIndex = readByte();
+                constantIndex |= (readByte() << 8);
+                constantIndex |= (readByte() << 16);
+                Value funcValue = currentFrame().chunk->constants()[constantIndex];
+                size_t funcIndex = funcValue.asFunctionIndex();
+                FunctionObject* function = currentFrame().chunk->getFunction(funcIndex);
+
+                ClosureObject* closure = createClosure(function);
+
+                // Capture upvalues
+                for (size_t i = 0; i < closure->upvalueCount(); i++) {
+                    uint8_t isLocal = readByte();
+                    uint8_t index = readByte();
+
+                    if (isLocal) {
+                        size_t stackIndex = currentFrame().stackBase + index;
+                        UpvalueObject* upvalue = captureUpvalue(stackIndex);
+                        closure->setUpvalue(i, upvalue);
+                    } else {
+                        UpvalueObject* upvalue = currentFrame().closure->getUpvalueObj(index);
+                        closure->setUpvalue(i, upvalue);
+                    }
+                }
+
+                push(Value::closure(closure));
+                break;
+            }
+
             case OpCode::OP_CALL: {
                 uint8_t argCount = readByte();
                 uint8_t retCount = readByte();  // Number of return values to keep (0 = all)
@@ -704,17 +740,20 @@ bool VM::run(size_t targetFrameCount) {
                 break;
             }
 
-            case OpCode::OP_RETURN_VALUE: {
+            case OpCode::OP_RETURN_VALUE:
+            case OpCode::OP_RETURN_VALUE_MULTI: {
                 // Handle debug hook before cleanup
                 if (currentCoroutine_->hookMask & CoroutineObject::MASK_RET) {
                     callHook("return");
                 }
 
                 // Read the count of return values
-                uint8_t count = readByte();
-                size_t actualCount = count;
-                if (count == 0) {
-                    actualCount = currentCoroutine_->lastResultCount;
+                uint8_t operand = readByte();
+                size_t actualCount;
+                if (op == OpCode::OP_RETURN_VALUE_MULTI) {
+                    actualCount = static_cast<size_t>(operand) + currentCoroutine_->lastResultCount;
+                } else {
+                    actualCount = operand;
                 }
 
                 // Pop all return values from the stack (in reverse order)

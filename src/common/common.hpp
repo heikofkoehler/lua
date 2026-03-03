@@ -50,9 +50,9 @@ private:
 
     static std::string formatMessage(const std::string& message, int line) {
         if (line >= 0) {
-            return "[line " + std::to_string(line) + "] Compile Error: " + message;
+            return ":" + std::to_string(line) + ": " + message;
         }
-        return "Compile Error: " + message;
+        return message;
     }
 };
 

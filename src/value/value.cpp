@@ -42,7 +42,10 @@ void Value::print(std::ostream& os) const {
     switch (type()) {
         case Type::NIL: os << "nil"; break;
         case Type::BOOL: os << (asBool() ? "true" : "false"); break;
-        case Type::INTEGER: os << asInteger(); break;
+        case Type::INTEGER: 
+            printf("DEBUG: printing integer %lld\n", (long long)asInteger());
+            os << asInteger(); 
+            break;
         case Type::NUMBER: {
             double num = asNumber();
             if (std::floor(num) == num && !std::isinf(num) && !std::isnan(num)) {
@@ -54,7 +57,7 @@ void Value::print(std::ostream& os) const {
         }
         case Type::FUNCTION: os << "<function:" << asFunctionIndex() << ">"; break;
         case Type::STRING: os << "<string:" << asStringIndex() << ">"; break;
-        case Type::RUNTIME_STRING: os << asStringObj()->chars(); break;
+        case Type::RUNTIME_STRING: os.write(asStringObj()->chars(), asStringObj()->length()); break;
         case Type::TABLE: os << "table: " << asTableObj(); break;
         case Type::CLOSURE: os << "function: " << asClosureObj(); break;
         case Type::FILE: os << "file: " << asFileObj(); break;
@@ -89,7 +92,9 @@ bool Value::operator==(const Value& other) const {
 
 bool Value::isStringEqual(const std::string& str) const {
     if (isRuntimeString()) {
-        return std::string(asStringObj()->chars()) == str;
+        StringObject* obj = asStringObj();
+        return obj->length() == str.length() && 
+               std::memcmp(obj->chars(), str.data(), str.length()) == 0;
     }
     return false; // Compile-time strings must be interned first
 }
@@ -97,7 +102,10 @@ bool Value::isStringEqual(const std::string& str) const {
 size_t Value::hash() const {
     if (isInteger()) return std::hash<int64_t>()(asInteger());
     if (isNumber()) return std::hash<double>()(asNumber());
-    if (isRuntimeString()) return std::hash<std::string>()(asStringObj()->chars());
+    if (isRuntimeString()) {
+        StringObject* obj = asStringObj();
+        return std::hash<std::string_view>()(std::string_view(obj->chars(), obj->length()));
+    }
     return std::hash<uint64_t>()(bits_);
 }
 

@@ -21,6 +21,11 @@ void Chunk::write(uint8_t byte, int line) {
 }
 
 size_t Chunk::addConstant(const Value& value) {
+    for (size_t i = 0; i < constants_.size(); i++) {
+        if (constants_[i] == value) {
+            return i;
+        }
+    }
     constants_.push_back(value);
     return constants_.size() - 1;
 }
@@ -99,6 +104,15 @@ size_t Chunk::disassembleInstruction(size_t offset) const {
     switch (op) {
         case OpCode::OP_CONSTANT:
             return constantInstruction("OP_CONSTANT", offset);
+        case OpCode::OP_CONSTANT_LONG: {
+            uint32_t index = code_[offset + 1];
+            index |= (code_[offset + 2] << 8);
+            index |= (code_[offset + 3] << 16);
+            std::cout << std::left << std::setw(16) << "OP_CONSTANT_LONG" << " " << std::setw(4) << index << " '";
+            std::cout << constants_[index];
+            std::cout << "'" << std::endl;
+            return offset + 4;
+        }
 
         case OpCode::OP_NIL:
             return simpleInstruction("OP_NIL", offset);
@@ -189,8 +203,42 @@ size_t Chunk::disassembleInstruction(size_t offset) const {
         case OpCode::OP_LOOP:
             return jumpInstruction("OP_LOOP", -1, offset);
 
-        case OpCode::OP_CLOSURE:
-            return constantInstruction("OP_CLOSURE", offset);
+        case OpCode::OP_CLOSURE: {
+            uint8_t constant = code_[offset + 1];
+            std::cout << std::left << std::setw(16) << "OP_CLOSURE" << " "
+                      << std::setfill('0') << std::setw(4) << static_cast<int>(constant) << " '";
+            std::cout << constants_[constant] << "'" << std::endl;
+            
+            FunctionObject* func = getFunction(constants_[constant].asFunctionIndex());
+            size_t currentOffset = offset + 2;
+            for (int i = 0; i < func->upvalueCount(); i++) {
+                uint8_t isLocal = code_[currentOffset++];
+                uint8_t index = code_[currentOffset++];
+                std::cout << std::setfill('0') << std::setw(4) << currentOffset - 2 << "    |                     "
+                          << (isLocal ? "local" : "upvalue") << " " << static_cast<int>(index) << std::endl;
+            }
+            return currentOffset;
+        }
+
+        case OpCode::OP_CLOSURE_LONG: {
+            uint32_t constant = code_[offset + 1];
+            constant |= (code_[offset + 2] << 8);
+            constant |= (code_[offset + 3] << 16);
+            std::cout << std::left << std::setw(16) << "OP_CLOSURE_LONG" << " "
+                      << std::setfill('0') << std::setw(4) << constant << " '";
+            std::cout << constants_[constant] << "'" << std::endl;
+            
+            FunctionObject* func = getFunction(constants_[constant].asFunctionIndex());
+            size_t currentOffset = offset + 4;
+            for (int i = 0; i < func->upvalueCount(); i++) {
+                uint8_t isLocal = code_[currentOffset++];
+                uint8_t index = code_[currentOffset++];
+                std::cout << std::setfill('0') << std::setw(4) << currentOffset - 2 << "    |                     "
+                          << (isLocal ? "local" : "upvalue") << " " << static_cast<int>(index) << std::endl;
+            }
+            return currentOffset;
+        }
+
         case OpCode::OP_CALL:
             return callInstruction("OP_CALL", offset);
         case OpCode::OP_CALL_MULTI:
@@ -201,6 +249,8 @@ size_t Chunk::disassembleInstruction(size_t offset) const {
             return byteInstruction("OP_TAILCALL_MULTI", offset);
         case OpCode::OP_RETURN_VALUE:
             return byteInstruction("OP_RETURN_VALUE", offset);
+        case OpCode::OP_RETURN_VALUE_MULTI:
+            return byteInstruction("OP_RETURN_VALUE_MULTI", offset);
 
         case OpCode::OP_NEW_TABLE:
             return simpleInstruction("OP_NEW_TABLE", offset);

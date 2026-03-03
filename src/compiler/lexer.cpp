@@ -11,6 +11,7 @@ const std::unordered_map<std::string, TokenType> Lexer::keywords_ = {
     {"false",    TokenType::FALSE},
     {"for",      TokenType::FOR},
     {"function", TokenType::FUNCTION},
+    {"global",   TokenType::GLOBAL},
     {"goto",     TokenType::GOTO},
     {"if",       TokenType::IF},
     {"in",       TokenType::IN},
@@ -56,7 +57,11 @@ Token Lexer::scanToken() {
         case ')': return makeToken(TokenType::RIGHT_PAREN);
         case '{': return makeToken(TokenType::LEFT_BRACE);
         case '}': return makeToken(TokenType::RIGHT_BRACE);
-        case '[': return makeToken(TokenType::LEFT_BRACKET);
+        case '[':
+            if (peek() == '[' || peek() == '=') {
+                return longString();
+            }
+            return makeToken(TokenType::LEFT_BRACKET);
         case ']': return makeToken(TokenType::RIGHT_BRACKET);
         case ',': return makeToken(TokenType::COMMA);
         case ';': return makeToken(TokenType::SEMICOLON);
@@ -108,7 +113,7 @@ Token Lexer::scanToken() {
             return string();
     }
 
-    return errorToken("Unexpected character");
+    return errorToken("Unexpected character '" + std::string(1, c) + "'");
 }
 
 Token Lexer::peekToken() {
@@ -154,8 +159,12 @@ Token Lexer::makeToken(TokenType type) const {
     return Token(type, lexeme, line_);
 }
 
-Token Lexer::errorToken(const std::string& message) const {
-    return Token(TokenType::ERROR, message);
+Token Lexer::errorToken(const std::string& message, const std::string& near) const {
+    if (!near.empty()) {
+        return Token(TokenType::ERROR, message, line_, near);
+    }
+    std::string lexeme = source_.substr(start_, current_ - start_);
+    return Token(TokenType::ERROR, message, line_, lexeme);
 }
 
 void Lexer::skipWhitespace() {
@@ -163,22 +172,71 @@ void Lexer::skipWhitespace() {
         char c = peek();
         switch (c) {
             case ' ':
-            case '\r':
             case '\t':
+            case '\v':
+            case '\f':
                 advance();
                 break;
 
             case '\n':
                 line_++;
                 advance();
+                if (peek() == '\r') advance();
+                break;
+
+            case '\r':
+                line_++;
+                advance();
+                if (peek() == '\n') advance();
                 break;
 
             case '-':
                 // Lua comments start with --
                 if (peekNext() == '-') {
-                    // Skip until end of line
-                    while (peek() != '\n' && !isAtEnd()) {
-                        advance();
+                    advance(); // skip first -
+                    advance(); // skip second -
+                    if (peek() == '[') {
+                        // Potential long comment
+                        size_t savedCurrent = current_;
+                        int savedLine = line_;
+                        advance(); // skip [
+                        int level = 0;
+                        while (peek() == '=') {
+                            level++;
+                            advance();
+                        }
+                        if (peek() == '[') {
+                            advance(); // skip [
+                            // It IS a long comment. Skip until matching ]==]
+                            while (!isAtEnd()) {
+                                if (peek() == ']') {
+                                    advance();
+                                    int closingLevel = 0;
+                                    while (peek() == '=') {
+                                        closingLevel++;
+                                        advance();
+                                    }
+                                    if (peek() == ']' && closingLevel == level) {
+                                        advance();
+                                        break; // continue the while(true) loop
+                                    }
+                                } else {
+                                    if (advance() == '\n') line_++;
+                                }
+                            }
+                        } else {
+                            // Not a long comment, skip until end of line
+                            current_ = savedCurrent;
+                            line_ = savedLine;
+                            while (peek() != '\n' && !isAtEnd()) {
+                                advance();
+                            }
+                        }
+                    } else {
+                        // Skip until end of line
+                        while (peek() != '\n' && !isAtEnd()) {
+                            advance();
+                        }
                     }
                 } else {
                     return;
@@ -213,21 +271,86 @@ Token Lexer::string() {
                 case '\\': value += '\\'; break;
                 case '\'': value += '\''; break;
                 case '"':  value += '"';  break;
-                case '0':  value += '\0'; break;
+                case 'z': {
+                    // Skip following whitespace
+                    while (!isAtEnd()) {
+                        char c = peek();
+                        if (c == ' ' || c == '\t' || c == '\r' || c == '\n' || c == '\v' || c == '\f') {
+                            if (c == '\n') line_++;
+                            else if (c == '\r' && peekNext() == '\n') {
+                                advance(); // skip \r
+                            } else if (c == '\r') line_++;
+                            advance();
+                        } else {
+                            break;
+                        }
+                    }
+                    continue; 
+                }
                 case '\n': line_++; value += '\n'; break;
                 case '\r':
                     if (peek() == '\n') advance();
                     line_++;
                     value += '\n';
                     break;
-                case 'x': {
-                    // Hex escape \xXX
-                    int hex = 0;
-                    for (int i = 0; i < 2 && isxdigit(peek()); i++) {
+                case 'u': {
+                    // Unicode escape \u{XXX}
+                    if (advance() != '{') return errorToken("invalid escape sequence");
+                    unsigned long code = 0;
+                    int digits = 0;
+                    while (isxdigit(peek())) {
                         char h = advance();
-                        hex = hex * 16 + (isdigit(h) ? h - '0' :
-                                          tolower(h) - 'a' + 10);
+                        code = code * 16 + (isdigit(h) ? h - '0' :
+                                            tolower(h) - 'a' + 10);
+                        digits++;
                     }
+                    if (digits == 0) return errorToken("invalid escape sequence");
+                    if (advance() != '}') return errorToken("invalid escape sequence");
+                    
+                    // Convert code point to UTF-8
+                    if (code <= 0x7F) {
+                        value += static_cast<char>(code);
+                    } else if (code <= 0x7FF) {
+                        value += static_cast<char>(0xC0 | (code >> 6));
+                        value += static_cast<char>(0x80 | (code & 0x3F));
+                    } else if (code <= 0xFFFF) {
+                        value += static_cast<char>(0xE0 | (code >> 12));
+                        value += static_cast<char>(0x80 | ((code >> 6) & 0x3F));
+                        value += static_cast<char>(0x80 | (code & 0x3F));
+                    } else if (code <= 0x1FFFFF) {
+                        value += static_cast<char>(0xF0 | (code >> 18));
+                        value += static_cast<char>(0x80 | ((code >> 12) & 0x3F));
+                        value += static_cast<char>(0x80 | ((code >> 6) & 0x3F));
+                        value += static_cast<char>(0x80 | (code & 0x3F));
+                    } else if (code <= 0x3FFFFFF) {
+                        value += static_cast<char>(0xF8 | (code >> 24));
+                        value += static_cast<char>(0x80 | ((code >> 18) & 0x3F));
+                        value += static_cast<char>(0x80 | ((code >> 12) & 0x3F));
+                        value += static_cast<char>(0x80 | ((code >> 6) & 0x3F));
+                        value += static_cast<char>(0x80 | (code & 0x3F));
+                    } else if (code <= 0x7FFFFFFF) {
+                        value += static_cast<char>(0xFC | (code >> 30));
+                        value += static_cast<char>(0x80 | ((code >> 24) & 0x3F));
+                        value += static_cast<char>(0x80 | ((code >> 18) & 0x3F));
+                        value += static_cast<char>(0x80 | ((code >> 12) & 0x3F));
+                        value += static_cast<char>(0x80 | ((code >> 6) & 0x3F));
+                        value += static_cast<char>(0x80 | (code & 0x3F));
+                    } else {
+                        return errorToken("Unicode escape too large");
+                    }
+                    break;
+                }
+                case 'x': {
+                    // Hex escape \xXX (exactly 2 digits)
+                    if (isAtEnd()) return errorToken("hexadecimal escape requires 2 digits");
+                    if (!isxdigit(peek())) return errorToken("invalid escape sequence");
+                    char h1 = advance();
+                    if (isAtEnd()) return errorToken("hexadecimal escape requires 2 digits");
+                    if (!isxdigit(peek())) return errorToken("invalid escape sequence");
+                    char h2 = advance();
+                    
+                    int hex = (isdigit(h1) ? h1 - '0' : tolower(h1) - 'a' + 10) * 16 +
+                              (isdigit(h2) ? h2 - '0' : tolower(h2) - 'a' + 10);
                     value += static_cast<char>(hex);
                     break;
                 }
@@ -237,10 +360,10 @@ Token Lexer::string() {
                         int dec = esc - '0';
                         if (isDigit(peek())) dec = dec * 10 + (advance() - '0');
                         if (isDigit(peek())) dec = dec * 10 + (advance() - '0');
-                        if (dec > 255) return errorToken("Decimal escape too large");
+                        if (dec > 255) return errorToken("decimal escape too large");
                         value += static_cast<char>(dec);
                     } else {
-                        return errorToken(std::string("Invalid escape sequence '\\") + esc + "'");
+                        return errorToken("invalid escape sequence");
                     }
                     break;
             }
@@ -251,7 +374,7 @@ Token Lexer::string() {
     }
 
     if (isAtEnd()) {
-        return errorToken("Unterminated string");
+        return errorToken("unfinished string");
     }
 
     // Closing quote
@@ -260,29 +383,112 @@ Token Lexer::string() {
     return Token(TokenType::STRING, value, line_);
 }
 
+Token Lexer::longString() {
+    int level = 0;
+    while (peek() == '=') {
+        level++;
+        advance();
+    }
+
+    if (peek() != '[') {
+        // Not a long string after all (maybe [==3])
+        // But in standard Lua, [ followed by = is only for long strings.
+        // For now, let's treat it as an error or just return the brackets.
+        return errorToken("Expected '[' for long string");
+    }
+
+    advance(); // Consume the second '['
+
+    // If first character is a newline, skip it
+    if (peek() == '\n') {
+        current_++;
+    } else if (peek() == '\r') {
+        current_++;
+        if (peek() == '\n') current_++;
+    }
+
+    std::string value;
+    while (!isAtEnd()) {
+        if (peek() == ']') {
+            advance(); // consume ']'
+            int closingLevel = 0;
+            while (peek() == '=') {
+                closingLevel++;
+                advance();
+            }
+            if (peek() == ']' && closingLevel == level) {
+                advance(); // consume ']'
+                return Token(TokenType::STRING, value, line_);
+            }
+            // Not a match, add the ']' and '=' back to the string
+            value += ']';
+            for (int i = 0; i < closingLevel; i++) value += '=';
+            // Continue scanning from after the '='
+        } else if (peek() == '\n') {
+            line_++;
+            advance();
+            if (peek() == '\r') advance();
+            value += '\n';
+        } else if (peek() == '\r') {
+            line_++;
+            advance();
+            if (peek() == '\n') advance();
+            value += '\n';
+        } else {
+            value += advance();
+        }
+    }
+
+    if (isAtEnd()) {
+        return errorToken("unfinished long string near <eof>");
+    }
+
+    return errorToken("unfinished long string");
+}
+
 Token Lexer::number() {
-    while (isDigit(peek())) {
-        advance();
-    }
-
-    // Look for fractional part
-    if (peek() == '.' && isDigit(peekNext())) {
-        // Consume the '.'
-        advance();
-
+    if (source_[start_] == '0' && (peek() == 'x' || peek() == 'X')) {
+        advance(); // skip x/X
+        while (isxdigit(peek())) {
+            advance();
+        }
+        if (peek() == '.') {
+            advance();
+            while (isxdigit(peek())) {
+                advance();
+            }
+        }
+        if (peek() == 'p' || peek() == 'P') {
+            advance();
+            if (peek() == '+' || peek() == '-') {
+                advance();
+            }
+            while (isDigit(peek())) {
+                advance();
+            }
+        }
+    } else {
         while (isDigit(peek())) {
             advance();
         }
-    }
 
-    // Look for exponent
-    if (peek() == 'e' || peek() == 'E') {
-        advance();
-        if (peek() == '+' || peek() == '-') {
+        // Look for decimal point
+        if (peek() == '.') {
             advance();
+            while (isDigit(peek())) {
+                advance();
+            }
         }
-        while (isDigit(peek())) {
+
+        // Look for exponent
+        if (peek() == 'e' || peek() == 'E') {
             advance();
+            if (peek() == '+' || peek() == '-') {
+                advance();
+            }
+            while (isDigit(peek())) {
+                advance();
+            }
         }
     }
 

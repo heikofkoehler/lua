@@ -27,6 +27,7 @@ bool run(const std::string& source, VM& vm) {
         Lexer lexer(source);
 
         // Parsing
+        printf("DEBUG: Parsing...\n");
         Parser parser(lexer);
         auto program = parser.parse();
 
@@ -36,6 +37,7 @@ bool run(const std::string& source, VM& vm) {
         }
 
         // Code generation
+        printf("DEBUG: Generating bytecode...\n");
         CodeGenerator codegen;
         auto function = codegen.generate(program.get());
 
@@ -45,6 +47,7 @@ bool run(const std::string& source, VM& vm) {
         }
 
         // Execution
+        printf("DEBUG: Executing...\n");
         return vm.run(*function);
 
     } catch (const CompileError& e) {
