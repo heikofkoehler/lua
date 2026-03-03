@@ -309,6 +309,12 @@ std::unique_ptr<StmtNode> Parser::localDeclaration() {
 std::unique_ptr<StmtNode> Parser::globalDeclaration() {
     int line = previous_.line;
 
+    // Allow `global function name ...` syntax which simply declares a global function
+    if (match(TokenType::FUNCTION)) {
+        // Now previous_ is the FUNCTION token; delegate to standard function parser
+        return functionDeclaration();
+    }
+
     // Check for global <const> *
     if (match(TokenType::LESS)) {
         consume(TokenType::IDENTIFIER, "Expected attribute name");

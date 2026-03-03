@@ -168,6 +168,15 @@ Token Lexer::errorToken(const std::string& message, const std::string& near) con
 }
 
 void Lexer::skipWhitespace() {
+    // Special-case: ignore a Unix shebang at start of file
+    // Many scripts begin with "#!./lua" which is not valid Lua syntax,
+    // so we treat the first line as a comment if it starts with '#!'.
+    if (current_ == 0 && peek() == '#' && peekNext() == '!') {
+        // consume until end of line or EOF
+        while (!isAtEnd() && peek() != '\n') advance();
+        // newline will be handled below and bump line count
+    }
+
     while (true) {
         char c = peek();
         switch (c) {
