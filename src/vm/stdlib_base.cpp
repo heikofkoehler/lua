@@ -103,22 +103,33 @@ bool native_setmetatable(VM* vm, int argCount) {
         return false;
     }
     Value metatable = vm->peek(0);
-    Value table = vm->peek(1);
+    Value tableValue = vm->peek(1);
 
-    if (!table.isTable()) {
+    if (!tableValue.isTable()) {
         vm->runtimeError("bad argument #1 to 'setmetatable' (table expected)");
         return false;
     }
 
-    if (!metatable.isTable() && !metatable.isNil()) {
-        vm->runtimeError("bad argument #2 to 'setmetatable' (table or nil expected)");
+    if (!metatable.isNil() && !metatable.isTable()) {
+        vm->runtimeError("bad argument #2 to 'setmetatable' (nil or table expected)");
         return false;
     }
 
-    table.asTableObj()->setMetatable(metatable);
+    TableObject* table = tableValue.asTableObj();
+    
+    // Check if current metatable has __metatable field
+    Value currentMt = table->getMetatable();
+    if (!currentMt.isNil() && currentMt.isTable()) {
+        if (!currentMt.asTableObj()->get("__metatable").isNil()) {
+            vm->runtimeError("cannot change a protected metatable");
+            return false;
+        }
+    }
 
+    table->setMetatable(metatable);
+    
     for(int i=0; i<argCount; i++) vm->pop();
-    vm->push(table);
+    vm->push(tableValue);
     return true;
 }
 
@@ -128,15 +139,25 @@ bool native_getmetatable(VM* vm, int argCount) {
         return false;
     }
     Value obj = vm->peek(0);
-    Value mt = Value::nil();
+    for(int i=0; i<argCount; i++) vm->pop();
 
+    Value mt = Value::nil();
     if (obj.isTable()) {
         mt = obj.asTableObj()->getMetatable();
+    } else if (obj.isUserdata()) {
+        mt = obj.asUserdataObj()->metatable();
     } else {
         mt = vm->getTypeMetatable(obj.type());
     }
 
-    vm->pop();
+    if (!mt.isNil() && mt.isTable()) {
+        Value protected_mt = mt.asTableObj()->get("__metatable");
+        if (!protected_mt.isNil()) {
+            vm->push(protected_mt);
+            return true;
+        }
+    }
+
     vm->push(mt);
     return true;
 }
@@ -377,6 +398,30 @@ bool native_rawset(VM* vm, int argCount) {
     table.asTableObj()->set(key, val);
     vm->pop(); vm->pop(); vm->pop();
     vm->push(table);
+    return true;
+}
+
+bool native_rawequal(VM* vm, int argCount) {
+    if (argCount != 2) { vm->runtimeError("rawequal expects 2 arguments"); return false; }
+    Value b = vm->peek(0);
+    Value a = vm->peek(1);
+    for(int i=0; i<argCount; i++) vm->pop();
+    vm->push(Value::boolean(a.equals(b)));
+    return true;
+}
+
+bool native_rawlen(VM* vm, int argCount) {
+    if (argCount != 1) { vm->runtimeError("rawlen expects 1 argument"); return false; }
+    Value a = vm->peek(0);
+    for(int i=0; i<argCount; i++) vm->pop();
+    if (a.isString()) {
+        vm->push(Value::number(static_cast<double>(vm->getStringValue(a).length())));
+    } else if (a.isTable()) {
+        vm->push(Value::number(static_cast<double>(a.asTableObj()->length())));
+    } else {
+        vm->runtimeError("rawlen expects string or table");
+        return false;
+    }
     return true;
 }
 
@@ -756,6 +801,12 @@ void registerBaseLibrary(VM* vm) {
 
     size_t rawsetIdx = vm->registerNativeFunction("rawset", native_rawset);
     vm->setGlobal("rawset", Value::nativeFunction(rawsetIdx));
+
+    size_t rawequalIdx = vm->registerNativeFunction("rawequal", native_rawequal);
+    vm->setGlobal("rawequal", Value::nativeFunction(rawequalIdx));
+
+    size_t rawlenIdx = vm->registerNativeFunction("rawlen", native_rawlen);
+    vm->setGlobal("rawlen", Value::nativeFunction(rawlenIdx));
 
     size_t warnIdx = vm->registerNativeFunction("warn", native_warn);
     vm->setGlobal("warn", Value::nativeFunction(warnIdx));

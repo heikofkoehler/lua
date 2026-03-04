@@ -300,10 +300,28 @@ bool native_debug_getregistry(VM* vm, int argCount) {
     return true;
 }
 
+bool native_debug_getmetatable(VM* vm, int argCount) {
+    if (argCount != 1) { vm->runtimeError("debug.getmetatable expects 1 argument"); return false; }
+    Value obj = vm->peek(0);
+    for(int i=0; i<argCount; i++) vm->pop();
+
+    Value mt = Value::nil();
+    if (obj.isTable()) {
+        mt = obj.asTableObj()->getMetatable();
+    } else if (obj.isUserdata()) {
+        mt = obj.asUserdataObj()->metatable();
+    } else {
+        mt = vm->getTypeMetatable(obj.type());
+    }
+    vm->push(mt);
+    return true;
+}
+
 } // anonymous namespace
 
 void registerDebugLibrary(VM* vm, TableObject* debugTable) {
     vm->addNativeToTable(debugTable, "sethook", native_debug_sethook);
+    vm->addNativeToTable(debugTable, "getmetatable", native_debug_getmetatable);
     vm->addNativeToTable(debugTable, "setmetatable", native_debug_setmetatable);
     vm->addNativeToTable(debugTable, "getlocal", native_debug_getlocal);
     vm->addNativeToTable(debugTable, "setlocal", native_debug_setlocal);
