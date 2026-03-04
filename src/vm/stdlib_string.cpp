@@ -628,76 +628,87 @@ bool native_string_format(VM* vm, int argCount) {
     int argIndex = 1;
     
     for (size_t i = 0; i < fmt.length(); i++) {
-        if (fmt[i] == '%' && i + 1 < fmt.length()) {
-            i++;
-            char spec = fmt[i];
-            if (spec == '%') {
+        if (fmt[i] == '%') {
+            if (i + 1 < fmt.length() && fmt[i+1] == '%') {
                 result += '%';
-            } else {
-                if (argIndex >= argCount) {
-                    vm->runtimeError("bad argument to 'format' (no value)");
-                    return false;
-                }
-                Value arg = vm->peek(argCount - 1 - argIndex);
-                if (spec == 's') {
-                    result += vm->getStringValue(arg);
-                } else if (spec == 'q') {
-                    std::string s = vm->getStringValue(arg);
-                    result += '"';
-                    for (char c : s) {
-                        if (c == '"' || c == '\\' || c == '\n') {
-                            result += '\\';
-                            if (c == '\n') result += 'n';
-                            else result += c;
-                        } else if (iscntrl((unsigned char)c)) {
-                            char buf[5];
-                            snprintf(buf, sizeof(buf), "\\%03d", (unsigned char)c);
-                            result += buf;
-                        } else {
-                            result += c;
-                        }
-                    }
-                    result += '"';
-                } else if (spec == 'd' || spec == 'i' || spec == 'x' || spec == 'X') {
-                    if (!arg.isNumber()) {
-                        vm->runtimeError("bad argument to 'format' (number expected)");
-                        return false;
-                    }
-                    if (spec == 'd' || spec == 'i') {
-                        result += std::to_string(arg.asInteger());
-                    } else {
-                        char buf[32];
-                        snprintf(buf, sizeof(buf), spec == 'x' ? "%llx" : "%llX", (unsigned long long)arg.asInteger());
-                        result += buf;
-                    }
-                } else if (spec == 'f') {
-                    if (!arg.isNumber()) {
-                        vm->runtimeError("bad argument to 'format' (number expected)");
-                        return false;
-                    }
-                    char buf[64];
-                    snprintf(buf, sizeof(buf), "%f", arg.asNumber());
-                    result += buf;
-                } else if (spec == 'p') {
-                    char buf[32];
-                    if (arg.isObj()) {
-                        snprintf(buf, sizeof(buf), "%p", (void*)arg.asObj());
-                    } else {
-                        snprintf(buf, sizeof(buf), "0x%llx", (unsigned long long)arg.asInteger());
-                    }
-                    result += buf;
-                } else if (spec == 'c') {
-                    if (!arg.isNumber()) {
-                        vm->runtimeError("bad argument to 'format' (number expected)");
-                        return false;
-                    }
-                    result += static_cast<char>(arg.asInteger());
-                } else {
-                    result += '%';
-                    result += spec; // Unhandled format specifier
-                }
-                argIndex++;
+                i++;
+                continue;
             }
+
+            // Parse format specifier: %[flags][width][.precision]specifier
+            size_t start = i;
+            i++;
+            // Flags
+            while (i < fmt.length() && strchr("-+ #0", fmt[i])) i++;
+            // Width
+            while (i < fmt.length() && isdigit((unsigned char)fmt[i])) i++;
+            // Precision
+            if (i < fmt.length() && fmt[i] == '.') {
+                i++;
+                while (i < fmt.length() && isdigit((unsigned char)fmt[i])) i++;
+            }
+            
+            if (i >= fmt.length()) {
+                vm->runtimeError("invalid format string");
+                return false;
+            }
+
+            char spec = fmt[i];
+            std::string sub_fmt = fmt.substr(start, i - start + 1);
+            
+            if (argIndex >= argCount) {
+                vm->runtimeError("bad argument to 'format' (no value)");
+                return false;
+            }
+            Value arg = vm->peek(argCount - 1 - argIndex);
+            char buf[1024]; // Large enough for most formatting
+
+            if (spec == 's') {
+                std::string s = vm->getStringValue(arg);
+                snprintf(buf, sizeof(buf), sub_fmt.c_str(), s.c_str());
+                result += buf;
+            } else if (spec == 'q') {
+                std::string s = vm->getStringValue(arg);
+                result += '"';
+                for (char c : s) {
+                    if (c == '"' || c == '\\' || c == '\n') {
+                        result += '\\';
+                        if (c == '\n') result += 'n';
+                        else result += c;
+                    } else if (iscntrl((unsigned char)c)) {
+                        char b2[5];
+                        snprintf(b2, sizeof(b2), "\\%03d", (unsigned char)c);
+                        result += b2;
+                    } else {
+                        result += c;
+                    }
+                }
+                result += '"';
+            } else if (spec == 'd' || spec == 'i' || spec == 'o' || spec == 'u' || spec == 'x' || spec == 'X') {
+                if (!arg.isNumber()) { vm->runtimeError("number expected for %" + std::string(1, spec)); return false; }
+                // Use ll for 64-bit integers. We need to inject 'll' before the specifier
+                std::string fixed_fmt = sub_fmt.substr(0, sub_fmt.length() - 1) + "ll" + spec;
+                snprintf(buf, sizeof(buf), fixed_fmt.c_str(), (long long)arg.asInteger());
+                result += buf;
+            } else if (spec == 'f' || spec == 'e' || spec == 'E' || spec == 'g' || spec == 'G' || spec == 'a' || spec == 'A') {
+                if (!arg.isNumber()) { vm->runtimeError("number expected for %" + std::string(1, spec)); return false; }
+                snprintf(buf, sizeof(buf), sub_fmt.c_str(), arg.asNumber());
+                result += buf;
+            } else if (spec == 'c') {
+                if (!arg.isNumber()) { vm->runtimeError("number expected for %c"); return false; }
+                snprintf(buf, sizeof(buf), sub_fmt.c_str(), (int)arg.asInteger());
+                result += buf;
+            } else if (spec == 'p') {
+                if (arg.isObj()) {
+                    snprintf(buf, sizeof(buf), sub_fmt.c_str(), (void*)arg.asObj());
+                } else {
+                    snprintf(buf, sizeof(buf), "0x%llx", (unsigned long long)arg.asInteger());
+                }
+                result += buf;
+            } else {
+                result += sub_fmt;
+            }
+            argIndex++;
         } else {
             result += fmt[i];
         }
