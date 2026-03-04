@@ -352,6 +352,13 @@ void VM::initStandardLibrary() {
     setGlobal("table", Value::table(tableTable));
     registerModule("table", tableTable);
 
+    // Create 'utf8' table
+    TableObject* utf8Table = createTable();
+    extern void registerUTF8Library(VM* vm, TableObject* utf8Table);
+    registerUTF8Library(this, utf8Table);
+    setGlobal("utf8", Value::table(utf8Table));
+    registerModule("utf8", utf8Table);
+
     // Create 'os' table
     TableObject* osTable = createTable();
     extern void registerOSLibrary(VM* vm, TableObject* osTable);

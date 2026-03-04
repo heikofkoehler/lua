@@ -68,6 +68,7 @@ set(SOURCES
     src/vm/stdlib_socket.cpp
     src/vm/stdlib_coroutine.cpp
     src/vm/stdlib_debug.cpp
+    src/vm/stdlib_utf8.cpp
     src/value/socket.cpp
 )
 
