@@ -535,17 +535,52 @@ std::unique_ptr<StmtNode> Parser::forStatement() {
 std::unique_ptr<StmtNode> Parser::functionDeclaration() {
     int line = previous_.line;
 
-    // Parse function name
-    if (!check(TokenType::IDENTIFIER)) {
+    // Parse function name: ID {'.' ID} [':' ID]
+    if (!match(TokenType::IDENTIFIER)) {
         errorAtCurrent("Expected function name");
         return nullptr;
     }
-    std::string name = current_.lexeme;
-    advance();
+    std::string field = previous_.lexeme;
+    std::unique_ptr<ExprNode> table = nullptr;
+
+    while (match(TokenType::DOT)) {
+        if (!table) {
+            table = std::make_unique<VariableExprNode>(field, line);
+        } else {
+            table = std::make_unique<IndexExprNode>(std::move(table),
+                        std::make_unique<StringLiteralNode>(field, line), line);
+        }
+        consume(TokenType::IDENTIFIER, "Expected field name after '.'");
+        field = previous_.lexeme;
+    }
+
+    bool isMethod = false;
+    if (match(TokenType::COLON)) {
+        if (!table) {
+            table = std::make_unique<VariableExprNode>(field, line);
+        } else {
+            table = std::make_unique<IndexExprNode>(std::move(table),
+                        std::make_unique<StringLiteralNode>(field, line), line);
+        }
+        consume(TokenType::IDENTIFIER, "Expected method name after ':'");
+        field = previous_.lexeme;
+        isMethod = true;
+    }
 
     FunctionBody fb = parseFunctionBody("after function name");
+    if (isMethod) {
+        fb.params.insert(fb.params.begin(), "self");
+    }
 
-    return std::make_unique<FunctionDeclNode>(name, std::move(fb.params), std::move(fb.body), fb.hasVarargs, line);
+    auto funcExpr = std::make_unique<FunctionExprNode>(std::move(fb.params), std::move(fb.body), fb.hasVarargs, line);
+
+    if (table) {
+        return std::make_unique<IndexAssignmentStmtNode>(std::move(table),
+                    std::make_unique<StringLiteralNode>(field, line),
+                    std::move(funcExpr), line);
+    } else {
+        return std::make_unique<AssignmentStmtNode>(field, std::move(funcExpr), line);
+    }
 }
 
 Parser::FunctionBody Parser::parseFunctionBody(const std::string& context) {
