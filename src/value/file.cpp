@@ -8,19 +8,25 @@ FileObject::FileObject(const std::string& filename, const std::string& mode)
     ownedStream_ = std::make_unique<std::fstream>();
     stream_ = ownedStream_.get();
 
-    // Parse mode and open file
-    if (mode == "r") {
-        ownedStream_->open(filename, std::ios::in);
-    } else if (mode == "w") {
-        ownedStream_->open(filename, std::ios::out | std::ios::trunc);
-    } else if (mode == "a") {
-        ownedStream_->open(filename, std::ios::out | std::ios::app);
-    } else if (mode == "r+") {
-        ownedStream_->open(filename, std::ios::in | std::ios::out);
-    } else if (mode == "w+") {
-        ownedStream_->open(filename, std::ios::in | std::ios::out | std::ios::trunc);
-    } else if (mode == "a+") {
-        ownedStream_->open(filename, std::ios::in | std::ios::out | std::ios::app);
+    std::ios_base::openmode openmode = (std::ios_base::openmode)0;
+    
+    if (mode.find('b') != std::string::npos) {
+        openmode |= std::ios::binary;
+    }
+
+    if (mode.find('r') != std::string::npos) {
+        openmode |= std::ios::in;
+        if (mode.find('+') != std::string::npos) openmode |= std::ios::out;
+    } else if (mode.find('w') != std::string::npos) {
+        openmode |= std::ios::out | std::ios::trunc;
+        if (mode.find('+') != std::string::npos) openmode |= std::ios::in;
+    } else if (mode.find('a') != std::string::npos) {
+        openmode |= std::ios::out | std::ios::app;
+        if (mode.find('+') != std::string::npos) openmode |= std::ios::in;
+    }
+
+    if (openmode != 0) {
+        ownedStream_->open(filename, openmode);
     }
 
     isOpen_ = ownedStream_->is_open();

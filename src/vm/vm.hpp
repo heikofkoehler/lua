@@ -138,11 +138,19 @@ public:
         SWEEP,
     };
 
+    enum class GCMode {
+        INCREMENTAL,
+        GENERATIONAL,
+    };
+
     size_t bytesAllocated() const { return bytesAllocated_; }
     void setMemoryLimit(size_t limit) { memoryLimit_ = limit; }
     void collectGarbage();
     void gcStep();
     void checkGC(size_t additionalBytes = 0);
+
+    GCMode gcMode() const { return gcMode_; }
+    void setGCMode(GCMode mode) { gcMode_ = mode; }
     void markRoots();
     void markValue(const Value& value);
     void markObject(GCObject* object);
@@ -236,6 +244,7 @@ private:
 
     // Garbage collection
     GCState gcState_;             // Current incremental GC state
+    GCMode gcMode_ = GCMode::INCREMENTAL; // Current GC mode
     GCObject* gcObjects_;         // Linked list of all GC objects
     std::vector<GCObject*> grayStack_; // Worklist for marking
     size_t bytesAllocated_;       // Total bytes allocated

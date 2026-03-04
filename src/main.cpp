@@ -7,6 +7,7 @@
 #include <fstream>
 #include <sstream>
 #include <string>
+#include <unistd.h>
 
 // Read file into string
 std::string readFile(const std::string& path) {
@@ -27,7 +28,6 @@ bool run(const std::string& source, VM& vm) {
         Lexer lexer(source);
 
         // Parsing
-        printf("DEBUG: Parsing...\n");
         Parser parser(lexer);
         auto program = parser.parse();
 
@@ -37,7 +37,6 @@ bool run(const std::string& source, VM& vm) {
         }
 
         // Code generation
-        printf("DEBUG: Generating bytecode...\n");
         CodeGenerator codegen;
         auto function = codegen.generate(program.get());
 
@@ -47,10 +46,9 @@ bool run(const std::string& source, VM& vm) {
         }
 
         // Execution
-        printf("DEBUG: Executing...\n");
         return vm.run(*function);
-
     } catch (const CompileError& e) {
+
         std::cerr << e.what() << std::endl;
         return false;
     } catch (const RuntimeError& e) {
@@ -88,7 +86,7 @@ int compileFile(const std::string& inputPath, const std::string& outputPath) {
 }
 
 // Run pre-compiled bytecode
-int runBytecode(const std::string& path, bool verbose) {
+int runBytecode(const std::string& path, bool verbose, int argc, char* argv[], int scriptIndex) {
     try {
         std::ifstream is(path, std::ios::binary);
         if (!is.is_open()) {
@@ -99,6 +97,15 @@ int runBytecode(const std::string& path, bool verbose) {
         auto function = FunctionObject::deserialize(is);
         VM vm;
         vm.setTraceExecution(verbose);
+        vm.initStandardLibrary();
+
+        // Set up the 'arg' table
+        TableObject* argTable = vm.createTable();
+        for (int i = 0; i < argc; i++) {
+            argTable->set(Value::number(i - scriptIndex), Value::runtimeString(vm.internString(argv[i])));
+        }
+        vm.setGlobal("arg", Value::table(argTable));
+
         if (!vm.run(*function)) {
             return 1;
         }
@@ -110,11 +117,19 @@ int runBytecode(const std::string& path, bool verbose) {
 }
 
 // Run file
-int runFile(const std::string& path, bool verbose) {
+int runFile(const std::string& path, bool verbose, int argc, char* argv[], int scriptIndex) {
     try {
         std::string source = readFile(path);
         VM vm;
         vm.setTraceExecution(verbose);
+        vm.initStandardLibrary();
+
+        // Set up the 'arg' table
+        TableObject* argTable = vm.createTable();
+        for (int i = 0; i < argc; i++) {
+            argTable->set(Value::number(i - scriptIndex), Value::runtimeString(vm.internString(argv[i])));
+        }
+        vm.setGlobal("arg", Value::table(argTable));
 
         if (!run(source, vm)) {
             return 1;
@@ -181,6 +196,7 @@ int main(int argc, char* argv[]) {
     bool compileOnly = false;
     bool isBytecode = false;
     std::string scriptPath = "";
+    int scriptIndex = 0;
     std::string outputPath = "";
     bool stopFlags = false;
 
@@ -188,6 +204,10 @@ int main(int argc, char* argv[]) {
         std::string arg = argv[i];
         if (!stopFlags && (arg == "-v" || arg == "--verbose")) {
             verbose = true;
+            if (argc == 2) {
+                std::cout << "Lua 5.5.0 (MVP)" << std::endl;
+                return 0;
+            }
         } else if (!stopFlags && (arg == "-c" || arg == "--compile")) {
             compileOnly = true;
         } else if (!stopFlags && (arg == "-b" || arg == "--bytecode")) {
@@ -204,6 +224,15 @@ int main(int argc, char* argv[]) {
             return 0;
         } else if (!stopFlags && arg == "--") {
             stopFlags = true;
+        } else if (!stopFlags && arg == "-") {
+            if (scriptPath.empty()) {
+                scriptPath = "-";
+                scriptIndex = i;
+                stopFlags = true;
+            } else {
+                std::cerr << "Too many arguments" << std::endl;
+                return 1;
+            }
         } else if (!stopFlags && arg[0] == '-') {
             std::cerr << "Unknown option: " << arg << std::endl;
             printUsage(argv[0]);
@@ -211,10 +240,9 @@ int main(int argc, char* argv[]) {
         } else {
             if (scriptPath.empty()) {
                 scriptPath = arg;
-            } else {
-                std::cerr << "Too many arguments" << std::endl;
-                printUsage(argv[0]);
-                return 1;
+                scriptIndex = i;
+                // Once we find the script, the remaining arguments are for the script
+                stopFlags = true;
             }
         }
     }
@@ -224,21 +252,54 @@ int main(int argc, char* argv[]) {
             std::cerr << "Error: No script specified for compilation" << std::endl;
             return 1;
         }
-        // No script - start REPL
-        repl(verbose);
-        return 0;
+        
+        if (isatty(STDIN_FILENO)) {
+            // No script - start REPL
+            repl(verbose);
+            return 0;
+        } else {
+            // Read from stdin
+            std::string source;
+            std::string line;
+            while (std::getline(std::cin, line)) {
+                source += line + "\n";
+            }
+            VM vm;
+            vm.setTraceExecution(verbose);
+            vm.initStandardLibrary();
+            return run(source, vm) ? 0 : 1;
+        }
     } else {
-        if (compileOnly) {
+        if (scriptPath == "-") {
+            // Read from stdin
+            std::string source;
+            std::string line;
+            while (std::getline(std::cin, line)) {
+                source += line + "\n";
+            }
+            VM vm;
+            vm.setTraceExecution(verbose);
+            vm.initStandardLibrary();
+
+            // Set up the 'arg' table
+            TableObject* argTable = vm.createTable();
+            for (int i = 0; i < argc; i++) {
+                argTable->set(Value::number(i - scriptIndex), Value::runtimeString(vm.internString(argv[i])));
+            }
+            vm.setGlobal("arg", Value::table(argTable));
+
+            return run(source, vm) ? 0 : 1;
+        } else if (compileOnly) {
             if (outputPath.empty()) outputPath = "out.luac";
             return compileFile(scriptPath, outputPath);
         } else if (isBytecode) {
-            return runBytecode(scriptPath, verbose);
+            return runBytecode(scriptPath, verbose, argc, argv, scriptIndex);
         } else {
             // Normal source execution, but if outputPath is set, compile it first too
             if (!outputPath.empty()) {
                 compileFile(scriptPath, outputPath);
             }
-            return runFile(scriptPath, verbose);
+            return runFile(scriptPath, verbose, argc, argv, scriptIndex);
         }
     }
 }

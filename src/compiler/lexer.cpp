@@ -28,7 +28,15 @@ const std::unordered_map<std::string, TokenType> Lexer::keywords_ = {
 };
 
 Lexer::Lexer(const std::string& source)
-    : source_(source), start_(0), current_(0), line_(1) {}
+    : source_(source), start_(0), current_(0), line_(1) {
+    // Skip shebang or first-line comment starting with #
+    if (!source_.empty() && source_[0] == '#') {
+        while (current_ < source_.length() && source_[current_] != '\n') {
+            current_++;
+        }
+        // Don't advance start_ yet, it will be done in scanToken
+    }
+}
 
 Token Lexer::scanToken() {
     skipWhitespace();

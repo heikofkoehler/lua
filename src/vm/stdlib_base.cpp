@@ -21,29 +21,76 @@
 namespace {
 
 bool native_collectgarbage(VM* vm, int argCount) {
+    std::string opt = "collect";
     if (argCount >= 1) {
         Value var = vm->peek(argCount - 1);
         if (var.isString()) {
-            std::string opt = vm->getStringValue(var);
-            if (opt == "count") {
-                double count = static_cast<double>(vm->bytesAllocated()) / 1024.0;
-                for(int i=0; i<argCount; i++) vm->pop();
-                vm->push(Value::number(count));
-                return true;
-            } else if (opt == "setmemorylimit") {
-                if (argCount < 2) {
-                    vm->runtimeError("collectgarbage('setmemorylimit') expects a limit in bytes");
-                    return false;
-                }
-                double limit = vm->peek(0).asNumber();
-                vm->setMemoryLimit(static_cast<size_t>(limit));
-                for(int i=0; i<argCount; i++) vm->pop();
-                vm->push(Value::nil());
-                return true;
-            }
+            opt = vm->getStringValue(var);
         }
     }
 
+    if (opt == "count") {
+        double count = static_cast<double>(vm->bytesAllocated()) / 1024.0;
+        for(int i=0; i<argCount; i++) vm->pop();
+        vm->push(Value::number(count));
+        return true;
+    } else if (opt == "isrunning") {
+        for(int i=0; i<argCount; i++) vm->pop();
+        vm->push(Value::boolean(true));
+        return true;
+    } else if (opt == "incremental") {
+        VM::GCMode old = vm->gcMode();
+        vm->setGCMode(VM::GCMode::INCREMENTAL);
+        for(int i=0; i<argCount; i++) vm->pop();
+        vm->push(Value::runtimeString(vm->internString(old == VM::GCMode::INCREMENTAL ? "incremental" : "generational")));
+        return true;
+    } else if (opt == "generational") {
+        VM::GCMode old = vm->gcMode();
+        vm->setGCMode(VM::GCMode::GENERATIONAL);
+        for(int i=0; i<argCount; i++) vm->pop();
+        vm->push(Value::runtimeString(vm->internString(old == VM::GCMode::INCREMENTAL ? "incremental" : "generational")));
+        return true;
+    } else if (opt == "step") {
+        vm->collectGarbage();
+        for(int i=0; i<argCount; i++) vm->pop();
+        vm->push(Value::boolean(true));
+        return true;
+    } else if (opt == "stop" || opt == "restart") {
+        // Stubs for these commands
+        for(int i=0; i<argCount; i++) vm->pop();
+        vm->push(Value::boolean(true));
+        return true;
+    }
+ else if (opt == "param") {
+        // collectgarbage("param", name, [newvalue])
+        if (argCount >= 2) {
+            std::string param = vm->getStringValue(vm->peek(argCount - 2));
+            if (argCount >= 3) {
+                // Setting a value (stub)
+                double val = vm->peek(0).asNumber();
+                for(int i=0; i<argCount; i++) vm->pop();
+                vm->push(Value::number(val)); // Return new value
+                return true;
+            } else {
+                // Getting a value (stub)
+                for(int i=0; i<argCount; i++) vm->pop();
+                vm->push(Value::number(100)); // Return a default value
+                return true;
+            }
+        }
+    } else if (opt == "setmemorylimit") {
+        if (argCount < 2) {
+            vm->runtimeError("collectgarbage('setmemorylimit') expects a limit in bytes");
+            return false;
+        }
+        double limit = vm->peek(0).asNumber();
+        vm->setMemoryLimit(static_cast<size_t>(limit));
+        for(int i=0; i<argCount; i++) vm->pop();
+        vm->push(Value::nil());
+        return true;
+    }
+
+    // Default: full collect
     vm->collectGarbage();
     for(int i=0; i<argCount; i++) vm->pop();
     vm->push(Value::nil());

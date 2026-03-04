@@ -3,6 +3,7 @@
 #include "value/table.hpp"
 #include "value/string.hpp"
 #include <iostream>
+#include <sstream>
 
 namespace {
 
@@ -65,31 +66,51 @@ bool native_io_write(VM* vm, int argCount) {
 
 bool native_io_read(VM* vm, int argCount) {
     FileObject* file = nullptr;
+    int argStart = 0;
     if (argCount > 0) {
         Value firstArg = vm->peek(argCount - 1);
         if (firstArg.isFile()) {
             file = firstArg.asFileObj();
+            argStart = 1;
         }
     }
     
-    std::string line;
-    bool hasLine = false;
+    std::string fmt = "l";
+    if (argCount > argStart) {
+        Value fmtVal = vm->peek(argCount - 1 - argStart);
+        if (fmtVal.isString()) fmt = vm->getStringValue(fmtVal);
+    }
+
+    std::string result;
+    bool hasResult = false;
     
-    if (!file) {
-        if (std::getline(std::cin, line)) {
-            hasLine = true;
+    if (fmt == "a" || fmt == "*a") {
+        if (!file) {
+            std::stringstream buffer;
+            buffer << std::cin.rdbuf();
+            result = buffer.str();
+        } else {
+            result = file->readAll();
         }
+        hasResult = true; // Reading all always returns a string, even if empty
     } else {
-        line = file->readLine();
-        if (!(line.empty() && file->isEOF())) {
-            hasLine = true;
+        // Default: read line
+        if (!file) {
+            if (std::getline(std::cin, result)) {
+                hasResult = true;
+            }
+        } else {
+            result = file->readLine();
+            if (!(result.empty() && file->isEOF())) {
+                hasResult = true;
+            }
         }
     }
     
     for(int i=0; i<argCount; i++) vm->pop();
 
-    if (hasLine) {
-        vm->push(Value::runtimeString(vm->internString(line)));
+    if (hasResult) {
+        vm->push(Value::runtimeString(vm->internString(result)));
     } else {
         vm->push(Value::nil());
     }

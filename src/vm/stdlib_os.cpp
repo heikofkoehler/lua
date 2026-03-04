@@ -199,6 +199,90 @@ bool native_os_setlocale(VM* vm, int argCount) {
     return true;
 }
 
+bool native_os_execute(VM* vm, int argCount) {
+    if (argCount == 0) {
+        int res = std::system(nullptr);
+        vm->push(Value::boolean(res != 0));
+        return true;
+    }
+    
+    std::string command = vm->getStringValue(vm->peek(argCount - 1));
+    int res = std::system(command.c_str());
+    
+    for (int i = 0; i < argCount; i++) vm->pop();
+    
+    if (res == -1) {
+        vm->push(Value::nil());
+        vm->push(Value::runtimeString(vm->internString("system() failed")));
+        vm->push(Value::number(-1));
+    } else {
+        vm->push(Value::boolean(true));
+        vm->push(Value::runtimeString(vm->internString("exit")));
+        vm->push(Value::number(res));
+    }
+    return true;
+}
+
+bool native_os_tmpname(VM* vm, int argCount) {
+    // We'll use a simple implementation for now.
+    // In a real VM, we should use a more secure way.
+    static int counter = 0;
+    std::string tmpName = "/tmp/lua_tmp_" + std::to_string(std::time(nullptr)) + "_" + std::to_string(counter++);
+    
+    for(int i=0; i<argCount; i++) vm->pop();
+    vm->push(Value::runtimeString(vm->internString(tmpName)));
+    return true;
+}
+
+bool native_os_date(VM* vm, int argCount) {
+    std::string format = "%c";
+    time_t t = std::time(nullptr);
+    
+    if (argCount >= 1) {
+        Value v = vm->peek(argCount - 1);
+        if (v.isString()) format = vm->getStringValue(v);
+        if (argCount >= 2) {
+            t = static_cast<time_t>(vm->peek(argCount - 2).asNumber());
+        }
+    }
+    
+    struct tm* tms;
+    if (!format.empty() && format[0] == '!') {
+        tms = std::gmtime(&t);
+        format = format.substr(1);
+    } else {
+        tms = std::localtime(&t);
+    }
+    
+    if (format == "*t") {
+        TableObject* tbl = vm->createTable();
+        tbl->set("year", Value::number(tms->tm_year + 1900));
+        tbl->set("month", Value::number(tms->tm_mon + 1));
+        tbl->set("day", Value::number(tms->tm_mday));
+        tbl->set("hour", Value::number(tms->tm_hour));
+        tbl->set("min", Value::number(tms->tm_min));
+        tbl->set("sec", Value::number(tms->tm_sec));
+        tbl->set("wday", Value::number(tms->tm_wday + 1));
+        tbl->set("yday", Value::number(tms->tm_yday + 1));
+        tbl->set("isdst", Value::boolean(tms->tm_isdst > 0));
+        
+        for(int i=0; i<argCount; i++) vm->pop();
+        vm->push(Value::table(tbl));
+        return true;
+    }
+    
+    char buffer[256];
+    if (std::strftime(buffer, sizeof(buffer), format.c_str(), tms)) {
+        for(int i=0; i<argCount; i++) vm->pop();
+        vm->push(Value::runtimeString(vm->internString(buffer)));
+        return true;
+    }
+    
+    for(int i=0; i<argCount; i++) vm->pop();
+    vm->push(Value::nil());
+    return true;
+}
+
 } // anonymous namespace
 
 void registerOSLibrary(VM* vm, TableObject* osTable) {
@@ -210,4 +294,7 @@ void registerOSLibrary(VM* vm, TableObject* osTable) {
     vm->addNativeToTable(osTable, "remove", native_os_remove);
     vm->addNativeToTable(osTable, "rename", native_os_rename);
     vm->addNativeToTable(osTable, "setlocale", native_os_setlocale);
+    vm->addNativeToTable(osTable, "execute", native_os_execute);
+    vm->addNativeToTable(osTable, "tmpname", native_os_tmpname);
+    vm->addNativeToTable(osTable, "date", native_os_date);
 }
