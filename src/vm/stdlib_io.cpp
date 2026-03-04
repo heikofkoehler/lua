@@ -47,14 +47,25 @@ bool native_io_write(VM* vm, int argCount) {
     }
     
     if (!file) {
-        for (int i = startArg; i < argCount; i++) {
-            Value val = vm->peek(argCount - 1 - i);
-            std::cout << vm->getStringValue(val);
+        Value stdoutVal = vm->getGlobal("io");
+        if (stdoutVal.isTable()) {
+            Value out = stdoutVal.asTableObj()->get("stdout");
+            if (out.isFile()) {
+                file = out.asFileObj();
+            }
         }
-    } else {
+    }
+
+    if (file) {
         for (int i = startArg; i < argCount; i++) {
             Value val = vm->peek(argCount - 1 - i);
             file->write(vm->getStringValue(val));
+        }
+    } else {
+        // Fallback to std::cout if io.stdout is not available
+        for (int i = startArg; i < argCount; i++) {
+            Value val = vm->peek(argCount - 1 - i);
+            std::cout << vm->getStringValue(val);
         }
     }
     

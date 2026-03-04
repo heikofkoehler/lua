@@ -203,7 +203,7 @@ bool native_tonumber(VM* vm, int argCount) {
 bool native_print(VM* vm, int argCount) {
     for (int i = 0; i < argCount; i++) {
         Value val = vm->peek(argCount - 1 - i);
-        std::cout << val;
+        std::cout << val.toString();
         if (i < argCount - 1) std::cout << "\t";
     }
     std::cout << std::endl;
@@ -318,25 +318,30 @@ bool native_ipairs(VM* vm, int argCount) {
 }
 
 bool native_error(VM* vm, int argCount) {
-    if (argCount < 1) {
-        vm->runtimeError("nil");
-    } else {
-        vm->runtimeError(vm->peek(argCount - 1).toString());
+    std::string msg = "nil";
+    int level = 1;
+    if (argCount >= 1) {
+        msg = vm->peek(argCount - 1).toString();
+        if (argCount >= 2) {
+            level = static_cast<int>(vm->peek(argCount - 2).asNumber());
+        }
     }
+    vm->runtimeError(msg, level);
     return false;
 }
 
 bool native_assert(VM* vm, int argCount) {
     if (argCount < 1) {
-        vm->runtimeError("bad argument #1 to 'assert' (value expected)");
+        vm->runtimeError("bad argument #1 to 'assert' (value expected)", 1);
         return false;
     }
     Value cond = vm->peek(argCount - 1);
     if (cond.isFalsey()) {
         std::string msg = (argCount >= 2) ? vm->peek(argCount - 2).toString() : "assertion failed!";
-        vm->runtimeError(msg);
+        vm->runtimeError(msg, 1);
         return false;
     }
+    // Success: return all arguments
     vm->currentCoroutine()->lastResultCount = argCount;
     return true;
 }
@@ -393,6 +398,7 @@ bool native_loadfile(VM* vm, int argCount) {
     }
     std::string path = vm->getStringValue(vm->peek(argCount - 1));
     for(int i=0; i<argCount; i++) vm->pop();
+    std::string sourceName = "@" + path;
 
     std::ifstream file(path, std::ios::binary);
     if (!file.is_open()) {
@@ -414,6 +420,7 @@ bool native_loadfile(VM* vm, int argCount) {
         }
         FunctionObject* funcPtr = function.get();
         vm->registerFunction(function.release());
+        vm->setSourceName(sourceName);
         ClosureObject* closure = vm->createClosure(funcPtr);
         vm->setupRootUpvalues(closure);
         vm->push(Value::closure(closure));
@@ -429,6 +436,7 @@ bool native_loadfile(VM* vm, int argCount) {
 
     try {
         Lexer lexer(source);
+        lexer.setSourceName(sourceName);
         Parser parser(lexer);
         auto program = parser.parse();
         if (!program) {
@@ -439,7 +447,7 @@ bool native_loadfile(VM* vm, int argCount) {
         }
 
         CodeGenerator codegen;
-        auto function = codegen.generate(program.get(), path);
+        auto function = codegen.generate(program.get(), "@" + path);
         if (!function) {
             vm->push(Value::nil());
             StringObject* errStr = vm->internString("Code generation error in " + path);
@@ -449,6 +457,7 @@ bool native_loadfile(VM* vm, int argCount) {
 
         FunctionObject* funcPtr = function.get();
         vm->registerFunction(function.release());
+        vm->setSourceName(sourceName);
         ClosureObject* closure = vm->createClosure(funcPtr);
         vm->setupRootUpvalues(closure);
         vm->push(Value::closure(closure));
@@ -474,6 +483,7 @@ bool native_load(VM* vm, int argCount) {
     }
     std::string source = vm->getStringValue(vm->peek(argCount - 1));
     for(int i=0; i<argCount; i++) vm->pop();
+    std::string sourceName = "[string \"load\"]";
 
     if (source.length() >= 4 && std::memcmp(source.data(), "\x1bLua", 4) == 0) {
         std::istringstream is(source.substr(4), std::ios::binary);
@@ -485,6 +495,7 @@ bool native_load(VM* vm, int argCount) {
         }
         FunctionObject* funcPtr = function.get();
         vm->registerFunction(function.release());
+        vm->setSourceName(sourceName);
         ClosureObject* closure = vm->createClosure(funcPtr);
         vm->setupRootUpvalues(closure);
         vm->push(Value::closure(closure));
@@ -493,6 +504,7 @@ bool native_load(VM* vm, int argCount) {
 
     try {
         Lexer lexer(source);
+        lexer.setSourceName(sourceName);
         Parser parser(lexer);
         auto program = parser.parse();
         if (!program) {
@@ -502,7 +514,7 @@ bool native_load(VM* vm, int argCount) {
         }
 
         CodeGenerator codegen;
-        auto function = codegen.generate(program.get(), "load");
+        auto function = codegen.generate(program.get(), "[string \"load\"]");
         if (!function) {
             vm->push(Value::nil());
             vm->push(Value::runtimeString(vm->internString("code generation error")));
@@ -511,6 +523,7 @@ bool native_load(VM* vm, int argCount) {
 
         FunctionObject* funcPtr = function.get();
         vm->registerFunction(function.release());
+        vm->setSourceName(sourceName);
         ClosureObject* closure = vm->createClosure(funcPtr);
         vm->setupRootUpvalues(closure);
         vm->push(Value::closure(closure));
@@ -758,13 +771,18 @@ void registerBaseLibrary(VM* vm) {
     TableObject* loaded = vm->createTable();
     package->set("loaded", Value::table(loaded));
 
-    const char* path = getenv("LUA_PATH_5_5");
-    if (!path) path = getenv("LUA_PATH");
+    // Check if -E flag was used (we'd need a way to know this in stdlib)
+    // For now, let's just check for a global flag or something.
+    // Actually, I'll check for a special global set by main.cpp.
+    bool ignoreEnv = vm->getGlobal("__IGNORE_ENV__").asBool();
+
+    const char* path = ignoreEnv ? nullptr : getenv("LUA_PATH_5_5");
+    if (!path && !ignoreEnv) path = getenv("LUA_PATH");
     if (!path) path = "./?.lua;./?/init.lua";
     package->set("path", Value::runtimeString(vm->internString(path)));
 
-    const char* cpath = getenv("LUA_CPATH_5_5");
-    if (!cpath) cpath = getenv("LUA_CPATH");
+    const char* cpath = ignoreEnv ? nullptr : getenv("LUA_CPATH_5_5");
+    if (!cpath && !ignoreEnv) cpath = getenv("LUA_CPATH");
     if (!cpath) cpath = "./?.so;./?.dll";
     package->set("cpath", Value::runtimeString(vm->internString(cpath)));
 

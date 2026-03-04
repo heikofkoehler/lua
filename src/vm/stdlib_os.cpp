@@ -203,6 +203,7 @@ bool native_os_execute(VM* vm, int argCount) {
     if (argCount == 0) {
         int res = std::system(nullptr);
         vm->push(Value::boolean(res != 0));
+        vm->currentCoroutine()->lastResultCount = 1;
         return true;
     }
     
@@ -215,6 +216,7 @@ bool native_os_execute(VM* vm, int argCount) {
         vm->push(Value::nil());
         vm->push(Value::runtimeString(vm->internString("system() failed")));
         vm->push(Value::number(-1));
+        vm->currentCoroutine()->lastResultCount = 3;
     } else {
         // In most systems, 0 means success.
         // We should ideally use WIFEXITED/WEXITSTATUS on POSIX, 
@@ -222,6 +224,7 @@ bool native_os_execute(VM* vm, int argCount) {
         vm->push(Value::boolean(res == 0));
         vm->push(Value::runtimeString(vm->internString("exit")));
         vm->push(Value::number(res));
+        vm->currentCoroutine()->lastResultCount = 3;
     }
     return true;
 }

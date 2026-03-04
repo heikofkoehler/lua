@@ -114,7 +114,7 @@ public:
     void push(const Value& value);
     Value pop();
     Value peek(size_t distance = 0) const;
-    void runtimeError(const std::string& message);
+    void runtimeError(const std::string& message, int level = 1);
 
     // Access to globals (for base library)
     std::unordered_map<std::string, Value>& globals() { return globals_; }
@@ -148,6 +148,9 @@ public:
     void collectGarbage();
     void gcStep();
     void checkGC(size_t additionalBytes = 0);
+
+    const std::string& sourceName() const { return sourceName_; }
+    void setSourceName(const std::string& name) { sourceName_ = name; }
 
     GCMode gcMode() const { return gcMode_; }
     void setGCMode(GCMode mode) { gcMode_ = mode; }
@@ -255,6 +258,7 @@ private:
 
     std::unordered_map<std::string, Value> registry_; // Internal registry
     std::unordered_map<std::string, Value> globals_;  // Global variables
+    std::string sourceName_ = "chunk"; // Current source name
     std::vector<FunctionObject*> functions_;  // Function pool (owned)
     std::vector<StringObject*> strings_;  // Compile-time string pool (owned)
     std::unordered_map<std::string, StringObject*> runtimeStrings_; // Runtime string interning

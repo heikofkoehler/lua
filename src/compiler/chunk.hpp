@@ -48,6 +48,9 @@ public:
     uint8_t at(size_t offset) const { return code_[offset]; }
     size_t size() const { return code_.size(); }
 
+    const std::string& sourceName() const { return sourceName_; }
+    void setSourceName(const std::string& name) { sourceName_ = name; }
+
     // Access constants
     const std::vector<Value>& constants() const { return constants_; }
     const Value& getConstant(size_t index) const { return constants_[index]; }
@@ -71,6 +74,7 @@ private:
     std::vector<StringObject*> strings_;  // String pool (owned, interned)
     std::unordered_map<std::string, size_t> stringIndices_;  // For interning
     std::vector<int> lines_;           // Line numbers (parallel to code_)
+    std::string sourceName_ = "chunk"; // Name of source file or [string "chunk"]
 
     // Helper for disassembly
     size_t simpleInstruction(const char* name, size_t offset) const;

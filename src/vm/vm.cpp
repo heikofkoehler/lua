@@ -767,7 +767,7 @@ Value VM::readConstant() {
     return constant;
 }
 
-void VM::runtimeError(const std::string& message) {
+void VM::runtimeError(const std::string& message, int level) {
     if (isHandlingError_) {
         // Nested error during error handling - this is bad.
         // Just throw without more printing.
@@ -779,19 +779,36 @@ void VM::runtimeError(const std::string& message) {
     hadError_ = true;
 
     if (!inPcall_) {
-        // Get line number from current instruction
+        // Get line number and source from current instruction
         int line = -1;
-        if (!currentCoroutine_->frames.empty()) {
-            const Chunk* chunk = currentFrame().chunk;
-            if (chunk && currentFrame().ip > 0) {
-                line = chunk->getLine(currentFrame().ip - 1);
+        std::string source = sourceName_;
+        
+        int targetFrame = -1;
+        if (level > 0 && !currentCoroutine_->frames.empty()) {
+            targetFrame = static_cast<int>(currentCoroutine_->frames.size()) - level;
+        }
+
+        if (targetFrame >= 0 && targetFrame < static_cast<int>(currentCoroutine_->frames.size())) {
+            const CallFrame& frame = currentCoroutine_->frames[targetFrame];
+            const Chunk* chunk = frame.chunk;
+            if (chunk) {
+                source = chunk->sourceName();
+                if (frame.ip > 0) {
+                    line = chunk->getLine(frame.ip - 1);
+                }
             }
         }
 
         if (line != -1) {
-            std::cout << "RUNTIME ERROR at line " << line << ": " << message << std::endl;
+            std::string displaySource = source;
+            if (!displaySource.empty() && displaySource[0] == '@') {
+                displaySource = displaySource.substr(1);
+            }
+            std::cerr << displaySource << ":" << line << ": " << message << std::endl;
+        } else if (level != 0) {
+            std::cerr << source << ": " << message << std::endl;
         } else {
-            std::cout << "RUNTIME ERROR: " << message << std::endl;
+            std::cerr << message << std::endl;
         }
     }
 

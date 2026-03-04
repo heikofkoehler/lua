@@ -186,8 +186,6 @@ size_t Chunk::disassembleInstruction(size_t offset) const {
         case OpCode::OP_CLOSE_UPVALUE:
             return simpleInstruction("OP_CLOSE_UPVALUE", offset);
 
-        case OpCode::OP_PRINT:
-            return simpleInstruction("OP_PRINT", offset);
         case OpCode::OP_POP:
             return simpleInstruction("OP_POP", offset);
         case OpCode::OP_DUP:
@@ -353,6 +351,11 @@ void Chunk::serialize(std::ostream& os) const {
     // Magic number
     os.write("LUA\x01", 4);
     
+    // Source Name
+    uint32_t nameLen = static_cast<uint32_t>(sourceName_.length());
+    os.write(reinterpret_cast<const char*>(&nameLen), sizeof(nameLen));
+    os.write(sourceName_.c_str(), nameLen);
+
     // Bytecode
     uint32_t codeSize = static_cast<uint32_t>(code_.size());
     os.write(reinterpret_cast<const char*>(&codeSize), sizeof(codeSize));
@@ -389,6 +392,13 @@ std::unique_ptr<Chunk> Chunk::deserialize(std::istream& is) {
     
     auto chunk = std::make_unique<Chunk>();
     
+    // Source Name
+    uint32_t nameLen;
+    is.read(reinterpret_cast<char*>(&nameLen), sizeof(nameLen));
+    std::string sourceName(nameLen, '\0');
+    is.read(&sourceName[0], nameLen);
+    chunk->sourceName_ = sourceName;
+
     // Bytecode
     uint32_t codeSize;
     is.read(reinterpret_cast<char*>(&codeSize), sizeof(codeSize));

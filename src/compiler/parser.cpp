@@ -94,7 +94,14 @@ void Parser::errorAt(const Token& token, const std::string& message) {
         errorMsg += " near " + near;
     }
 
-    throw CompileError(errorMsg, token.line);
+    std::string source = lexer_.sourceName();
+    if (!source.empty() && source[0] == '@') {
+        source = source.substr(1);
+    } else if (!source.empty() && source[0] == '=') {
+        source = source.substr(1);
+    }
+
+    throw CompileError(source + ":" + std::to_string(token.line) + ": " + errorMsg, -1);
 }
 
 void Parser::synchronize() {

@@ -7,6 +7,7 @@ CodeGenerator::CodeGenerator()
 
 std::unique_ptr<FunctionObject> CodeGenerator::generate(ProgramNode* program, const std::string& name) {
     chunk_ = std::make_unique<Chunk>();
+    chunk_->setSourceName(name);
     upvalues_.clear();
     locals_.clear();
     scopeDepth_ = 0;
@@ -1502,6 +1503,7 @@ void CodeGenerator::compileFunction(const std::string& name, const std::vector<s
     popCompilerState();
 
     // Create FunctionObject with upvalue count and varargs flag
+    functionChunk->setSourceName(currentChunk()->sourceName());
     auto func = new FunctionObject(
         name,
         params.size(),

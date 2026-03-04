@@ -32,9 +32,9 @@ private:
 
     static std::string formatMessage(const std::string& message, int line) {
         if (line >= 0) {
-            return "[line " + std::to_string(line) + "] Error: " + message;
+            return ":" + std::to_string(line) + ": " + message;
         }
-        return "Error: " + message;
+        return message;
     }
 };
 

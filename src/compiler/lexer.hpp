@@ -13,6 +13,9 @@ class Lexer {
 public:
     explicit Lexer(const std::string& source);
 
+    void setSourceName(const std::string& name) { sourceName_ = name; }
+    const std::string& sourceName() const { return sourceName_; }
+
     // Scan and return the next token
     Token scanToken();
 
@@ -30,6 +33,7 @@ private:
     size_t start_;      // Start of current lexeme
     size_t current_;    // Current position in source
     int line_;          // Current line number
+    std::string sourceName_ = "chunk";
 
     // Keywords map
     static const std::unordered_map<std::string, TokenType> keywords_;

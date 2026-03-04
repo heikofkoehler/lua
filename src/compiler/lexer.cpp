@@ -36,6 +36,15 @@ Lexer::Lexer(const std::string& source)
         static_cast<unsigned char>(source_[2]) == 0xBF) {
         current_ = 3;
     }
+
+    // Skip shebang or first-line comment starting with #
+    // This MUST happen here, before any scanToken call
+    if (current_ < source_.length() && source_[current_] == '#') {
+        while (current_ < source_.length() && source_[current_] != '\n') {
+            current_++;
+        }
+        // If we hit a newline, we want to leave it for skipWhitespace to handle line counting
+    }
 }
 
 Token Lexer::scanToken() {
@@ -191,24 +200,6 @@ Token Lexer::errorToken(const std::string& message, const std::string& near) con
 }
 
 void Lexer::skipWhitespace() {
-    // Special-case: ignore a Unix shebang at start of file
-    // Many scripts begin with "#!./lua" or just "# shebang"
-    // It can follow a BOM (current_ > 0) or be at the very start (current_ == 0)
-    static const size_t BOM_SIZE = 3;
-    bool atStart = (current_ == 0);
-    if (!atStart && current_ == BOM_SIZE) {
-        if (static_cast<unsigned char>(source_[0]) == 0xEF && 
-            static_cast<unsigned char>(source_[1]) == 0xBB && 
-            static_cast<unsigned char>(source_[2]) == 0xBF) {
-            atStart = true;
-        }
-    }
-
-    if (atStart && peek() == '#') {
-        // consume until end of line or EOF
-        while (!isAtEnd() && peek() != '\n') advance();
-    }
-
     while (true) {
         char c = peek();
         switch (c) {
