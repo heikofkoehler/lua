@@ -43,15 +43,23 @@ void Value::print(std::ostream& os) const {
         case Type::NIL: os << "nil"; break;
         case Type::BOOL: os << (asBool() ? "true" : "false"); break;
         case Type::INTEGER: 
-            printf("DEBUG: printing integer %lld\n", (long long)asInteger());
             os << asInteger(); 
             break;
         case Type::NUMBER: {
             double num = asNumber();
-            if (std::floor(num) == num && !std::isinf(num) && !std::isnan(num)) {
-                os << static_cast<int64_t>(num);
+            if (std::isinf(num)) {
+                if (num < 0) os << "-";
+                os << "inf";
+            } else if (std::isnan(num)) {
+                os << "nan";
             } else {
-                os << std::setprecision(14) << num;
+                std::ostringstream ss;
+                ss << std::setprecision(14) << num;
+                std::string res = ss.str();
+                if (res.find('.') == std::string::npos && res.find('e') == std::string::npos) {
+                    res += ".0";
+                }
+                os << res;
             }
             break;
         }
@@ -100,8 +108,15 @@ bool Value::isStringEqual(const std::string& str) const {
 }
 
 size_t Value::hash() const {
-    if (isInteger()) return std::hash<int64_t>()(asInteger());
-    if (isNumber()) return std::hash<double>()(asNumber());
+    if (isNumber()) {
+        double n = asNumber();
+        double intPart;
+        if (std::modf(n, &intPart) == 0.0) {
+            // It's an exact integer, use integer hash
+            return std::hash<int64_t>()(static_cast<int64_t>(n));
+        }
+        return std::hash<double>()(n);
+    }
     if (isRuntimeString()) {
         StringObject* obj = asStringObj();
         return std::hash<std::string_view>()(std::string_view(obj->chars(), obj->length()));

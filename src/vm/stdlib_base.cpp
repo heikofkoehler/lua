@@ -771,25 +771,39 @@ void registerBaseLibrary(VM* vm) {
     TableObject* loaded = vm->createTable();
     package->set("loaded", Value::table(loaded));
 
-    // Check if -E flag was used (we'd need a way to know this in stdlib)
-    // For now, let's just check for a global flag or something.
-    // Actually, I'll check for a special global set by main.cpp.
+    // Check if -E flag was used
     bool ignoreEnv = vm->getGlobal("__IGNORE_ENV__").asBool();
 
-    const char* path = ignoreEnv ? nullptr : getenv("LUA_PATH_5_5");
-    if (!path && !ignoreEnv) path = getenv("LUA_PATH");
-    if (!path) path = "./?.lua;./?/init.lua";
+    auto expandPath = [](const char* envPath, const std::string& defaultPath) -> std::string {
+        if (!envPath) return defaultPath;
+        std::string pathStr = envPath;
+        size_t pos = pathStr.find(";;");
+        if (pos != std::string::npos) {
+            std::string expanded = pathStr.substr(0, pos) + ";" + defaultPath + ";" + pathStr.substr(pos + 2);
+            // Clean up leading/trailing semicolons if present
+            if (!expanded.empty() && expanded.front() == ';') expanded.erase(0, 1);
+            if (!expanded.empty() && expanded.back() == ';') expanded.pop_back();
+            return expanded;
+        }
+        return pathStr;
+    };
+
+    const char* envPath = ignoreEnv ? nullptr : getenv("LUA_PATH_5_5");
+    if (!envPath && !ignoreEnv) envPath = getenv("LUA_PATH");
+    std::string path = expandPath(envPath, "./?.lua;./?/init.lua");
     package->set("path", Value::runtimeString(vm->internString(path)));
 
-    const char* cpath = ignoreEnv ? nullptr : getenv("LUA_CPATH_5_5");
-    if (!cpath && !ignoreEnv) cpath = getenv("LUA_CPATH");
-    if (!cpath) cpath = "./?.so;./?.dll";
+    const char* envCpath = ignoreEnv ? nullptr : getenv("LUA_CPATH_5_5");
+    if (!envCpath && !ignoreEnv) envCpath = getenv("LUA_CPATH");
+    std::string cpath = expandPath(envCpath, "./?.so;./?.dll;./lua/?.so");
     package->set("cpath", Value::runtimeString(vm->internString(cpath)));
 
     const char* requireScript = 
         "function require(modname)\n"
         "    if package.loaded[modname] then return package.loaded[modname] end\n"
         "    local errors = \"\"\n"
+        "    \n"
+        "    -- Search in package.path\n"
         "    local path = package.path .. \";\"\n"
         "    local start = 1\n"
         "    while true do\n"
@@ -799,7 +813,7 @@ void registerBaseLibrary(VM* vm) {
         "        local filename = string.gsub(template, \"?\", modname)\n"
         "        local f, err = loadfile(filename)\n"
         "        if f then\n"
-        "            local res = f()\n"
+        "            local res = f(modname)\n"
         "            if res == nil then res = true end\n"
         "            package.loaded[modname] = res\n"
         "            return res\n"
@@ -807,6 +821,29 @@ void registerBaseLibrary(VM* vm) {
         "        errors = errors .. \"\\n\\tno file '\" .. filename .. \"'\"\n"
         "        start = sep + 1\n"
         "    end\n"
+        "    \n"
+        "    -- Search in package.cpath\n"
+        "    local cpath = package.cpath .. \";\"\n"
+        "    start = 1\n"
+        "    while true do\n"
+        "        local sep = string.find(cpath, \";\", start)\n"
+        "        if not sep then break end\n"
+        "        local template = string.sub(cpath, start, sep - 1)\n"
+        "        local filename = string.gsub(template, \"?\", modname)\n"
+        "        -- For C modules, we'd use package.loadlib\n"
+        "        -- The function name is usually luaopen_ + modname (replacing . with _)\n"
+        "        local openname = \"luaopen_\" .. string.gsub(modname, \"%%.\", \"_\")\n"
+        "        local f, err = package.loadlib(filename, openname)\n"
+        "        if f then\n"
+        "            local res = f(modname)\n"
+        "            if res == nil then res = true end\n"
+        "            package.loaded[modname] = res\n"
+        "            return res\n"
+        "        end\n"
+        "        errors = errors .. \"\\n\\tno file '\" .. filename .. \"' (C module)\"\n"
+        "        start = sep + 1\n"
+        "    end\n"
+        "    \n"
         "    error(\"module '\" .. modname .. \"' not found:\" .. errors)\n"
         "end\n";
 

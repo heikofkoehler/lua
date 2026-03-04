@@ -172,6 +172,134 @@ bool native_debug_setlocal(VM* vm, int argCount) {
     return true;
 }
 
+bool native_debug_getupvalue(VM* vm, int argCount) {
+    if (argCount != 2) { vm->runtimeError("debug.getupvalue expects 2 arguments"); return false; }
+    Value funcVal = vm->peek(1);
+    Value indexVal = vm->peek(0);
+    
+    if (!funcVal.isClosure() || !indexVal.isNumber()) {
+        vm->runtimeError("debug.getupvalue arguments must be function and number");
+        return false;
+    }
+    
+    ClosureObject* closure = funcVal.asClosureObj();
+    int index = static_cast<int>(indexVal.asNumber());
+    
+    if (index >= 1 && index <= static_cast<int>(closure->upvalueCount())) {
+        UpvalueObject* upvalue = closure->getUpvalueObj(index - 1);
+        std::string name = (index == 1) ? "_ENV" : ("upvalue_" + std::to_string(index));
+        
+        vm->pop(); vm->pop();
+        vm->push(Value::runtimeString(vm->internString(name)));
+        vm->push(upvalue->get(vm->currentCoroutine()->stack));
+        vm->currentCoroutine()->lastResultCount = 2;
+    } else {
+        vm->pop(); vm->pop();
+        vm->push(Value::nil());
+        vm->currentCoroutine()->lastResultCount = 1;
+    }
+    return true;
+}
+
+bool native_debug_setupvalue(VM* vm, int argCount) {
+    if (argCount != 3) { vm->runtimeError("debug.setupvalue expects 3 arguments"); return false; }
+    Value funcVal = vm->peek(2);
+    Value indexVal = vm->peek(1);
+    Value val = vm->peek(0);
+    
+    if (!funcVal.isClosure() || !indexVal.isNumber()) {
+        vm->runtimeError("debug.setupvalue arguments must be function, number, value");
+        return false;
+    }
+    
+    ClosureObject* closure = funcVal.asClosureObj();
+    int index = static_cast<int>(indexVal.asNumber());
+    
+    if (index >= 1 && index <= static_cast<int>(closure->upvalueCount())) {
+        UpvalueObject* upvalue = closure->getUpvalueObj(index - 1);
+        std::string name = (index == 1) ? "_ENV" : ("upvalue_" + std::to_string(index));
+        upvalue->set(vm->currentCoroutine()->stack, val);
+        
+        vm->pop(); vm->pop(); vm->pop();
+        vm->push(Value::runtimeString(vm->internString(name)));
+    } else {
+        vm->pop(); vm->pop(); vm->pop();
+        vm->push(Value::nil());
+    }
+    return true;
+}
+
+bool native_debug_upvalueid(VM* vm, int argCount) {
+    if (argCount != 2) { vm->runtimeError("debug.upvalueid expects 2 arguments"); return false; }
+    Value funcVal = vm->peek(1);
+    Value indexVal = vm->peek(0);
+    
+    if (!funcVal.isClosure() || !indexVal.isNumber()) {
+        vm->runtimeError("debug.upvalueid arguments must be function and number");
+        return false;
+    }
+    
+    ClosureObject* closure = funcVal.asClosureObj();
+    int index = static_cast<int>(indexVal.asNumber());
+    
+    if (index >= 1 && index <= static_cast<int>(closure->upvalueCount())) {
+        UpvalueObject* upvalue = closure->getUpvalueObj(index - 1);
+        
+        vm->pop(); vm->pop();
+        // Return memory address as a light userdata or number representation
+        vm->push(Value::number(reinterpret_cast<uint64_t>(upvalue)));
+    } else {
+        vm->runtimeError("invalid upvalue index");
+        return false;
+    }
+    return true;
+}
+
+bool native_debug_upvaluejoin(VM* vm, int argCount) {
+    if (argCount != 4) { vm->runtimeError("debug.upvaluejoin expects 4 arguments"); return false; }
+    Value f1Val = vm->peek(3);
+    Value n1Val = vm->peek(2);
+    Value f2Val = vm->peek(1);
+    Value n2Val = vm->peek(0);
+    
+    if (!f1Val.isClosure() || !n1Val.isNumber() || !f2Val.isClosure() || !n2Val.isNumber()) {
+        vm->runtimeError("debug.upvaluejoin arguments must be function, number, function, number");
+        return false;
+    }
+    
+    ClosureObject* f1 = f1Val.asClosureObj();
+    int n1 = static_cast<int>(n1Val.asNumber());
+    ClosureObject* f2 = f2Val.asClosureObj();
+    int n2 = static_cast<int>(n2Val.asNumber());
+    
+    if (n1 < 1 || n1 > static_cast<int>(f1->upvalueCount()) || 
+        n2 < 1 || n2 > static_cast<int>(f2->upvalueCount())) {
+        vm->runtimeError("invalid upvalue index");
+        return false;
+    }
+    
+    f1->setUpvalue(n1 - 1, f2->getUpvalueObj(n2 - 1));
+    
+    for(int i=0; i<4; i++) vm->pop();
+    vm->push(Value::nil());
+    return true;
+}
+
+bool native_debug_getregistry(VM* vm, int argCount) {
+    for(int i=0; i<argCount; i++) vm->pop();
+    
+    // We need to return a table representation of the registry.
+    // Our VM currently uses std::unordered_map<std::string, Value> registry_;
+    // Let's create a Lua table and copy the string-keyed entries.
+    TableObject* regTable = vm->createTable();
+    for (const auto& pair : vm->getRegistryMap()) {
+        regTable->set(Value::runtimeString(vm->internString(pair.first)), pair.second);
+    }
+    
+    vm->push(Value::table(regTable));
+    return true;
+}
+
 } // anonymous namespace
 
 void registerDebugLibrary(VM* vm, TableObject* debugTable) {
@@ -179,6 +307,11 @@ void registerDebugLibrary(VM* vm, TableObject* debugTable) {
     vm->addNativeToTable(debugTable, "setmetatable", native_debug_setmetatable);
     vm->addNativeToTable(debugTable, "getlocal", native_debug_getlocal);
     vm->addNativeToTable(debugTable, "setlocal", native_debug_setlocal);
+    vm->addNativeToTable(debugTable, "getupvalue", native_debug_getupvalue);
+    vm->addNativeToTable(debugTable, "setupvalue", native_debug_setupvalue);
+    vm->addNativeToTable(debugTable, "upvalueid", native_debug_upvalueid);
+    vm->addNativeToTable(debugTable, "upvaluejoin", native_debug_upvaluejoin);
+    vm->addNativeToTable(debugTable, "getregistry", native_debug_getregistry);
     
     vm->addNativeToTable(debugTable, "traceback", [](VM* vm, int argCount) -> bool {
         // Simple traceback implementation

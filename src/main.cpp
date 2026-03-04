@@ -121,7 +121,7 @@ int compileFile(const std::string& inputPath, const std::string& outputPath) {
 }
 
 // Run pre-compiled bytecode
-int runBytecode(const std::string& path, bool verbose, int argc, char* argv[], int scriptIndex, bool ignoreEnv) {
+int runBytecode(const std::string& path, VM& vm) {
     try {
         std::ifstream is(path, std::ios::binary);
         if (!is.is_open()) {
@@ -130,20 +130,8 @@ int runBytecode(const std::string& path, bool verbose, int argc, char* argv[], i
         }
 
         auto function = FunctionObject::deserialize(is);
-        VM vm;
-        vm.setTraceExecution(verbose);
+
         vm.setSourceName("@" + path);
-        if (ignoreEnv) vm.setGlobal("__IGNORE_ENV__", Value::boolean(true));
-        vm.initStandardLibrary();
-
-        // Set up the 'arg' table
-        TableObject* argTable = vm.createTable();
-        for (int i = 0; i < argc; i++) {
-            argTable->set(Value::number(i - scriptIndex), Value::runtimeString(vm.internString(argv[i])));
-        }
-        vm.setGlobal("arg", Value::table(argTable));
-
-        runInit(vm, ignoreEnv);
 
         if (!vm.run(*function)) {
             return 1;
@@ -156,7 +144,7 @@ int runBytecode(const std::string& path, bool verbose, int argc, char* argv[], i
 }
 
 // Run file
-int runFile(const std::string& path, bool verbose, int argc, char* argv[], int scriptIndex, bool ignoreEnv) {
+int runFile(const std::string& path, VM& vm) {
     try {
         std::ifstream file(path, std::ios::binary);
         if (!file.is_open()) {
@@ -168,20 +156,7 @@ int runFile(const std::string& path, bool verbose, int argc, char* argv[], int s
         file.read(sig, 4);
         bool isBytecode = (file.gcount() == 4 && std::memcmp(sig, "\x1bLua", 4) == 0);
         
-        VM vm;
-        vm.setTraceExecution(verbose);
         vm.setSourceName("@" + path);
-        if (ignoreEnv) vm.setGlobal("__IGNORE_ENV__", Value::boolean(true));
-        vm.initStandardLibrary();
-
-        // Set up the 'arg' table
-        TableObject* argTable = vm.createTable();
-        for (int i = 0; i < argc; i++) {
-            argTable->set(Value::number(i - scriptIndex), Value::runtimeString(vm.internString(argv[i])));
-        }
-        vm.setGlobal("arg", Value::table(argTable));
-
-        runInit(vm, ignoreEnv);
 
         if (isBytecode) {
             auto function = FunctionObject::deserialize(file);
@@ -197,7 +172,7 @@ int runFile(const std::string& path, bool verbose, int argc, char* argv[], int s
             std::stringstream buffer;
             buffer << file.rdbuf();
             std::string source = buffer.str();
-            return run(source, vm) ? 0 : 1;
+            return run(source, vm, "@" + path, false) ? 0 : 1;
         }
     } catch (const std::exception& e) {
         std::cerr << "Error: " << e.what() << std::endl;
@@ -263,10 +238,14 @@ void repl(VM& vm) {
 void printUsage(const char* program) {
     std::cerr << "Usage: " << program << " [options] [script]" << std::endl;
     std::cerr << "  Options:" << std::endl;
+    std::cerr << "    -e stat      execute string 'stat'" << std::endl;
+    std::cerr << "    -i           enter interactive mode after executing 'script'" << std::endl;
+    std::cerr << "    -l name      require library 'name'" << std::endl;
+    std::cerr << "    -v           show version information" << std::endl;
+    std::cerr << "    -E           ignore environment variables" << std::endl;
     std::cerr << "    -c, --compile    Compile source to bytecode" << std::endl;
     std::cerr << "    -o, --output     Output file for bytecode (default: out.luac)" << std::endl;
     std::cerr << "    -b, --bytecode   Execute input as pre-compiled bytecode" << std::endl;
-    std::cerr << "    -v, --verbose    Print every instruction executed" << std::endl;
     std::cerr << "    -h, --help       Print this help message" << std::endl;
     std::cerr << "  Run without arguments to start REPL" << std::endl;
 }
@@ -278,6 +257,7 @@ int main(int argc, char* argv[]) {
     bool interactive = false;
     bool ignoreEnv = false;
     std::vector<std::string> executeStrings;
+    std::vector<std::string> loadLibs;
     std::string scriptPath = "";
     int scriptIndex = 0;
     std::string outputPath = "";
@@ -295,13 +275,28 @@ int main(int argc, char* argv[]) {
             interactive = true;
         } else if (!stopFlags && arg == "-E") {
             ignoreEnv = true;
-        } else if (!stopFlags && arg == "-e") {
-            if (i + 1 < argc) {
-                executeStrings.push_back(argv[++i]);
+        } else if (!stopFlags && arg.length() >= 2 && arg[0] == '-' && arg[1] == 'l') {
+            std::string lib;
+            if (arg.length() > 2) {
+                lib = arg.substr(2);
+            } else if (i + 1 < argc) {
+                lib = argv[++i];
+            } else {
+                std::cerr << "Error: -l option requires an argument" << std::endl;
+                return 1;
+            }
+            loadLibs.push_back(lib);
+        } else if (!stopFlags && arg.length() >= 2 && arg[0] == '-' && arg[1] == 'e') {
+            std::string code;
+            if (arg.length() > 2) {
+                code = arg.substr(2);
+            } else if (i + 1 < argc) {
+                code = argv[++i];
             } else {
                 std::cerr << "Error: -e option requires an argument" << std::endl;
                 return 1;
             }
+            executeStrings.push_back(code);
         } else if (!stopFlags && (arg == "-c" || arg == "--compile")) {
             compileOnly = true;
         } else if (!stopFlags && (arg == "-b" || arg == "--bytecode")) {
@@ -365,13 +360,31 @@ int main(int argc, char* argv[]) {
     // Set up the 'arg' table early so -e scripts can access it
     TableObject* argTable = vm.createTable();
     for (int i = 0; i < argc; i++) {
-        argTable->set(Value::number(i - (scriptIndex == 0 ? argc : scriptIndex)), 
+        argTable->set(Value::integer(static_cast<int64_t>(i - (scriptIndex == 0 ? argc : scriptIndex))), 
                       Value::runtimeString(vm.internString(argv[i])));
     }
     vm.setGlobal("arg", Value::table(argTable));
 
     if (!runInit(vm, ignoreEnv)) {
         return 1;
+    }
+
+    for (const auto& lib : loadLibs) {
+        std::string name = lib;
+        std::string global = "";
+        size_t eq = lib.find('=');
+        if (eq != std::string::npos) {
+            global = lib.substr(0, eq);
+            name = lib.substr(eq + 1);
+        } else {
+            global = lib;
+        }
+        
+        std::string cmd = "_G['" + global + "'] = require('" + name + "')";
+        
+        if (!run(cmd, vm, "=(command line)", false)) {
+            return 1;
+        }
     }
 
     for (const auto& code : executeStrings) {
@@ -404,10 +417,10 @@ int main(int argc, char* argv[]) {
             if (outputPath.empty()) outputPath = "out.luac";
             result = compileFile(scriptPath, outputPath);
         } else if (isBytecode) {
-            result = runBytecode(scriptPath, verbose, argc, argv, scriptIndex, ignoreEnv);
+            result = runBytecode(scriptPath, vm);
         } else {
             // Normal file execution
-            result = runFile(scriptPath, verbose, argc, argv, scriptIndex, ignoreEnv);
+            result = runFile(scriptPath, vm);
         }
     }
 

@@ -277,6 +277,46 @@ bool native_table_sort(VM* vm, int argCount) {
     return true;
 }
 
+bool native_table_move(VM* vm, int argCount) {
+    if (argCount < 4 || argCount > 5) {
+        vm->runtimeError("table.move expects 4 or 5 arguments");
+        return false;
+    }
+    
+    Value a1Val = vm->peek(argCount - 1);
+    int f = static_cast<int>(vm->peek(argCount - 2).asNumber());
+    int e = static_cast<int>(vm->peek(argCount - 3).asNumber());
+    int t = static_cast<int>(vm->peek(argCount - 4).asNumber());
+    Value a2Val = (argCount == 5) ? vm->peek(0) : a1Val;
+    
+    if (!a1Val.isTable() || !a2Val.isTable()) {
+        vm->runtimeError("table.move expects table arguments");
+        return false;
+    }
+    
+    TableObject* a1 = a1Val.asTableObj();
+    TableObject* a2 = a2Val.asTableObj();
+    
+    if (e >= f) {
+        int n = e - f + 1;
+        if (t <= f || t > e) {
+            // Forward move
+            for (int i = 0; i < n; i++) {
+                a2->set(Value::number(t + i), a1->get(Value::number(f + i)));
+            }
+        } else {
+            // Backward move (overlap case)
+            for (int i = n - 1; i >= 0; i--) {
+                a2->set(Value::number(t + i), a1->get(Value::number(f + i)));
+            }
+        }
+    }
+    
+    for(int i=0; i<argCount; i++) vm->pop();
+    vm->push(a2Val);
+    return true;
+}
+
 } // anonymous namespace
 
 void registerTableLibrary(VM* vm, TableObject* tableTable) {
@@ -286,4 +326,5 @@ void registerTableLibrary(VM* vm, TableObject* tableTable) {
     vm->addNativeToTable(tableTable, "pack", native_table_pack);
     vm->addNativeToTable(tableTable, "unpack", native_table_unpack);
     vm->addNativeToTable(tableTable, "sort", native_table_sort);
+    vm->addNativeToTable(tableTable, "move", native_table_move);
 }

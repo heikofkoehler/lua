@@ -551,6 +551,9 @@ bool native_string_gsub(VM* vm, int argCount) {
     ms.src_end = s + s_len;
     ms.p_end = p + p_str.length();
 
+    bool anchor = (*p == '^');
+    if (anchor) p++;
+
     std::string result;
     int count = 0;
     const char* s1 = s;
@@ -600,7 +603,12 @@ bool native_string_gsub(VM* vm, int argCount) {
             }
             if (res == s1) { if (s1 < ms.src_end) result.push_back(*s1); s1++; }
             else s1 = res;
-        } else { if (s1 < ms.src_end) result.push_back(*s1); s1++; }
+            if (anchor) break;
+        } else {
+            if (anchor) break;
+            if (s1 < ms.src_end) result.push_back(*s1);
+            s1++;
+        }
     }
     if (s1 < ms.src_end) result.append(s1, ms.src_end - s1);
     for (int i = 0; i < argCount; i++) vm->pop();
@@ -633,18 +641,51 @@ bool native_string_format(VM* vm, int argCount) {
                 Value arg = vm->peek(argCount - 1 - argIndex);
                 if (spec == 's') {
                     result += vm->getStringValue(arg);
-                } else if (spec == 'd' || spec == 'i') {
+                } else if (spec == 'q') {
+                    std::string s = vm->getStringValue(arg);
+                    result += '"';
+                    for (char c : s) {
+                        if (c == '"' || c == '\\' || c == '\n') {
+                            result += '\\';
+                            if (c == '\n') result += 'n';
+                            else result += c;
+                        } else if (iscntrl((unsigned char)c)) {
+                            char buf[5];
+                            snprintf(buf, sizeof(buf), "\\%03d", (unsigned char)c);
+                            result += buf;
+                        } else {
+                            result += c;
+                        }
+                    }
+                    result += '"';
+                } else if (spec == 'd' || spec == 'i' || spec == 'x' || spec == 'X') {
                     if (!arg.isNumber()) {
                         vm->runtimeError("bad argument to 'format' (number expected)");
                         return false;
                     }
-                    result += std::to_string(arg.asInteger());
+                    if (spec == 'd' || spec == 'i') {
+                        result += std::to_string(arg.asInteger());
+                    } else {
+                        char buf[32];
+                        snprintf(buf, sizeof(buf), spec == 'x' ? "%llx" : "%llX", (unsigned long long)arg.asInteger());
+                        result += buf;
+                    }
                 } else if (spec == 'f') {
                     if (!arg.isNumber()) {
                         vm->runtimeError("bad argument to 'format' (number expected)");
                         return false;
                     }
-                    result += std::to_string(arg.asNumber());
+                    char buf[64];
+                    snprintf(buf, sizeof(buf), "%f", arg.asNumber());
+                    result += buf;
+                } else if (spec == 'p') {
+                    char buf[32];
+                    if (arg.isObj()) {
+                        snprintf(buf, sizeof(buf), "%p", (void*)arg.asObj());
+                    } else {
+                        snprintf(buf, sizeof(buf), "0x%llx", (unsigned long long)arg.asInteger());
+                    }
+                    result += buf;
                 } else if (spec == 'c') {
                     if (!arg.isNumber()) {
                         vm->runtimeError("bad argument to 'format' (number expected)");

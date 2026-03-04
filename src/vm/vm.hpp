@@ -129,6 +129,7 @@ public:
     // Registry for internal use (stable storage)
     void setRegistry(const std::string& key, const Value& value) { registry_[key] = value; }
     Value getRegistry(const std::string& key) const;
+    const std::unordered_map<std::string, Value>& getRegistryMap() const { return registry_; }
 
     // Garbage collection
     enum class GCState {

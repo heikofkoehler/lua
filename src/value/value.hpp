@@ -67,13 +67,6 @@ public:
     }
 
     static Value number(double value) {
-        // Automatically convert to integer if it's an exact integer fitting in 48 bits
-        double intPart;
-        if (std::modf(value, &intPart) == 0.0 && 
-            value >= -140737488355328.0 && value <= 140737488355327.0) {
-            return integer(static_cast<int64_t>(value));
-        }
-        
         Value v(0);
         std::memcpy(&v.bits_, &value, sizeof(double));
         return v;
@@ -165,6 +158,7 @@ public:
     }
 
     Type type() const {
+        if (isInteger()) return Type::INTEGER;
         if (isNumber()) return Type::NUMBER;
         if (isNil()) return Type::NIL;
         if (isBool()) return Type::BOOL;

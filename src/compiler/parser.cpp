@@ -942,8 +942,32 @@ std::unique_ptr<ExprNode> Parser::primary() {
     }
 
     if (match(TokenType::NUMBER)) {
-        double value = std::stod(previous_.lexeme);
-        return std::make_unique<LiteralNode>(Value::number(value), line);
+        std::string lexeme = previous_.lexeme;
+        bool isFloat = (lexeme.find('.') != std::string::npos || 
+                        lexeme.find('e') != std::string::npos || 
+                        lexeme.find('E') != std::string::npos ||
+                        lexeme.find('p') != std::string::npos ||
+                        lexeme.find('P') != std::string::npos);
+        
+        if (isFloat) {
+            double value = std::stod(lexeme);
+            return std::make_unique<LiteralNode>(Value::number(value), line);
+        } else {
+            try {
+                // Try parsing as integer (handles hex if prefixed with 0x)
+                long long value = std::stoll(lexeme, nullptr, 0);
+                // Ensure it fits in 48 bits for NaN-boxing
+                if (value >= -140737488355328LL && value <= 140737488355327LL) {
+                    return std::make_unique<LiteralNode>(Value::integer(static_cast<int64_t>(value)), line);
+                } else {
+                    return std::make_unique<LiteralNode>(Value::number(static_cast<double>(value)), line);
+                }
+            } catch (...) {
+                // Fallback to double if it's too large for long long
+                double value = std::stod(lexeme);
+                return std::make_unique<LiteralNode>(Value::number(value), line);
+            }
+        }
     }
 
     if (match(TokenType::STRING)) {

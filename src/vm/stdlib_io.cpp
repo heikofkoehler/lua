@@ -213,6 +213,170 @@ bool native_io_setvbuf(VM* vm, int argCount) {
     return true;
 }
 
+bool native_io_type(VM* vm, int argCount) {
+    if (argCount != 1) {
+        vm->runtimeError("io.type expects 1 argument");
+        return false;
+    }
+    Value val = vm->peek(0);
+    vm->pop();
+    if (val.isFile()) {
+        if (val.asFileObj()->isOpen()) {
+            vm->push(Value::runtimeString(vm->internString("file")));
+        } else {
+            vm->push(Value::runtimeString(vm->internString("closed file")));
+        }
+    } else {
+        vm->push(Value::nil());
+    }
+    return true;
+}
+
+bool native_io_tmpfile(VM* vm, int argCount) {
+    for(int i=0; i<argCount; i++) vm->pop();
+    
+    // Simple tmpfile implementation
+    static int counter = 0;
+    std::string tmpName = "/tmp/lua_tmpfile_" + std::to_string(std::time(nullptr)) + "_" + std::to_string(counter++);
+    FileObject* file = vm->openFile(tmpName, "w+");
+    if (file && file->isOpen()) {
+        vm->push(Value::file(file));
+    } else {
+        vm->push(Value::nil());
+    }
+    return true;
+}
+
+bool native_io_input(VM* vm, int argCount) {
+    Value ioTableVal = vm->getGlobal("io");
+    TableObject* ioTable = ioTableVal.isTable() ? ioTableVal.asTableObj() : nullptr;
+    
+    if (argCount == 0) {
+        if (ioTable) {
+            vm->push(ioTable->get("stdin"));
+        } else {
+            vm->push(Value::nil());
+        }
+        return true;
+    }
+    
+    Value arg = vm->peek(argCount - 1);
+    for(int i=0; i<argCount; i++) vm->pop();
+    
+    if (arg.isString()) {
+        FileObject* file = vm->openFile(vm->getStringValue(arg), "r");
+        if (!file->isOpen()) {
+            vm->runtimeError("io.input: could not open file");
+            return false;
+        }
+        if (ioTable) ioTable->set("stdin", Value::file(file));
+        vm->push(Value::file(file));
+    } else if (arg.isFile()) {
+        if (ioTable) ioTable->set("stdin", arg);
+        vm->push(arg);
+    } else {
+        vm->runtimeError("io.input expects a file or string");
+        return false;
+    }
+    return true;
+}
+
+bool native_io_output(VM* vm, int argCount) {
+    Value ioTableVal = vm->getGlobal("io");
+    TableObject* ioTable = ioTableVal.isTable() ? ioTableVal.asTableObj() : nullptr;
+    
+    if (argCount == 0) {
+        if (ioTable) {
+            vm->push(ioTable->get("stdout"));
+        } else {
+            vm->push(Value::nil());
+        }
+        return true;
+    }
+    
+    Value arg = vm->peek(argCount - 1);
+    for(int i=0; i<argCount; i++) vm->pop();
+    
+    if (arg.isString()) {
+        FileObject* file = vm->openFile(vm->getStringValue(arg), "w");
+        if (!file->isOpen()) {
+            vm->runtimeError("io.output: could not open file");
+            return false;
+        }
+        if (ioTable) ioTable->set("stdout", Value::file(file));
+        vm->push(Value::file(file));
+    } else if (arg.isFile()) {
+        if (ioTable) ioTable->set("stdout", arg);
+        vm->push(arg);
+    } else {
+        vm->runtimeError("io.output expects a file or string");
+        return false;
+    }
+    return true;
+}
+
+bool native_io_lines(VM* vm, int argCount) {
+    std::string filename;
+    bool toClose = false;
+    
+    if (argCount == 0) {
+        Value ioTableVal = vm->getGlobal("io");
+        if (ioTableVal.isTable()) {
+            Value in = ioTableVal.asTableObj()->get("stdin");
+            vm->push(in);
+        } else {
+            vm->push(Value::nil());
+        }
+    } else {
+        Value arg = vm->peek(argCount - 1);
+        if (arg.isString()) {
+            filename = vm->getStringValue(arg);
+            toClose = true;
+        } else {
+            vm->runtimeError("io.lines expects a string filename");
+            return false;
+        }
+    }
+    
+    for(int i=0; i<argCount; i++) vm->pop();
+
+    const char* script = 
+        "local file, toClose = ...\n"
+        "if type(file) == 'string' then\n"
+        "   file = io.open(file, 'r')\n"
+        "   if not file then error('cannot open file') end\n"
+        "end\n"
+        "return function()\n"
+        "   local line = file:read('l')\n"
+        "   if not line and toClose then file:close() end\n"
+        "   return line\n"
+        "end\n";
+
+    FunctionObject* func = vm->compileSource(script, "io.lines");
+    if (!func) return false;
+    ClosureObject* closure = vm->createClosure(func);
+    vm->setupRootUpvalues(closure);
+    
+    vm->push(Value::closure(closure));
+    if (toClose) {
+        vm->push(Value::runtimeString(vm->internString(filename)));
+    } else {
+        Value ioTableVal = vm->getGlobal("io");
+        vm->push(ioTableVal.asTableObj()->get("stdin"));
+    }
+    vm->push(Value::boolean(toClose));
+    
+    size_t baseFrames = vm->currentCoroutine()->frames.size();
+    if (vm->callValue(2, 1)) {
+        if (vm->currentCoroutine()->frames.size() > baseFrames) {
+            vm->run(baseFrames);
+        }
+        vm->currentCoroutine()->lastResultCount = 1;
+        return true;
+    }
+    return false;
+}
+
 } // anonymous namespace
 
 void registerIOLibrary(VM* vm, TableObject* ioTable) {
@@ -221,6 +385,11 @@ void registerIOLibrary(VM* vm, TableObject* ioTable) {
     vm->addNativeToTable(ioTable, "read", native_io_read);
     vm->addNativeToTable(ioTable, "close", native_io_close);
     vm->addNativeToTable(ioTable, "flush", native_io_flush);
+    vm->addNativeToTable(ioTable, "type", native_io_type);
+    vm->addNativeToTable(ioTable, "tmpfile", native_io_tmpfile);
+    vm->addNativeToTable(ioTable, "input", native_io_input);
+    vm->addNativeToTable(ioTable, "output", native_io_output);
+    vm->addNativeToTable(ioTable, "lines", native_io_lines);
     
     // Create FILE metatable to support methods like file:read()
     TableObject* fileMeta = vm->createTable();
