@@ -708,15 +708,145 @@ bool native_string_format(VM* vm, int argCount) {
     return true;
 }
 
+// Helper for string.pack/unpack
+struct PackState {
+    bool littleEndian = true; // Default for most modern systems
+    size_t alignment = 1;
+};
+
+static size_t get_size(char spec, int& size) {
+    switch (spec) {
+        case 'b': case 'B': size = 1; return 1;
+        case 'h': case 'H': size = 2; return 2;
+        case 'i': case 'I': case 'l': case 'L': case 'j': case 'J': case 'T': size = 8; return 8; // simplified
+        case 'f': size = 4; return 4;
+        case 'd': case 'n': size = 8; return 8;
+        default: size = 0; return 0;
+    }
+}
+
 bool native_string_packsize(VM* vm, int argCount) {
-    for (int i = 0; i < argCount; i++) vm->pop();
-    vm->push(Value::number(8));
+    if (argCount < 1) { vm->runtimeError("string.packsize expects format"); return false; }
+    std::string fmt = vm->getStringValue(vm->peek(argCount - 1));
+    size_t total = 0;
+    for (size_t i = 0; i < fmt.length(); i++) {
+        int size;
+        if (get_size(fmt[i], size) > 0) total += size;
+        else if (fmt[i] == 's') {
+            vm->runtimeError("variable-length format in string.packsize");
+            return false;
+        }
+    }
+    for(int i=0; i<argCount; i++) vm->pop();
+    vm->push(Value::number(static_cast<double>(total)));
     return true;
 }
 
 bool native_string_pack(VM* vm, int argCount) {
+    if (argCount < 1) { vm->runtimeError("string.pack expects format"); return false; }
+    std::string fmt = vm->getStringValue(vm->peek(argCount - 1));
+    std::string result;
+    int argIdx = 1;
+
+    for (size_t i = 0; i < fmt.length(); i++) {
+        char spec = fmt[i];
+        if (spec == '<') continue; // simplified
+        if (spec == '>') continue;
+        
+        if (argIdx >= argCount) { vm->runtimeError("bad argument to 'pack' (no value)"); return false; }
+        Value val = vm->peek(argCount - 1 - argIdx);
+        
+        if (spec == 'b' || spec == 'B') {
+            unsigned char b = static_cast<unsigned char>(val.asNumber());
+            result.push_back(b);
+        } else if (spec == 'i' || spec == 'I' || spec == 'j' || spec == 'J') {
+            int64_t v = val.asInteger();
+            result.append(reinterpret_cast<char*>(&v), 8);
+        } else if (spec == 'n' || spec == 'd') {
+            double v = val.asNumber();
+            result.append(reinterpret_cast<char*>(&v), 8);
+        } else if (spec == 's') {
+            std::string s = vm->getStringValue(val);
+            uint64_t len = s.length();
+            result.append(reinterpret_cast<char*>(&len), 8);
+            result.append(s);
+        } else if (spec == 'z') {
+            std::string s = vm->getStringValue(val);
+            result.append(s);
+            result.push_back('\0');
+        }
+        argIdx++;
+    }
+
+    for (int i = 0; i < argCount; i++) vm->pop();
+    vm->push(Value::runtimeString(vm->internString(result)));
+    return true;
+}
+
+bool native_string_unpack(VM* vm, int argCount) {
+    if (argCount < 2) { vm->runtimeError("string.unpack expects format and string"); return false; }
+    std::string fmt = vm->getStringValue(vm->peek(argCount - 1));
+    std::string data = vm->getStringValue(vm->peek(argCount - 2));
+    int pos = (argCount >= 3) ? static_cast<int>(vm->peek(argCount - 3).asNumber()) : 1;
+    
+    if (pos < 1 || pos > (int)data.length() + 1) {
+        vm->runtimeError("initial position out of bounds");
+        return false;
+    }
+
+    int current = pos - 1;
+    int results = 0;
+
+    for (size_t i = 0; i < fmt.length(); i++) {
+        char spec = fmt[i];
+        if (spec == '<' || spec == '>') continue;
+
+        if (spec == 'b' || spec == 'B') {
+            if (current + 1 > (int)data.length()) { vm->runtimeError("data string too short"); return false; }
+            vm->push(Value::number(static_cast<unsigned char>(data[current])));
+            current += 1;
+        } else if (spec == 'i' || spec == 'I' || spec == 'j' || spec == 'J') {
+            if (current + 8 > (int)data.length()) { vm->runtimeError("data string too short"); return false; }
+            int64_t v;
+            std::memcpy(&v, &data[current], 8);
+            vm->push(Value::integer(v));
+            current += 8;
+        } else if (spec == 'n' || spec == 'd') {
+            if (current + 8 > (int)data.length()) { vm->runtimeError("data string too short"); return false; }
+            double v;
+            std::memcpy(&v, &data[current], 8);
+            vm->push(Value::number(v));
+            current += 8;
+        } else if (spec == 's') {
+            if (current + 8 > (int)data.length()) { vm->runtimeError("data string too short"); return false; }
+            uint64_t len;
+            std::memcpy(&len, &data[current], 8);
+            current += 8;
+            if (current + (int)len > (int)data.length()) { vm->runtimeError("data string too short"); return false; }
+            vm->push(Value::runtimeString(vm->internString(data.substr(current, len))));
+            current += len;
+        } else if (spec == 'z') {
+            size_t null_pos = data.find('\0', current);
+            if (null_pos == std::string::npos) { vm->runtimeError("unfinished string for format 'z'"); return false; }
+            vm->push(Value::runtimeString(vm->internString(data.substr(current, null_pos - current))));
+            current = (int)null_pos + 1;
+        }
+        results++;
+    }
+
+    vm->push(Value::number(current + 1));
+    results++;
+
+    // Actually we need to pop original arguments but keep results.
+    // Standard approach: push results, then use a helper or manual stack management.
+    // callValue/run handle this, but for native functions we must pop manually.
+    std::vector<Value> res_vals;
+    for(int i=0; i<results; i++) res_vals.push_back(vm->pop());
+    std::reverse(res_vals.begin(), res_vals.end());
+    
     for(int i=0; i<argCount; i++) vm->pop();
-    vm->push(Value::runtimeString(vm->internString("packed_data_stub")));
+    for(const auto& v : res_vals) vm->push(v);
+    vm->currentCoroutine()->lastResultCount = results;
     return true;
 }
 
@@ -771,5 +901,6 @@ void registerStringLibrary(VM* vm, TableObject* stringTable) {
     vm->addNativeToTable(stringTable, "format", native_string_format);
     vm->addNativeToTable(stringTable, "packsize", native_string_packsize);
     vm->addNativeToTable(stringTable, "pack", native_string_pack);
+    vm->addNativeToTable(stringTable, "unpack", native_string_unpack);
     vm->addNativeToTable(stringTable, "dump", native_string_dump);
 }
