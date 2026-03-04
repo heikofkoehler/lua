@@ -53,9 +53,6 @@ enum class OpCode : uint8_t {
     OP_GREATER,     // Greater than: pop b, pop a, push a > b
     OP_GREATER_EQUAL, // Greater or equal: pop b, pop a, push a >= b
 
-    // I/O operations (MVP)
-    OP_PRINT,       // Print top of stack (doesn't pop)
-
     // Control flow
     OP_POP,         // Pop and discard top of stack
     OP_DUP,         // Duplicate top of stack
@@ -135,7 +132,6 @@ inline const char* opcodeName(OpCode op) {
         case OpCode::OP_LESS_EQUAL:    return "OP_LESS_EQUAL";
         case OpCode::OP_GREATER:       return "OP_GREATER";
         case OpCode::OP_GREATER_EQUAL: return "OP_GREATER_EQUAL";
-        case OpCode::OP_PRINT:         return "OP_PRINT";
         case OpCode::OP_POP:           return "OP_POP";
         case OpCode::OP_DUP:           return "OP_DUP";
         case OpCode::OP_SWAP:          return "OP_SWAP";

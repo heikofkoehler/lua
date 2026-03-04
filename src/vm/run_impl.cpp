@@ -510,33 +510,6 @@ bool VM::run(size_t targetFrameCount) {
                 break;
             }
 
-            case OpCode::OP_PRINT: {
-                Value value = pop();
-                // Special handling for strings
-                if (value.isString()) {
-                    size_t index = value.asStringIndex();
-                    StringObject* str = nullptr;
-
-                    // Check if it's a runtime string or compile-time string
-                    if (value.isRuntimeString()) {
-                        // Runtime string from VM pool
-                        str = getString(index);
-                    } else {
-                        // Use current chunk if possible, otherwise fall back to root
-                        str = currentFrame().chunk ? currentFrame().chunk->getString(index) : currentCoroutine_->rootChunk->getString(index);
-                    }
-
-                    if (str) {
-                        std::cout << str->chars() << std::endl;
-                    } else {
-                        std::cout << "<invalid string>" << std::endl;
-                    }
-                } else {
-                    std::cout << value << std::endl;
-                }
-                break;
-            }
-
             case OpCode::OP_POP:
                 pop();
                 break;
