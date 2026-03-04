@@ -29,12 +29,12 @@ const std::unordered_map<std::string, TokenType> Lexer::keywords_ = {
 
 Lexer::Lexer(const std::string& source)
     : source_(source), start_(0), current_(0), line_(1) {
-    // Skip shebang or first-line comment starting with #
-    if (!source_.empty() && source_[0] == '#') {
-        while (current_ < source_.length() && source_[current_] != '\n') {
-            current_++;
-        }
-        // Don't advance start_ yet, it will be done in scanToken
+    // Skip UTF-8 BOM (\xEF\xBB\xBF)
+    if (source_.length() >= 3 && 
+        static_cast<unsigned char>(source_[0]) == 0xEF && 
+        static_cast<unsigned char>(source_[1]) == 0xBB && 
+        static_cast<unsigned char>(source_[2]) == 0xBF) {
+        current_ = 3;
     }
 }
 
@@ -121,7 +121,7 @@ Token Lexer::scanToken() {
             return string();
     }
 
-    return errorToken("Unexpected character '" + std::string(1, c) + "'");
+    return errorToken("unexpected symbol", std::string(1, c));
 }
 
 Token Lexer::peekToken() {
@@ -168,21 +168,45 @@ Token Lexer::makeToken(TokenType type) const {
 }
 
 Token Lexer::errorToken(const std::string& message, const std::string& near) const {
-    if (!near.empty()) {
-        return Token(TokenType::ERROR, message, line_, near);
+    std::string nearEscaped = near;
+    if (nearEscaped.empty()) {
+        nearEscaped = source_.substr(start_, current_ - start_);
     }
-    std::string lexeme = source_.substr(start_, current_ - start_);
-    return Token(TokenType::ERROR, message, line_, lexeme);
+
+    if (!nearEscaped.empty()) {
+        std::string escaped;
+        for (unsigned char c : nearEscaped) {
+            if (c < 32 || c > 126) {
+                char buf[16];
+                snprintf(buf, sizeof(buf), "<\\%d>", (int)c);
+                escaped += buf;
+            } else {
+                escaped += c;
+            }
+        }
+        return Token(TokenType::ERROR, message, line_, escaped);
+    }
+    
+    return Token(TokenType::ERROR, message, line_, "");
 }
 
 void Lexer::skipWhitespace() {
     // Special-case: ignore a Unix shebang at start of file
-    // Many scripts begin with "#!./lua" which is not valid Lua syntax,
-    // so we treat the first line as a comment if it starts with '#!'.
-    if (current_ == 0 && peek() == '#' && peekNext() == '!') {
+    // Many scripts begin with "#!./lua" or just "# shebang"
+    // It can follow a BOM (current_ > 0) or be at the very start (current_ == 0)
+    static const size_t BOM_SIZE = 3;
+    bool atStart = (current_ == 0);
+    if (!atStart && current_ == BOM_SIZE) {
+        if (static_cast<unsigned char>(source_[0]) == 0xEF && 
+            static_cast<unsigned char>(source_[1]) == 0xBB && 
+            static_cast<unsigned char>(source_[2]) == 0xBF) {
+            atStart = true;
+        }
+    }
+
+    if (atStart && peek() == '#') {
         // consume until end of line or EOF
         while (!isAtEnd() && peek() != '\n') advance();
-        // newline will be handled below and bump line count
     }
 
     while (true) {

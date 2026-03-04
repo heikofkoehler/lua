@@ -216,7 +216,10 @@ bool native_os_execute(VM* vm, int argCount) {
         vm->push(Value::runtimeString(vm->internString("system() failed")));
         vm->push(Value::number(-1));
     } else {
-        vm->push(Value::boolean(true));
+        // In most systems, 0 means success.
+        // We should ideally use WIFEXITED/WEXITSTATUS on POSIX, 
+        // but for a simple cross-platform stub, res == 0 is success.
+        vm->push(Value::boolean(res == 0));
         vm->push(Value::runtimeString(vm->internString("exit")));
         vm->push(Value::number(res));
     }

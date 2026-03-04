@@ -22,7 +22,7 @@ std::string readFile(const std::string& path) {
 }
 
 // Run Lua source code
-bool run(const std::string& source, VM& vm) {
+bool run(const std::string& source, VM& vm, const std::string& name = "chunk") {
     try {
         // Lexical analysis
         Lexer lexer(source);
@@ -38,7 +38,7 @@ bool run(const std::string& source, VM& vm) {
 
         // Code generation
         CodeGenerator codegen;
-        auto function = codegen.generate(program.get());
+        auto function = codegen.generate(program.get(), name);
 
         if (!function) {
             std::cerr << "Code generation error" << std::endl;
@@ -48,14 +48,36 @@ bool run(const std::string& source, VM& vm) {
         // Execution
         return vm.run(*function);
     } catch (const CompileError& e) {
-
-        std::cerr << e.what() << std::endl;
+        std::cerr << name << ":" << e.line() << ": " << e.what() << std::endl;
         return false;
     } catch (const RuntimeError& e) {
         return false;
     } catch (const std::exception& e) {
         std::cerr << "Error: " << e.what() << std::endl;
         return false;
+    }
+}
+
+// Run initialization code from LUA_INIT or LUA_INIT_5_5
+void runInit(VM& vm) {
+    const char* init = getenv("LUA_INIT_5_5");
+    if (!init) init = getenv("LUA_INIT");
+    if (!init) return;
+
+    if (init[0] == '@') {
+        // Run file
+        std::string path = init + 1;
+        try {
+            std::ifstream file(path);
+            if (file.is_open()) {
+                std::stringstream buffer;
+                buffer << file.rdbuf();
+                run(buffer.str(), vm, "LUA_INIT");
+            }
+        } catch (...) {}
+    } else {
+        // Run source
+        run(init, vm, "LUA_INIT");
     }
 }
 
@@ -106,6 +128,8 @@ int runBytecode(const std::string& path, bool verbose, int argc, char* argv[], i
         }
         vm.setGlobal("arg", Value::table(argTable));
 
+        runInit(vm);
+
         if (!vm.run(*function)) {
             return 1;
         }
@@ -119,7 +143,16 @@ int runBytecode(const std::string& path, bool verbose, int argc, char* argv[], i
 // Run file
 int runFile(const std::string& path, bool verbose, int argc, char* argv[], int scriptIndex) {
     try {
-        std::string source = readFile(path);
+        std::ifstream file(path, std::ios::binary);
+        if (!file.is_open()) {
+            throw std::runtime_error("Could not open file: " + path);
+        }
+        
+        // Peek at signature
+        char sig[4];
+        file.read(sig, 4);
+        bool isBytecode = (file.gcount() == 4 && std::memcmp(sig, "\x1bLua", 4) == 0);
+        
         VM vm;
         vm.setTraceExecution(verbose);
         vm.initStandardLibrary();
@@ -131,11 +164,24 @@ int runFile(const std::string& path, bool verbose, int argc, char* argv[], int s
         }
         vm.setGlobal("arg", Value::table(argTable));
 
-        if (!run(source, vm)) {
-            return 1;
-        }
+        runInit(vm);
 
-        return 0;
+        if (isBytecode) {
+            auto function = FunctionObject::deserialize(file);
+            if (!function) {
+                std::cerr << "Error: Could not deserialize bytecode" << std::endl;
+                return 1;
+            }
+            return vm.run(*function) ? 0 : 1;
+        } else {
+            // Seek back to start if not bytecode
+            file.clear();
+            file.seekg(0);
+            std::stringstream buffer;
+            buffer << file.rdbuf();
+            std::string source = buffer.str();
+            return run(source, vm) ? 0 : 1;
+        }
     } catch (const std::exception& e) {
         std::cerr << "Error: " << e.what() << std::endl;
         return 1;
@@ -143,9 +189,7 @@ int runFile(const std::string& path, bool verbose, int argc, char* argv[], int s
 }
 
 // Interactive REPL
-void repl(bool verbose) {
-    VM vm;
-    vm.setTraceExecution(verbose);
+void repl(VM& vm) {
     std::string line;
 
     std::cout << "Lua VM (MVP) - Type 'exit' to quit" << std::endl;
@@ -195,6 +239,8 @@ int main(int argc, char* argv[]) {
     bool verbose = false;
     bool compileOnly = false;
     bool isBytecode = false;
+    bool interactive = false;
+    std::vector<std::string> executeStrings;
     std::string scriptPath = "";
     int scriptIndex = 0;
     std::string outputPath = "";
@@ -207,6 +253,15 @@ int main(int argc, char* argv[]) {
             if (argc == 2) {
                 std::cout << "Lua 5.5.0 (MVP)" << std::endl;
                 return 0;
+            }
+        } else if (!stopFlags && arg == "-i") {
+            interactive = true;
+        } else if (!stopFlags && arg == "-e") {
+            if (i + 1 < argc) {
+                executeStrings.push_back(argv[++i]);
+            } else {
+                std::cerr << "Error: -e option requires an argument" << std::endl;
+                return 1;
             }
         } else if (!stopFlags && (arg == "-c" || arg == "--compile")) {
             compileOnly = true;
@@ -233,10 +288,19 @@ int main(int argc, char* argv[]) {
                 std::cerr << "Too many arguments" << std::endl;
                 return 1;
             }
-        } else if (!stopFlags && arg[0] == '-') {
-            std::cerr << "Unknown option: " << arg << std::endl;
-            printUsage(argv[0]);
-            return 1;
+        } else if (!stopFlags && arg[0] == '-' && arg.length() > 1) {
+            // Handle combined short flags like -vi
+            for (size_t j = 1; j < arg.length(); j++) {
+                char c = arg[j];
+                if (c == 'v') verbose = true;
+                else if (c == 'i') interactive = true;
+                else if (c == 'E') { /* ignore for now */ }
+                else if (c == 'W') { /* ignore for now */ }
+                else {
+                    std::cerr << "Unknown option: -" << c << std::endl;
+                    return 1;
+                }
+            }
         } else {
             if (scriptPath.empty()) {
                 scriptPath = arg;
@@ -247,59 +311,108 @@ int main(int argc, char* argv[]) {
         }
     }
 
-    if (scriptPath.empty()) {
-        if (compileOnly || !outputPath.empty()) {
-            std::cerr << "Error: No script specified for compilation" << std::endl;
+    VM vm;
+    vm.setTraceExecution(verbose);
+    vm.initStandardLibrary();
+
+    // Set up the 'arg' table early so -e scripts can access it
+    TableObject* argTable = vm.createTable();
+    for (int i = 0; i < argc; i++) {
+        argTable->set(Value::number(i - (scriptIndex == 0 ? argc : scriptIndex)), 
+                      Value::runtimeString(vm.internString(argv[i])));
+    }
+    vm.setGlobal("arg", Value::table(argTable));
+
+    runInit(vm);
+
+    for (const auto& code : executeStrings) {
+        if (!run(code, vm, "=(command line)")) {
             return 1;
         }
+    }
+
+    int result = 0;
+    if (scriptPath == "-") {
+        // Read from stdin
+        std::stringstream buffer;
+        buffer << std::cin.rdbuf();
+        std::string source = buffer.str();
         
-        if (isatty(STDIN_FILENO)) {
-            // No script - start REPL
-            repl(verbose);
-            return 0;
-        } else {
-            // Read from stdin
-            std::string source;
-            std::string line;
-            while (std::getline(std::cin, line)) {
-                source += line + "\n";
+        if (source.length() >= 4 && std::memcmp(source.data(), "\x1bLua", 4) == 0) {
+            std::istringstream is(source.substr(4), std::ios::binary);
+            auto function = FunctionObject::deserialize(is);
+            if (!function) {
+                std::cerr << "Error: Could not deserialize bytecode from stdin" << std::endl;
+                result = 1;
+            } else {
+                result = vm.run(*function) ? 0 : 1;
             }
-            VM vm;
-            vm.setTraceExecution(verbose);
-            vm.initStandardLibrary();
-            return run(source, vm) ? 0 : 1;
+        } else {
+            result = run(source, vm, "=stdin") ? 0 : 1;
         }
-    } else {
-        if (scriptPath == "-") {
-            // Read from stdin
-            std::string source;
-            std::string line;
-            while (std::getline(std::cin, line)) {
-                source += line + "\n";
-            }
-            VM vm;
-            vm.setTraceExecution(verbose);
-            vm.initStandardLibrary();
-
-            // Set up the 'arg' table
-            TableObject* argTable = vm.createTable();
-            for (int i = 0; i < argc; i++) {
-                argTable->set(Value::number(i - scriptIndex), Value::runtimeString(vm.internString(argv[i])));
-            }
-            vm.setGlobal("arg", Value::table(argTable));
-
-            return run(source, vm) ? 0 : 1;
-        } else if (compileOnly) {
+    } else if (!scriptPath.empty()) {
+        if (compileOnly) {
             if (outputPath.empty()) outputPath = "out.luac";
-            return compileFile(scriptPath, outputPath);
+            result = compileFile(scriptPath, outputPath);
         } else if (isBytecode) {
-            return runBytecode(scriptPath, verbose, argc, argv, scriptIndex);
-        } else {
-            // Normal source execution, but if outputPath is set, compile it first too
-            if (!outputPath.empty()) {
-                compileFile(scriptPath, outputPath);
+            try {
+                std::ifstream is(scriptPath, std::ios::binary);
+                if (!is.is_open()) {
+                    std::cerr << "Could not open bytecode file: " << scriptPath << std::endl;
+                    result = 1;
+                } else {
+                    auto function = FunctionObject::deserialize(is);
+                    result = vm.run(*function) ? 0 : 1;
+                }
+            } catch (const std::exception& e) {
+                std::cerr << "Error: " << e.what() << std::endl;
+                result = 1;
             }
-            return runFile(scriptPath, verbose, argc, argv, scriptIndex);
+        } else {
+            // Normal file execution
+            try {
+                std::ifstream file(scriptPath, std::ios::binary);
+                if (!file.is_open()) {
+                    std::cerr << "Error: Could not open file " << scriptPath << std::endl;
+                    result = 1;
+                } else {
+                    char sig[4];
+                    file.read(sig, 4);
+                    bool isByte = (file.gcount() == 4 && std::memcmp(sig, "\x1bLua", 4) == 0);
+                    if (isByte) {
+                        auto function = FunctionObject::deserialize(file);
+                        result = vm.run(*function) ? 0 : 1;
+                    } else {
+                        file.clear();
+                        file.seekg(0);
+                        std::stringstream buffer;
+                        buffer << file.rdbuf();
+                        result = run(buffer.str(), vm, scriptPath) ? 0 : 1;
+                    }
+                }
+            } catch (const std::exception& e) {
+                std::cerr << "Error: " << e.what() << std::endl;
+                result = 1;
+            }
         }
     }
+
+    if (interactive || (scriptPath.empty() && executeStrings.empty() && isatty(STDIN_FILENO))) {
+        repl(vm);
+    } else if (scriptPath.empty() && executeStrings.empty()) {
+        std::stringstream buffer;
+        buffer << std::cin.rdbuf();
+        std::string source = buffer.str();
+        if (!source.empty()) {
+            if (source.length() >= 4 && std::memcmp(source.data(), "\x1bLua", 4) == 0) {
+                std::istringstream is(source.substr(4), std::ios::binary);
+                auto function = FunctionObject::deserialize(is);
+                if (function) vm.run(*function);
+            } else {
+                run(source, vm, "=stdin");
+            }
+        }
+    }
+
+    return result;
 }

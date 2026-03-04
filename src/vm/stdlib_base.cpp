@@ -394,7 +394,7 @@ bool native_loadfile(VM* vm, int argCount) {
     std::string path = vm->getStringValue(vm->peek(argCount - 1));
     for(int i=0; i<argCount; i++) vm->pop();
 
-    std::ifstream file(path);
+    std::ifstream file(path, std::ios::binary);
     if (!file.is_open()) {
         vm->push(Value::nil());
         StringObject* errStr = vm->internString("Could not open file: " + path);
@@ -402,6 +402,27 @@ bool native_loadfile(VM* vm, int argCount) {
         return true;
     }
 
+    // Check for signature
+    char sig[4];
+    file.read(sig, 4);
+    if (file.gcount() == 4 && std::memcmp(sig, "\x1bLua", 4) == 0) {
+        auto function = FunctionObject::deserialize(file);
+        if (!function) {
+            vm->push(Value::nil());
+            vm->push(Value::runtimeString(vm->internString("Could not deserialize bytecode in " + path)));
+            return true;
+        }
+        FunctionObject* funcPtr = function.get();
+        vm->registerFunction(function.release());
+        ClosureObject* closure = vm->createClosure(funcPtr);
+        vm->setupRootUpvalues(closure);
+        vm->push(Value::closure(closure));
+        return true;
+    }
+
+    // Not bytecode, read as source
+    file.clear();
+    file.seekg(0);
     std::stringstream buffer;
     buffer << file.rdbuf();
     std::string source = buffer.str();
@@ -453,6 +474,22 @@ bool native_load(VM* vm, int argCount) {
     }
     std::string source = vm->getStringValue(vm->peek(argCount - 1));
     for(int i=0; i<argCount; i++) vm->pop();
+
+    if (source.length() >= 4 && std::memcmp(source.data(), "\x1bLua", 4) == 0) {
+        std::istringstream is(source.substr(4), std::ios::binary);
+        auto function = FunctionObject::deserialize(is);
+        if (!function) {
+            vm->push(Value::nil());
+            vm->push(Value::runtimeString(vm->internString("Could not deserialize bytecode")));
+            return true;
+        }
+        FunctionObject* funcPtr = function.get();
+        vm->registerFunction(function.release());
+        ClosureObject* closure = vm->createClosure(funcPtr);
+        vm->setupRootUpvalues(closure);
+        vm->push(Value::closure(closure));
+        return true;
+    }
 
     try {
         Lexer lexer(source);
@@ -721,7 +758,15 @@ void registerBaseLibrary(VM* vm) {
     TableObject* loaded = vm->createTable();
     package->set("loaded", Value::table(loaded));
 
-    package->set("path", Value::runtimeString(vm->internString("./?.lua;./?/init.lua")));
+    const char* path = getenv("LUA_PATH_5_5");
+    if (!path) path = getenv("LUA_PATH");
+    if (!path) path = "./?.lua;./?/init.lua";
+    package->set("path", Value::runtimeString(vm->internString(path)));
+
+    const char* cpath = getenv("LUA_CPATH_5_5");
+    if (!cpath) cpath = getenv("LUA_CPATH");
+    if (!cpath) cpath = "./?.so;./?.dll";
+    package->set("cpath", Value::runtimeString(vm->internString(cpath)));
 
     const char* requireScript = 
         "function require(modname)\n"

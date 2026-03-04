@@ -10,6 +10,7 @@
 #include <cstdio>
 #include <vector>
 #include <cstring>
+#include <sstream>
 
 namespace {
 
@@ -679,8 +680,28 @@ bool native_string_pack(VM* vm, int argCount) {
 }
 
 bool native_string_dump(VM* vm, int argCount) {
-    for(int i=0; i<argCount; i++) vm->pop();
-    vm->push(Value::runtimeString(vm->internString("function_bytecode_stub")));
+    if (argCount < 1) {
+        vm->runtimeError("string.dump expects at least 1 argument");
+        return false;
+    }
+    Value val = vm->peek(argCount - 1);
+    if (!val.isClosure()) {
+        vm->runtimeError("bad argument #1 to 'dump' (function expected)");
+        return false;
+    }
+
+    ClosureObject* closure = val.asClosureObj();
+    FunctionObject* function = closure->function();
+
+    std::ostringstream os(std::ios::binary);
+    // Add signature \x1bLua
+    os.write("\x1bLua", 4);
+    function->serialize(os);
+
+    std::string bytecode = os.str();
+
+    for (int i = 0; i < argCount; i++) vm->pop();
+    vm->push(Value::runtimeString(vm->internString(bytecode)));
     return true;
 }
 

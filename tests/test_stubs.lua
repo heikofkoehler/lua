@@ -12,7 +12,7 @@ print("OK")
 print("Testing string.dump...")
 local d = string.dump(function() end)
 assert(type(d) == "string")
-assert(d == "function_bytecode_stub")
+assert(string.sub(d, 1, 4) == "\x1bLua")
 print("OK")
 
 print("Testing string.pack...")
