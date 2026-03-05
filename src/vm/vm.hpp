@@ -163,6 +163,8 @@ public:
     void setGCState(GCState state) { gcState_ = state; }
     bool gcEnabled() const { return gcEnabled_; }
     void setGCEnabled(bool enabled) { gcEnabled_ = enabled; }
+    bool warnEnabled() const { return warnEnabled_; }
+    void setWarnEnabled(bool enabled) { warnEnabled_ = enabled; }
     void markRoots();
     void markValue(const Value& value);
     void markObject(GCObject* object);
@@ -266,6 +268,7 @@ private:
     size_t nextGC_;               // Threshold for next GC
     size_t memoryLimit_;          // Maximum bytes allowed before Emergency GC
     bool gcEnabled_;              // Can disable GC for debugging
+    bool warnEnabled_;            // Lua 5.4 warning state
     std::vector<class TableObject*> weakTables_;
 
     std::unordered_map<std::string, Value> registry_; // Internal registry

@@ -59,6 +59,10 @@ local function test_close_is_const()
         x = 20
     ]]
     local f, err = load(source)
+    if f ~= nil then
+        print("FAIL: load should have failed but returned a function!")
+        print("Source was: " .. source)
+    end
     assert(f == nil)
     assert(string.find(err, "attempt to assign to const variable 'x'"))
 end

@@ -484,22 +484,48 @@ bool native_rawlen(VM* vm, int argCount) {
     Value a = vm->peek(0);
     for(int i=0; i<argCount; i++) vm->pop();
     if (a.isString()) {
-        vm->push(Value::number(static_cast<double>(vm->getStringValue(a).length())));
+        vm->push(Value::integer(static_cast<int64_t>(vm->getStringValue(a).length())));
     } else if (a.isTable()) {
-        vm->push(Value::number(static_cast<double>(a.asTableObj()->length())));
+        vm->push(Value::integer(static_cast<int64_t>(a.asTableObj()->length())));
     } else {
         vm->runtimeError("rawlen expects string or table");
         return false;
     }
+    vm->currentCoroutine()->lastResultCount = 1;
     return true;
 }
 
 bool native_warn(VM* vm, int argCount) {
-    std::cerr << "Lua Warning: ";
-    for (int i = 0; i < argCount; i++) {
-        std::cerr << vm->peek(argCount - 1 - i).toString();
+    if (argCount == 0) return true;
+
+    // Check for control messages
+    Value first = vm->peek(argCount - 1);
+    if (first.isString()) {
+        std::string s = vm->getStringValue(first);
+        if (!s.empty() && s[0] == '@') {
+            if (s == "@off") {
+                vm->setWarnEnabled(false);
+            } else if (s == "@on") {
+                vm->setWarnEnabled(true);
+            } else if (s == "@base") {
+                // @base is technically a no-op control msg in default warn, 
+                // it just resets the internal concatenation if it were stateful.
+            }
+            // Control messages are not printed.
+            for (int i = 0; i < argCount; i++) vm->pop();
+            vm->push(Value::nil());
+            return true;
+        }
     }
-    std::cerr << std::endl;
+
+    if (vm->warnEnabled()) {
+        std::cerr << "Lua warning: ";
+        for (int i = 0; i < argCount; i++) {
+            std::cerr << vm->peek(argCount - 1 - i).toString();
+        }
+        std::cerr << std::endl;
+    }
+
     for (int i = 0; i < argCount; i++) vm->pop();
     vm->push(Value::nil());
     return true;
@@ -518,6 +544,12 @@ bool native_loadfile(VM* vm, int argCount) {
         env = vm->peek(argCount - 3);
     }
 
+    std::string mode = "bt";
+    if (argCount >= 2) {
+        Value modeVal = vm->peek(argCount - 2);
+        if (!modeVal.isNil()) mode = vm->getStringValue(modeVal);
+    }
+
     std::string sourceName = "@" + path;
 
     std::ifstream file(path, std::ios::binary);
@@ -532,7 +564,16 @@ bool native_loadfile(VM* vm, int argCount) {
     // Check for signature
     char sig[4];
     file.read(sig, 4);
-    if (file.gcount() == 4 && std::memcmp(sig, "\x1bLua", 4) == 0) {
+    bool isBinary = (file.gcount() == 4 && std::memcmp(sig, "\x1bLua", 4) == 0);
+
+    if (isBinary) {
+        if (mode.find('b') == std::string::npos) {
+            for(int i=0; i<argCount; i++) vm->pop();
+            vm->push(Value::nil());
+            vm->push(Value::runtimeString(vm->internString("attempt to load a binary chunk (mode is '" + mode + "')")));
+            vm->currentCoroutine()->lastResultCount = 2;
+            return true;
+        }
         auto function = FunctionObject::deserialize(file);
         if (!function) {
             for(int i=0; i<argCount; i++) vm->pop();
@@ -547,6 +588,15 @@ bool native_loadfile(VM* vm, int argCount) {
         vm->setupRootUpvalues(closure, env);
         for(int i=0; i<argCount; i++) vm->pop();
         vm->push(Value::closure(closure));
+        return true;
+    }
+
+    // Text chunk
+    if (mode.find('t') == std::string::npos) {
+        for(int i=0; i<argCount; i++) vm->pop();
+        vm->push(Value::nil());
+        vm->push(Value::runtimeString(vm->internString("attempt to load a text chunk (mode is '" + mode + "')")));
+        vm->currentCoroutine()->lastResultCount = 2;
         return true;
     }
 
@@ -594,6 +644,7 @@ bool native_loadfile(VM* vm, int argCount) {
         vm->push(Value::nil());
         StringObject* errStr = vm->internString(e.what());
         vm->push(Value::runtimeString(errStr));
+        vm->currentCoroutine()->lastResultCount = 2;
         return true;
     } catch (const std::exception& e) {
         for(int i=0; i<argCount; i++) vm->pop();
@@ -657,7 +708,21 @@ bool native_load(VM* vm, int argCount) {
         env = vm->peek(argCount - 4);
     }
 
-    if (source.length() >= 4 && std::memcmp(source.data(), "\x1bLua", 4) == 0) {
+    std::string mode = "bt";
+    if (argCount >= 3) {
+        Value modeVal = vm->peek(argCount - 3);
+        if (!modeVal.isNil()) mode = vm->getStringValue(modeVal);
+    }
+    bool isBinary = (source.length() >= 4 && std::memcmp(source.data(), "\x1bLua", 4) == 0);
+
+    if (isBinary) {
+        if (mode.find('b') == std::string::npos) {
+            for(int i=0; i<argCount; i++) vm->pop();
+            vm->push(Value::nil());
+            vm->push(Value::runtimeString(vm->internString("attempt to load a binary chunk (mode is '" + mode + "')")));
+            vm->currentCoroutine()->lastResultCount = 2;
+            return true;
+        }
         std::istringstream is(source.substr(4), std::ios::binary);
         auto function = FunctionObject::deserialize(is);
         if (!function) {
@@ -673,6 +738,15 @@ bool native_load(VM* vm, int argCount) {
         vm->setupRootUpvalues(closure, env);
         for(int i=0; i<argCount; i++) vm->pop();
         vm->push(Value::closure(closure));
+        return true;
+    }
+
+    // Text chunk
+    if (mode.find('t') == std::string::npos) {
+        for(int i=0; i<argCount; i++) vm->pop();
+        vm->push(Value::nil());
+        vm->push(Value::runtimeString(vm->internString("attempt to load a text chunk (mode is '" + mode + "')")));
+        vm->currentCoroutine()->lastResultCount = 2;
         return true;
     }
 
@@ -710,6 +784,7 @@ bool native_load(VM* vm, int argCount) {
         for(int i=0; i<argCount; i++) vm->pop();
         vm->push(Value::nil());
         vm->push(Value::runtimeString(vm->internString(e.what())));
+        vm->currentCoroutine()->lastResultCount = 2;
         return true;
     } catch (const std::exception& e) {
         for(int i=0; i<argCount; i++) vm->pop();
@@ -763,19 +838,17 @@ bool native_select(VM* vm, int argCount) {
         vm->runtimeError("bad argument #1 to 'select' (index out of range)");
         return false;
     }
-
-    std::vector<Value> results;
-    if (index <= numArgs) {
-        for (int i = index; i <= numArgs; i++) {
-            results.push_back(vm->peek(numArgs - i));
-        }
+std::vector<Value> results;
+if (index <= numArgs) {
+    for (int i = index; i <= numArgs; i++) {
+        results.push_back(vm->peek(numArgs - i));
     }
+}
 
-    for(int i=0; i<argCount; i++) vm->pop();
-    for (const auto& res : results) {
-        vm->push(res);
-    }
-    return true;
+for(int i=0; i<argCount; i++) vm->pop();
+for (const auto& res : results) {
+    vm->push(res);
+}
     vm->currentCoroutine()->lastResultCount = results.size();
     return true;
 }

@@ -11,6 +11,7 @@
 #include <vector>
 #include <cstring>
 #include <sstream>
+#include <iostream>
 
 namespace {
 
@@ -735,43 +736,74 @@ bool native_string_format(VM* vm, int argCount) {
 }
 
 // Helper for string.pack/unpack
-struct PackState {
-    bool littleEndian = true; // Default for most modern systems
-    size_t alignment = 1;
-};
-
-static size_t get_size(char spec, int& size) {
+static size_t get_spec_size(char spec, int& size) {
     switch (spec) {
-        case 'b': case 'B': case 'x': size = 1; return 1;
+        case 'b': case 'B': size = 1; return 1;
         case 'h': case 'H': size = 2; return 2;
-        case 'i': case 'I': case 'l': case 'L': case 'j': case 'J': case 'T': size = 8; return 8; // simplified
+        case 'l': case 'L': size = 4; return 4; // Use 4 for i32
+        case 'j': case 'J': case 'T': case 'i': case 'I': size = 8; return 8; 
         case 'f': size = 4; return 4;
         case 'd': case 'n': size = 8; return 8;
-        case 'X': size = 0; return 0; // simplified alignment
         default: size = 0; return 0;
+    }
+}
+
+static void apply_alignment(size_t& offset, size_t align, std::string* result = nullptr) {
+    if (align > 1) {
+        size_t padding = (align - (offset % align)) % align;
+        if (result) {
+            for (size_t i = 0; i < padding; i++) result->push_back('\0');
+        }
+        offset += padding;
     }
 }
 
 bool native_string_packsize(VM* vm, int argCount) {
     if (argCount < 1) { vm->runtimeError("string.packsize expects format"); return false; }
     std::string fmt = vm->getStringValue(vm->peek(argCount - 1));
+    
     size_t total = 0;
+    size_t currentAlignment = 1;
+
     for (size_t i = 0; i < fmt.length(); i++) {
-        if (fmt[i] == '!' || fmt[i] == '<' || fmt[i] == '>' || fmt[i] == '=') {
-            if (fmt[i] == '!' && i + 1 < fmt.length() && isdigit((unsigned char)fmt[i+1])) {
-                i++; // skip alignment number
+        char spec = fmt[i];
+        if (spec == ' ' || spec == '<' || spec == '>' || spec == '=') continue;
+        if (spec == '!') {
+            if (i + 1 < fmt.length() && isdigit((unsigned char)fmt[i+1])) {
+                currentAlignment = fmt[i+1] - '0';
+                i++;
+            } else {
+                currentAlignment = 8; // Default native alignment
             }
             continue;
         }
+        
         int size;
-        if (get_size(fmt[i], size) > 0) total += size;
-        else if (fmt[i] == 's') {
+        size_t specSize = get_spec_size(spec, size);
+        if (specSize > 0 && spec != 'x') {
+            size_t align = std::min(specSize, currentAlignment);
+            apply_alignment(total, align);
+            total += specSize;
+        } else if (spec == 'x') {
+            total += 1;
+        } else if (spec == 'X') {
+            if (i + 1 < fmt.length()) {
+                int dummy;
+                size_t xSize = get_spec_size(fmt[i+1], dummy);
+                if (xSize > 0) {
+                    size_t align = std::min(xSize, currentAlignment);
+                    apply_alignment(total, align);
+                }
+            }
+        } else if (spec == 's' || spec == 'z') {
             vm->runtimeError("variable-length format in string.packsize");
             return false;
         }
     }
+    
     for(int i=0; i<argCount; i++) vm->pop();
     vm->push(Value::number(static_cast<double>(total)));
+    vm->currentCoroutine()->lastResultCount = 1;
     return true;
 }
 
@@ -779,49 +811,86 @@ bool native_string_pack(VM* vm, int argCount) {
     if (argCount < 1) { vm->runtimeError("string.pack expects format"); return false; }
     std::string fmt = vm->getStringValue(vm->peek(argCount - 1));
     std::string result;
+    size_t currentAlignment = 1;
     int argIdx = 1;
 
     for (size_t i = 0; i < fmt.length(); i++) {
         char spec = fmt[i];
-        if (spec == '<' || spec == '>' || spec == '=' || spec == '!') {
-            if (spec == '!' && i + 1 < fmt.length() && isdigit((unsigned char)fmt[i+1])) {
+        if (spec == ' ' || spec == '<' || spec == '>' || spec == '=') continue;
+        if (spec == '!') {
+            if (i + 1 < fmt.length() && isdigit((unsigned char)fmt[i+1])) {
+                currentAlignment = fmt[i+1] - '0';
                 i++;
+            } else {
+                currentAlignment = 8;
             }
             continue;
         }
-        if (spec == 'X') continue;
+
+        if (spec == 'X') {
+            if (i + 1 < fmt.length()) {
+                int dummy;
+                size_t xSize = get_spec_size(fmt[i+1], dummy);
+                if (xSize > 0) {
+                    size_t align = std::min(xSize, currentAlignment);
+                    size_t offset = result.length();
+                    apply_alignment(offset, align, &result);
+                }
+            }
+            continue;
+        }
+
         if (spec == 'x') {
             result.push_back('\0');
             continue;
         }
-        
-        if (argIdx >= argCount) { vm->runtimeError("bad argument to 'pack' (no value)"); return false; }
-        Value val = vm->peek(argCount - 1 - argIdx);
-        
-        if (spec == 'b' || spec == 'B') {
-            unsigned char b = static_cast<unsigned char>(val.asNumber());
-            result.push_back(b);
-        } else if (spec == 'i' || spec == 'I' || spec == 'j' || spec == 'J' || spec == 'T') {
-            int64_t v = val.asInteger();
-            result.append(reinterpret_cast<char*>(&v), 8);
-        } else if (spec == 'n' || spec == 'd') {
-            double v = val.asNumber();
-            result.append(reinterpret_cast<char*>(&v), 8);
-        } else if (spec == 's') {
-            std::string s = vm->getStringValue(val);
-            uint64_t len = s.length();
-            result.append(reinterpret_cast<char*>(&len), 8);
-            result.append(s);
-        } else if (spec == 'z') {
-            std::string s = vm->getStringValue(val);
-            result.append(s);
-            result.push_back('\0');
+
+        int size;
+        size_t specSize = get_spec_size(spec, size);
+        if (specSize > 0 || spec == 's' || spec == 'z') {
+            if (argIdx >= argCount) { vm->runtimeError("bad argument to 'pack' (no value)"); return false; }
+            Value val = vm->peek(argCount - 1 - argIdx);
+            
+            if (specSize > 0) {
+                size_t align = std::min(specSize, currentAlignment);
+                size_t offset = result.length();
+                apply_alignment(offset, align, &result);
+                
+                if (spec == 'b' || spec == 'B') {
+                    result.push_back(static_cast<unsigned char>(val.asNumber()));
+                } else if (spec == 'h' || spec == 'H') {
+                    int16_t v = static_cast<int16_t>(val.asNumber());
+                    result.append(reinterpret_cast<char*>(&v), 2);
+                } else if (spec == 'l' || spec == 'L') {
+                    int32_t v = static_cast<int32_t>(val.asNumber());
+                    result.append(reinterpret_cast<char*>(&v), 4);
+                } else if (spec == 'i' || spec == 'I' || spec == 'j' || spec == 'J' || spec == 'T') {
+                    int64_t v = val.asInteger();
+                    result.append(reinterpret_cast<char*>(&v), 8);
+                } else if (spec == 'f') {
+                    float v = static_cast<float>(val.asNumber());
+                    result.append(reinterpret_cast<char*>(&v), 4);
+                } else if (spec == 'n' || spec == 'd') {
+                    double v = val.asNumber();
+                    result.append(reinterpret_cast<char*>(&v), 8);
+                }
+            } else if (spec == 's') {
+                std::string s = vm->getStringValue(val);
+                uint64_t len = s.length();
+                result.append(reinterpret_cast<char*>(&len), 8);
+                result.append(s);
+            } else if (spec == 'z') {
+                std::string s = vm->getStringValue(val);
+                result.append(s);
+                result.push_back('\0');
+            }
+            argIdx++;
         }
-        argIdx++;
     }
 
     for (int i = 0; i < argCount; i++) vm->pop();
     vm->push(Value::runtimeString(vm->internString(result)));
+    vm->currentCoroutine()->lastResultCount = 1;
     return true;
 }
 
@@ -836,62 +905,90 @@ bool native_string_unpack(VM* vm, int argCount) {
         return false;
     }
 
-    int current = pos - 1;
+    size_t current = pos - 1;
+    size_t currentAlignment = 1;
     int results = 0;
 
     for (size_t i = 0; i < fmt.length(); i++) {
         char spec = fmt[i];
-        if (spec == '<' || spec == '>' || spec == '=' || spec == '!') {
-            if (spec == '!' && i + 1 < fmt.length() && isdigit((unsigned char)fmt[i+1])) {
+        if (spec == ' ' || spec == '<' || spec == '>' || spec == '=') continue;
+        if (spec == '!') {
+            if (i + 1 < fmt.length() && isdigit((unsigned char)fmt[i+1])) {
+                currentAlignment = fmt[i+1] - '0';
                 i++;
+            } else {
+                currentAlignment = 8;
             }
             continue;
         }
-        if (spec == 'X') continue;
+
+        if (spec == 'X') {
+            if (i + 1 < fmt.length()) {
+                int dummy;
+                size_t xSize = get_spec_size(fmt[i+1], dummy);
+                if (xSize > 0) {
+                    size_t align = std::min(xSize, currentAlignment);
+                    apply_alignment(current, align);
+                }
+            }
+            continue;
+        }
+
         if (spec == 'x') {
             current += 1;
             continue;
         }
 
-        if (spec == 'b' || spec == 'B') {
-            if (current + 1 > (int)data.length()) { vm->runtimeError("data string too short"); return false; }
-            vm->push(Value::number(static_cast<unsigned char>(data[current])));
-            current += 1;
-        } else if (spec == 'i' || spec == 'I' || spec == 'j' || spec == 'J' || spec == 'T') {
-            if (current + 8 > (int)data.length()) { vm->runtimeError("data string too short"); return false; }
-            int64_t v;
-            std::memcpy(&v, &data[current], 8);
-            vm->push(Value::integer(v));
-            current += 8;
-        } else if (spec == 'n' || spec == 'd') {
-            if (current + 8 > (int)data.length()) { vm->runtimeError("data string too short"); return false; }
-            double v;
-            std::memcpy(&v, &data[current], 8);
-            vm->push(Value::number(v));
-            current += 8;
+        int size;
+        size_t specSize = get_spec_size(spec, size);
+        if (specSize > 0) {
+            size_t align = std::min(specSize, currentAlignment);
+            apply_alignment(current, align);
+            
+            if (current + specSize > data.length()) { vm->runtimeError("data string too short"); return false; }
+            
+            if (spec == 'b' || spec == 'B') {
+                vm->push(Value::number(static_cast<unsigned char>(data[current])));
+            } else if (spec == 'h' || spec == 'H') {
+                int16_t v; std::memcpy(&v, &data[current], 2);
+                vm->push(Value::number(v));
+            } else if (spec == 'l' || spec == 'L') {
+                int32_t v; std::memcpy(&v, &data[current], 4);
+                vm->push(Value::number(v));
+            } else if (spec == 'i' || spec == 'I' || spec == 'j' || spec == 'J' || spec == 'T') {
+                int64_t v; std::memcpy(&v, &data[current], 8);
+                vm->push(Value::integer(v));
+            } else if (spec == 'f') {
+                float v; std::memcpy(&v, &data[current], 4);
+                vm->push(Value::number(v));
+            } else if (spec == 'n' || spec == 'd') {
+                double v; std::memcpy(&v, &data[current], 8);
+                vm->push(Value::number(v));
+            }
+            current += specSize;
+            results++;
         } else if (spec == 's') {
-            if (current + 8 > (int)data.length()) { vm->runtimeError("data string too short"); return false; }
+            if (current + 8 > data.length()) { vm->runtimeError("data string too short"); return false; }
             uint64_t len;
             std::memcpy(&len, &data[current], 8);
             current += 8;
-            if (current + (int)len > (int)data.length()) { vm->runtimeError("data string too short"); return false; }
+            if (current + len > data.length()) { vm->runtimeError("data string too short"); return false; }
             vm->push(Value::runtimeString(vm->internString(data.substr(current, len))));
             current += len;
+            results++;
         } else if (spec == 'z') {
             size_t null_pos = data.find('\0', current);
             if (null_pos == std::string::npos) { vm->runtimeError("unfinished string for format 'z'"); return false; }
             vm->push(Value::runtimeString(vm->internString(data.substr(current, null_pos - current))));
-            current = (int)null_pos + 1;
+            current = null_pos + 1;
+            results++;
         }
-        results++;
     }
 
-    vm->push(Value::number(current + 1));
+    vm->push(Value::number(static_cast<double>(current + 1)));
     results++;
-
-    // Actually we need to pop original arguments but keep results.
-    // Standard approach: push results, then use a helper or manual stack management.
-    // callValue/run handle this, but for native functions we must pop manually.
+    
+    // Manual stack management to handle native return
     std::vector<Value> res_vals;
     for(int i=0; i<results; i++) res_vals.push_back(vm->pop());
     std::reverse(res_vals.begin(), res_vals.end());

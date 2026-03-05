@@ -55,7 +55,9 @@ assert(math.ult(2, 1) == false)
 assert(math.ult(-1, 1) == false) -- -1 is large when unsigned
 
 -- Random
-math.randomseed(42)
+local s1, s2 = math.randomseed(42, 100)
+assert(type(s1) == "number")
+assert(type(s2) == "number")
 local r1 = math.random()
 assert(r1 >= 0 and r1 < 1)
 local r2 = math.random(10)

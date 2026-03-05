@@ -26,7 +26,8 @@ VM::VM() :
            gcState_(GCState::PAUSE),
            gcObjects_(nullptr), toBeFinalized_(nullptr), bytesAllocated_(0), nextGC_(1024 * 1024), 
            memoryLimit_(100 * 1024 * 1024), // Default 100MB limit
-           gcEnabled_(true) {
+           gcEnabled_(true),
+           warnEnabled_(true) {
     currentVM = this;
     jit_ = std::make_unique<JITCompiler>(this);
     for (int i = 0; i < Value::NUM_TYPES; i++) {
@@ -1124,11 +1125,14 @@ bool VM::callValue(int argCount, int retCount, bool isTailCall) {
         
         size_t funcPosition = currentCoroutine_->stack.size() - argCount - 1;
         
+        // Initialize with 1, native function may override this
+        currentCoroutine_->lastResultCount = 1;
+
         if (!function(this, argCount)) {
             return false;
         }
 
-        size_t resultCount = currentCoroutine_->stack.size() - funcPosition - 1;
+        size_t resultCount = currentCoroutine_->lastResultCount;
         std::vector<Value> results;
         results.reserve(resultCount);
         for (size_t i = 0; i < resultCount; i++) {

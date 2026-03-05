@@ -261,19 +261,34 @@ bool native_math_random(VM* vm, int argCount) {
 
 bool native_math_randomseed(VM* vm, int argCount) {
     auto& rng = get_rng();
-    uint64_t seed = 0;
-    if (argCount >= 1) {
-        seed = static_cast<uint64_t>(vm->peek(argCount - 1).asInteger());
-    } else {
-        seed = std::random_device{}();
-    }
-    rng.set_seed(seed);
+    uint64_t s1, s2;
     
+    if (argCount >= 1) {
+        s1 = static_cast<uint64_t>(vm->peek(argCount - 1).asInteger());
+        if (argCount >= 2) {
+            s2 = static_cast<uint64_t>(vm->peek(argCount - 2).asInteger());
+        } else {
+            s2 = 0;
+        }
+    } else {
+        std::random_device rd;
+        s1 = (static_cast<uint64_t>(rd()) << 32) | rd();
+        s2 = (static_cast<uint64_t>(rd()) << 32) | rd();
+    }
+    
+    // xoshiro256** needs 4 64-bit state values. We'll use our s1, s2 to derive them.
+    rng.s[0] = s1;
+    rng.s[1] = 0xffffffffffffffffULL;
+    rng.s[2] = s2;
+    rng.s[3] = 0;
+    // Scramble a bit to avoid bad initial states
+    for (int i = 0; i < 16; i++) rng();
+
     for (int i = 0; i < argCount; i++) vm->pop();
     
-    // In Lua 5.4, math.randomseed returns the seeds it used.
-    // Since we only use 1 seed argument conceptually, we'll return it.
-    vm->push(Value::integer(static_cast<int64_t>(seed)));
+    vm->push(Value::integer(static_cast<int64_t>(s1)));
+    vm->push(Value::integer(static_cast<int64_t>(s2)));
+    vm->currentCoroutine()->lastResultCount = 2;
     return true;
 }
 

@@ -40,7 +40,8 @@ assert(next_pos == 10)
 assert(string.packsize("bi") == 9)
 
 -- Advanced Packing
-assert(string.packsize("!4xbT") == 10)
+local ps_adv = string.packsize("!4xbT")
+assert(ps_adv == 12) -- 1(x) + 1(b) + 2(padding) + 8(T) = 12
 local data2 = string.pack("x!8XbT", 0x42, 999)
 local val1, val2 = string.unpack("x!8XbT", data2)
 assert(val1 == 0x42)
