@@ -19,8 +19,8 @@ public:
     // Wrap existing stream (e.g. std::cout, std::cin)
     FileObject(std::iostream* stream, const std::string& name);
 
-    // Open pipe
-    FileObject(void* pipe, const std::string& mode);
+    // Open pipe or wrap standard stream (stdin, stdout, stderr)
+    FileObject(FILE* file, const std::string& mode, bool isPipe = false);
     
     ~FileObject();
 
@@ -76,7 +76,7 @@ private:
     bool isOpen_;
     bool isOwned_;
     bool isPipe_ = false;
-    void* pipe_ = nullptr; // FILE* for popen
+    FILE* cfile_ = nullptr; // For popen or standard streams
 };
 
 #endif // LUA_FILE_HPP

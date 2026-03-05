@@ -36,8 +36,8 @@ FileObject::FileObject(std::iostream* stream, const std::string& name)
     : GCObject(GCObject::Type::FILE), filename_(name), mode_(""), stream_(stream), isOpen_(true), isOwned_(false) {
 }
 
-FileObject::FileObject(void* pipe, const std::string& mode)
-    : GCObject(GCObject::Type::FILE), filename_("pipe"), mode_(mode), isOpen_(true), isOwned_(false), isPipe_(true), pipe_(pipe) {
+FileObject::FileObject(FILE* file, const std::string& mode, bool isPipe)
+    : GCObject(GCObject::Type::FILE), filename_(isPipe ? "pipe" : "stdstream"), mode_(mode), stream_(nullptr), isOpen_(file != nullptr), isOwned_(false), isPipe_(isPipe), cfile_(file) {
 }
 
 FileObject::~FileObject() {
@@ -45,19 +45,20 @@ FileObject::~FileObject() {
 }
 
 bool FileObject::isOpen() const {
-    if (isPipe_) return isOpen_ && pipe_ != nullptr;
+    if (cfile_) return isOpen_;
     return isOpen_ && stream_ && (isOwned_ ? ownedStream_->is_open() : true);
 }
 
 bool FileObject::isEOF() const {
+    if (cfile_) return feof(cfile_);
     return stream_ && stream_->eof();
 }
 
 bool FileObject::write(const std::string& data) {
     if (!isOpen()) return false;
 
-    if (isPipe_) {
-        size_t written = fwrite(data.data(), 1, data.length(), (FILE*)pipe_);
+    if (cfile_) {
+        size_t written = fwrite(data.data(), 1, data.length(), cfile_);
         return written == data.length();
     }
 
@@ -70,10 +71,10 @@ bool FileObject::write(const std::string& data) {
 std::string FileObject::readAll() {
     if (!isOpen()) return "";
 
-    if (isPipe_) {
+    if (cfile_) {
         std::string res;
         char buf[4096];
-        while (size_t n = fread(buf, 1, sizeof(buf), (FILE*)pipe_)) {
+        while (size_t n = fread(buf, 1, sizeof(buf), cfile_)) {
             res.append(buf, n);
         }
         return res;
@@ -87,10 +88,10 @@ std::string FileObject::readAll() {
 std::string FileObject::readLine() {
     if (!isOpen()) return "";
 
-    if (isPipe_) {
+    if (cfile_) {
         std::string res;
         char buf[1024];
-        if (fgets(buf, sizeof(buf), (FILE*)pipe_)) {
+        if (fgets(buf, sizeof(buf), cfile_)) {
             res = buf;
             if (!res.empty() && res.back() == '\n') res.pop_back();
         }
@@ -104,13 +105,20 @@ std::string FileObject::readLine() {
 
 void FileObject::close() {
     if (isOpen_) {
-        if (isPipe_) {
+        if (cfile_) {
+            if (isPipe_) {
 #ifndef _WIN32
-            if (pipe_) pclose((FILE*)pipe_);
+                pclose(cfile_);
 #else
-            if (pipe_) _pclose((FILE*)pipe_);
+                _pclose(cfile_);
 #endif
-            pipe_ = nullptr;
+            } else {
+                // Don't close standard streams!
+                if (cfile_ != stdin && cfile_ != stdout && cfile_ != stderr) {
+                    fclose(cfile_);
+                }
+            }
+            cfile_ = nullptr;
         } else if (isOwned_ && ownedStream_) {
             ownedStream_->close();
         }
@@ -121,6 +129,18 @@ void FileObject::close() {
 bool FileObject::seek(const std::string& whence, int64_t offset, int64_t& newPosition) {
     if (!isOpen()) return false;
     
+    if (cfile_) {
+        int w;
+        if (whence == "set") w = SEEK_SET;
+        else if (whence == "cur") w = SEEK_CUR;
+        else if (whence == "end") w = SEEK_END;
+        else return false;
+        
+        if (fseek(cfile_, offset, w) != 0) return false;
+        newPosition = ftell(cfile_);
+        return true;
+    }
+
     std::ios_base::seekdir dir;
     if (whence == "set") dir = std::ios_base::beg;
     else if (whence == "cur") dir = std::ios_base::cur;
@@ -143,6 +163,7 @@ bool FileObject::seek(const std::string& whence, int64_t offset, int64_t& newPos
 
 bool FileObject::flush() {
     if (!isOpen()) return false;
+    if (cfile_) return fflush(cfile_) == 0;
     stream_->flush();
     return stream_->good();
 }

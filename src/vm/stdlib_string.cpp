@@ -764,6 +764,7 @@ bool native_string_packsize(VM* vm, int argCount) {
     
     size_t total = 0;
     size_t currentAlignment = 1;
+    size_t maxAlignment = 1;
 
     for (size_t i = 0; i < fmt.length(); i++) {
         char spec = fmt[i];
@@ -782,6 +783,7 @@ bool native_string_packsize(VM* vm, int argCount) {
         size_t specSize = get_spec_size(spec, size);
         if (specSize > 0 && spec != 'x') {
             size_t align = std::min(specSize, currentAlignment);
+            maxAlignment = std::max(maxAlignment, align);
             apply_alignment(total, align);
             total += specSize;
         } else if (spec == 'x') {
@@ -792,6 +794,7 @@ bool native_string_packsize(VM* vm, int argCount) {
                 size_t xSize = get_spec_size(fmt[i+1], dummy);
                 if (xSize > 0) {
                     size_t align = std::min(xSize, currentAlignment);
+                    maxAlignment = std::max(maxAlignment, align);
                     apply_alignment(total, align);
                 }
             }
@@ -801,6 +804,9 @@ bool native_string_packsize(VM* vm, int argCount) {
         }
     }
     
+    // Tail padding to satisfy currentAlignment
+    apply_alignment(total, currentAlignment);
+
     for(int i=0; i<argCount; i++) vm->pop();
     vm->push(Value::number(static_cast<double>(total)));
     vm->currentCoroutine()->lastResultCount = 1;
@@ -812,6 +818,7 @@ bool native_string_pack(VM* vm, int argCount) {
     std::string fmt = vm->getStringValue(vm->peek(argCount - 1));
     std::string result;
     size_t currentAlignment = 1;
+    size_t maxAlignment = 1;
     int argIdx = 1;
 
     for (size_t i = 0; i < fmt.length(); i++) {
@@ -833,6 +840,7 @@ bool native_string_pack(VM* vm, int argCount) {
                 size_t xSize = get_spec_size(fmt[i+1], dummy);
                 if (xSize > 0) {
                     size_t align = std::min(xSize, currentAlignment);
+                    maxAlignment = std::max(maxAlignment, align);
                     size_t offset = result.length();
                     apply_alignment(offset, align, &result);
                 }
@@ -853,6 +861,7 @@ bool native_string_pack(VM* vm, int argCount) {
             
             if (specSize > 0) {
                 size_t align = std::min(specSize, currentAlignment);
+                maxAlignment = std::max(maxAlignment, align);
                 size_t offset = result.length();
                 apply_alignment(offset, align, &result);
                 
@@ -888,6 +897,10 @@ bool native_string_pack(VM* vm, int argCount) {
         }
     }
 
+    // Tail padding
+    size_t finalOffset = result.length();
+    apply_alignment(finalOffset, currentAlignment, &result);
+
     for (int i = 0; i < argCount; i++) vm->pop();
     vm->push(Value::runtimeString(vm->internString(result)));
     vm->currentCoroutine()->lastResultCount = 1;
@@ -907,6 +920,7 @@ bool native_string_unpack(VM* vm, int argCount) {
 
     size_t current = pos - 1;
     size_t currentAlignment = 1;
+    size_t maxAlignment = 1;
     int results = 0;
 
     for (size_t i = 0; i < fmt.length(); i++) {
@@ -928,6 +942,7 @@ bool native_string_unpack(VM* vm, int argCount) {
                 size_t xSize = get_spec_size(fmt[i+1], dummy);
                 if (xSize > 0) {
                     size_t align = std::min(xSize, currentAlignment);
+                    maxAlignment = std::max(maxAlignment, align);
                     apply_alignment(current, align);
                 }
             }
@@ -943,6 +958,7 @@ bool native_string_unpack(VM* vm, int argCount) {
         size_t specSize = get_spec_size(spec, size);
         if (specSize > 0) {
             size_t align = std::min(specSize, currentAlignment);
+            maxAlignment = std::max(maxAlignment, align);
             apply_alignment(current, align);
             
             if (current + specSize > data.length()) { vm->runtimeError("data string too short"); return false; }
@@ -984,6 +1000,9 @@ bool native_string_unpack(VM* vm, int argCount) {
             results++;
         }
     }
+
+    // Final tail alignment for unpack too
+    apply_alignment(current, currentAlignment);
 
     vm->push(Value::number(static_cast<double>(current + 1)));
     results++;

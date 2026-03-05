@@ -89,6 +89,7 @@ public:
 
     // File operations
     FileObject* openFile(const std::string& filename, const std::string& mode);
+    FileObject* createFile(FILE* f, const std::string& mode);
     FileObject* popen(const std::string& command, const std::string& mode);
     void closeFile(FileObject* file);
 

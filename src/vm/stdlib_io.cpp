@@ -443,13 +443,7 @@ void registerIOLibrary(VM* vm, TableObject* ioTable) {
     fileMeta->set("__index", Value::table(fileMethods));
     vm->setTypeMetatable(Value::Type::FILE, Value::table(fileMeta));
 
-    // Register as globals too for backward compatibility
-    vm->setGlobal("io_open", ioTable->get("open"));
-    vm->setGlobal("io_write", ioTable->get("write"));
-    vm->setGlobal("io_read", ioTable->get("read"));
-    vm->setGlobal("io_close", ioTable->get("close"));
-
-    ioTable->set("stderr", Value::nil());
-    ioTable->set("stdout", Value::nil());
-    ioTable->set("stdin", Value::nil());
+    ioTable->set("stdin", Value::file(vm->createFile(stdin, "r")));
+    ioTable->set("stdout", Value::file(vm->createFile(stdout, "w")));
+    ioTable->set("stderr", Value::file(vm->createFile(stderr, "w")));
 }

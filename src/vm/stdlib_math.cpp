@@ -248,14 +248,18 @@ bool native_math_random(VM* vm, int argCount) {
         if (m < 1) { vm->runtimeError("bad argument #1 to 'random' (interval is empty)"); return false; }
         std::uniform_int_distribution<int64_t> dist(1, m);
         vm->push(Value::integer(dist(rng)));
-    } else {
+    } else if (argCount == 2) {
         int64_t m = vm->peek(argCount - 1).asInteger();
         int64_t n = vm->peek(argCount - 2).asInteger();
         vm->pop(); vm->pop();
         if (m > n) { vm->runtimeError("bad argument #1 to 'random' (interval is empty)"); return false; }
         std::uniform_int_distribution<int64_t> dist(m, n);
         vm->push(Value::integer(dist(rng)));
+    } else {
+        vm->runtimeError("math.random expects 0, 1, or 2 arguments");
+        return false;
     }
+    vm->currentCoroutine()->lastResultCount = 1;
     return true;
 }
 
