@@ -18,6 +18,9 @@ public:
     
     // Wrap existing stream (e.g. std::cout, std::cin)
     FileObject(std::iostream* stream, const std::string& name);
+
+    // Open pipe
+    FileObject(void* pipe, const std::string& mode);
     
     ~FileObject();
 
@@ -45,6 +48,9 @@ public:
     // Close file
     void close();
 
+    // Is this a pipe?
+    bool isPipe() const { return isPipe_; }
+
     // Seek in file
     bool seek(const std::string& whence, int64_t offset, int64_t& newPosition);
 
@@ -69,6 +75,8 @@ private:
     std::iostream* stream_;
     bool isOpen_;
     bool isOwned_;
+    bool isPipe_ = false;
+    void* pipe_ = nullptr; // FILE* for popen
 };
 
 #endif // LUA_FILE_HPP

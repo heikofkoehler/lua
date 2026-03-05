@@ -286,6 +286,16 @@ FileObject* VM::openFile(const std::string& filename, const std::string& mode) {
     return allocateObject<FileObject>(filename, mode);
 }
 
+FileObject* VM::popen(const std::string& command, const std::string& mode) {
+#ifndef _WIN32
+    FILE* pipe = ::popen(command.c_str(), mode.c_str());
+#else
+    FILE* pipe = _popen(command.c_str(), mode.c_str());
+#endif
+    if (!pipe) return nullptr;
+    return allocateObject<FileObject>((void*)pipe, mode);
+}
+
 void VM::closeFile(FileObject* file) {
     if (file) file->close();
 }

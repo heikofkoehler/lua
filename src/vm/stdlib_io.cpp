@@ -377,10 +377,39 @@ bool native_io_lines(VM* vm, int argCount) {
     return false;
 }
 
+bool native_io_popen(VM* vm, int argCount) {
+    if (argCount < 1 || argCount > 2) {
+        vm->runtimeError("io.popen expects 1 or 2 arguments");
+        return false;
+    }
+    
+    std::string mode = "r";
+    if (argCount == 2) {
+        Value modeVal = vm->peek(0);
+        mode = vm->getStringValue(modeVal);
+    }
+    Value commandVal = vm->peek(argCount - 1);
+    std::string command = vm->getStringValue(commandVal);
+    
+    FileObject* file = vm->popen(command, mode);
+    
+    for(int i=0; i<argCount; i++) vm->pop();
+
+    if (file && file->isOpen()) {
+        vm->push(Value::file(file));
+    } else {
+        vm->push(Value::nil());
+        vm->push(Value::runtimeString(vm->internString("could not open pipe")));
+        vm->currentCoroutine()->lastResultCount = 2;
+    }
+    return true;
+}
+
 } // anonymous namespace
 
 void registerIOLibrary(VM* vm, TableObject* ioTable) {
     vm->addNativeToTable(ioTable, "open", native_io_open);
+    vm->addNativeToTable(ioTable, "popen", native_io_popen);
     vm->addNativeToTable(ioTable, "write", native_io_write);
     vm->addNativeToTable(ioTable, "read", native_io_read);
     vm->addNativeToTable(ioTable, "close", native_io_close);

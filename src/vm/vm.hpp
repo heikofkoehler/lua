@@ -87,6 +87,7 @@ public:
 
     // File operations
     FileObject* openFile(const std::string& filename, const std::string& mode);
+    FileObject* popen(const std::string& command, const std::string& mode);
     void closeFile(FileObject* file);
 
     // Socket operations

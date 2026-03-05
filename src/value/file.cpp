@@ -36,11 +36,16 @@ FileObject::FileObject(std::iostream* stream, const std::string& name)
     : GCObject(GCObject::Type::FILE), filename_(name), mode_(""), stream_(stream), isOpen_(true), isOwned_(false) {
 }
 
+FileObject::FileObject(void* pipe, const std::string& mode)
+    : GCObject(GCObject::Type::FILE), filename_("pipe"), mode_(mode), isOpen_(true), isOwned_(false), isPipe_(true), pipe_(pipe) {
+}
+
 FileObject::~FileObject() {
     close();
 }
 
 bool FileObject::isOpen() const {
+    if (isPipe_) return isOpen_ && pipe_ != nullptr;
     return isOpen_ && stream_ && (isOwned_ ? ownedStream_->is_open() : true);
 }
 
@@ -51,6 +56,11 @@ bool FileObject::isEOF() const {
 bool FileObject::write(const std::string& data) {
     if (!isOpen()) return false;
 
+    if (isPipe_) {
+        size_t written = fwrite(data.data(), 1, data.length(), (FILE*)pipe_);
+        return written == data.length();
+    }
+
     *stream_ << data;
     stream_->flush();
 
@@ -60,6 +70,15 @@ bool FileObject::write(const std::string& data) {
 std::string FileObject::readAll() {
     if (!isOpen()) return "";
 
+    if (isPipe_) {
+        std::string res;
+        char buf[4096];
+        while (size_t n = fread(buf, 1, sizeof(buf), (FILE*)pipe_)) {
+            res.append(buf, n);
+        }
+        return res;
+    }
+
     std::stringstream buffer;
     buffer << stream_->rdbuf();
     return buffer.str();
@@ -68,6 +87,16 @@ std::string FileObject::readAll() {
 std::string FileObject::readLine() {
     if (!isOpen()) return "";
 
+    if (isPipe_) {
+        std::string res;
+        char buf[1024];
+        if (fgets(buf, sizeof(buf), (FILE*)pipe_)) {
+            res = buf;
+            if (!res.empty() && res.back() == '\n') res.pop_back();
+        }
+        return res;
+    }
+
     std::string line;
     std::getline(*stream_, line);
     return line;
@@ -75,7 +104,14 @@ std::string FileObject::readLine() {
 
 void FileObject::close() {
     if (isOpen_) {
-        if (isOwned_ && ownedStream_) {
+        if (isPipe_) {
+#ifndef _WIN32
+            if (pipe_) pclose((FILE*)pipe_);
+#else
+            if (pipe_) _pclose((FILE*)pipe_);
+#endif
+            pipe_ = nullptr;
+        } else if (isOwned_ && ownedStream_) {
             ownedStream_->close();
         }
         isOpen_ = false;
