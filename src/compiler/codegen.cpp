@@ -1643,6 +1643,11 @@ void CodeGenerator::addLocal(const std::string& name, bool isConstant, bool isCl
     local.isClose = isClose;
     local.startPC = currentChunk()->size();
     locals_.push_back(local);
+
+    if (isClose) {
+        emitOpCode(OpCode::OP_TBC);
+        emitByte(static_cast<uint8_t>(local.slot));
+    }
 }
 
 int CodeGenerator::resolveLocal(const std::string& name) {
@@ -1803,8 +1808,8 @@ void CodeGenerator::endScope() {
         Local& l = locals_.back();
         finishedLocals_.push_back({l.name, l.startPC, currentChunk()->size(), l.slot});
 
-        if (locals_.back().isCaptured) {
-            // Close the upvalue instead of just popping
+        if (locals_.back().isCaptured || locals_.back().isClose) {
+            // Close the upvalue or to-be-closed variable instead of just popping
             emitOpCode(OpCode::OP_CLOSE_UPVALUE);
         } else {
             emitOpCode(OpCode::OP_POP);

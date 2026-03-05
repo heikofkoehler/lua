@@ -45,6 +45,7 @@ public:
     const Chunk* chunk;
     const Chunk* rootChunk;
     std::vector<UpvalueObject*> openUpvalues;
+    std::vector<size_t> tbcVariables; // Indices in 'stack' that need __close called
     Status status;
     size_t yieldCount;
     uint8_t retCount; // Number of values expected to be returned by yield

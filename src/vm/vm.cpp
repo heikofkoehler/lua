@@ -269,15 +269,47 @@ UpvalueObject* VM::captureUpvalue(size_t stackIndex) {
     return upvalue;
 }
 
-void VM::closeUpvalues(size_t lastStackIndex) {
-    auto it = currentCoroutine_->openUpvalues.begin();
-    while (it != currentCoroutine_->openUpvalues.end()) {
+void VM::closeUpvalues(size_t lastStackIndex, CoroutineObject* co) {
+    if (co == nullptr) co = currentCoroutine_;
+
+    // 1. Handle to-be-closed variables first (in reverse order)
+    closeTBCVariables(lastStackIndex, co);
+
+    // 2. Handle standard upvalues
+    auto it = co->openUpvalues.begin();
+    while (it != co->openUpvalues.end()) {
         UpvalueObject* upvalue = *it;
         if (!upvalue->isClosed() && upvalue->stackIndex() >= lastStackIndex) {
-            upvalue->close(currentCoroutine_->stack);
-            it = currentCoroutine_->openUpvalues.erase(it);
+            upvalue->close(co->stack);
+            it = co->openUpvalues.erase(it);
         } else {
             ++it;
+        }
+    }
+}
+
+void VM::closeTBCVariables(size_t lastStackIndex, CoroutineObject* co) {
+    if (co == nullptr) co = currentCoroutine_;
+
+    while (!co->tbcVariables.empty() && co->tbcVariables.back() >= lastStackIndex) {
+        size_t index = co->tbcVariables.back();
+        co->tbcVariables.pop_back();
+
+        Value val = co->stack[index];
+        Value mm = getMetamethod(val, "__close");
+        if (!mm.isNil()) {
+            // Need to temporarily switch currentCoroutine if we're closing a different one?
+            // standard Lua says __close runs in the thread that is closing it.
+            push(mm);
+            push(val);
+            push(Value::nil()); // Error object (nil if no error)
+            
+            size_t prevFrames = currentCoroutine_->frames.size();
+            if (callValue(2, 1)) {
+                if (currentCoroutine_->frames.size() > prevFrames) {
+                    run(prevFrames);
+                }
+            }
         }
     }
 }
@@ -305,17 +337,11 @@ void VM::closeCoroutine(CoroutineObject* co) {
         runtimeError("cannot close a running coroutine");
         return;
     }
-    
-    // Close all open upvalues in this coroutine
-    for (UpvalueObject* upvalue : co->openUpvalues) {
-        if (!upvalue->isClosed()) {
-            upvalue->close(co->stack);
-        }
-    }
-    co->openUpvalues.clear();
+
+    // Close all open upvalues and TBC variables in this coroutine
+    closeUpvalues(0, co);
     co->status = CoroutineObject::Status::DEAD;
 }
-
 SocketObject* VM::createSocket(socket_t fd) {
     return allocateObject<SocketObject>(fd);
 }

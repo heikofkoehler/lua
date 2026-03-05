@@ -235,9 +235,16 @@ bool VM::run(size_t targetFrameCount) {
                 break;
             }
             case OpCode::OP_CLOSE_UPVALUE: {
-                // Close upvalue at top of stack
+                // Close upvalue at top of stack (and TBC variables)
                 closeUpvalues(currentCoroutine_->stack.size() - 1);
                 pop();
+                break;
+            }
+
+            case OpCode::OP_TBC: {
+                uint8_t slot = readByte();
+                size_t index = currentFrame().stackBase + slot;
+                currentCoroutine_->tbcVariables.push_back(index);
                 break;
             }
 

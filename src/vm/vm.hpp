@@ -83,7 +83,8 @@ public:
 
     // Upvalue operations
     UpvalueObject* captureUpvalue(size_t stackIndex);
-    void closeUpvalues(size_t lastStackIndex);
+    void closeUpvalues(size_t lastStackIndex, CoroutineObject* co = nullptr);
+    void closeTBCVariables(size_t lastStackIndex, CoroutineObject* co = nullptr);
     void setupRootUpvalues(ClosureObject* closure);
 
     // File operations
