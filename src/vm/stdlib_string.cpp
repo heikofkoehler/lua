@@ -887,6 +887,32 @@ bool native_string_dump(VM* vm, int argCount) {
     return true;
 }
 
+bool native_string_rep(VM* vm, int argCount) {
+    if (argCount < 2) { vm->runtimeError("string.rep expects at least 2 arguments"); return false; }
+    std::string s = vm->getStringValue(vm->peek(argCount - 1));
+    int n = static_cast<int>(vm->peek(argCount - 2).asNumber());
+    std::string sep = (argCount >= 3) ? vm->getStringValue(vm->peek(argCount - 3)) : "";
+
+    if (n <= 0) {
+        for (int i = 0; i < argCount; i++) vm->pop();
+        vm->push(Value::runtimeString(vm->internString("")));
+        return true;
+    }
+
+    std::string result;
+    size_t totalLen = (s.length() * n) + (sep.length() * (n - 1));
+    result.reserve(totalLen);
+
+    for (int i = 0; i < n; i++) {
+        result += s;
+        if (i < n - 1) result += sep;
+    }
+
+    for (int i = 0; i < argCount; i++) vm->pop();
+    vm->push(Value::runtimeString(vm->internString(result)));
+    return true;
+}
+
 } // anonymous namespace
 
 void registerStringLibrary(VM* vm, TableObject* stringTable) {
@@ -910,6 +936,7 @@ void registerStringLibrary(VM* vm, TableObject* stringTable) {
     vm->addNativeToTable(stringTable, "__gmatch_step", native_string_gmatch_step);
     vm->addNativeToTable(stringTable, "gsub", native_string_gsub);
     vm->addNativeToTable(stringTable, "format", native_string_format);
+    vm->addNativeToTable(stringTable, "rep", native_string_rep);
     vm->addNativeToTable(stringTable, "packsize", native_string_packsize);
     vm->addNativeToTable(stringTable, "pack", native_string_pack);
     vm->addNativeToTable(stringTable, "unpack", native_string_unpack);
