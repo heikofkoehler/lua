@@ -49,12 +49,10 @@ private:
     };
 
 public:
-    Value() : type_(Type::NIL), integer_(0) {}
+    Value() : type_(Type::NIL) { integer_ = 0; }
 
     static Value nil() {
-        Value v;
-        v.type_ = Type::NIL;
-        return v;
+        return Value();
     }
 
     static Value boolean(bool value) {
