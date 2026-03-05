@@ -847,6 +847,14 @@ void registerBaseLibrary(VM* vm) {
     StringObject* verStr = vm->internString("Lua 5.5");
     vm->setGlobal("_VERSION", Value::runtimeString(verStr));
 
+    TableObject* gTable = vm->createTable();
+    vm->setGlobal("_G", Value::table(gTable));
+    
+    // Populate _G with already defined globals
+    for (auto const& [name, value] : vm->globals()) {
+        gTable->set(name, value);
+    }
+
     TableObject* package = vm->createTable();
     vm->setGlobal("package", Value::table(package));
     
