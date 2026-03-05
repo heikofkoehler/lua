@@ -50,6 +50,7 @@ bool native_collectgarbage(VM* vm, int argCount) {
     } else if (opt == "generational") {
         VM::GCMode old = vm->gcMode();
         vm->setGCMode(VM::GCMode::GENERATIONAL);
+        vm->setGCState(VM::GCState::PAUSE); // Reset to allow fresh generational cycle
         for(int i=0; i<argCount; i++) vm->pop();
         vm->push(Value::runtimeString(vm->internString(old == VM::GCMode::INCREMENTAL ? "incremental" : "generational")));
         vm->currentCoroutine()->lastResultCount = 1;

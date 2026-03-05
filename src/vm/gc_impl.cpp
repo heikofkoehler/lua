@@ -257,42 +257,59 @@ static void blackenObject(VM* vm, GCObject* object) {
 
 void VM::gcStep() {
     if (gcMode_ == GCMode::GENERATIONAL) {
-        // Simple generational minor collection
-        markRoots();
-        for (GCObject* obj : rememberedSet_) {
-            blackenObject(this, obj);
-        }
-        rememberedSet_.clear();
+        switch (gcState_) {
+            case GCState::PAUSE: {
+                // Minor collection: mark roots and remembered set
+                markRoots();
+                for (GCObject* obj : rememberedSet_) {
+                    blackenObject(this, obj);
+                }
+                rememberedSet_.clear();
+                gcState_ = GCState::MARK;
+                break;
+            }
+            case GCState::MARK: {
+                if (!grayStack_.empty()) {
+                    GCObject* object = grayStack_.back();
+                    grayStack_.pop_back();
+                    blackenObject(this, object);
+                } else {
+                    gcState_ = GCState::SWEEP;
+                }
+                break;
+            }
+            case GCState::ATOMIC: {
+                gcState_ = GCState::SWEEP;
+                break;
+            }
+            case GCState::SWEEP: {
+                // Minor sweep: collect unreachable young objects, promote survivors
+                GCObject** current = &gcObjects_;
+                size_t newBytes = 0;
+                while (*current != nullptr) {
+                    GCObject* obj = *current;
+                    if (obj->color() == GCObject::Color::WHITE && !obj->isOld()) {
+                        // Young and unreachable -> collect
+                        *current = obj->next();
+                        freeObject(obj);
+                    } else {
+                        // Survivor or already old -> keep
+                        if (!obj->isOld()) obj->setOld(true);
+                        obj->setColor(GCObject::Color::WHITE);
+                        newBytes += obj->size();
+                        current = &(obj->nextRef());
+                    }
+                }
+                
+                bytesAllocated_ = newBytes;
+                nextGC_ = bytesAllocated_ * 2;
+                if (nextGC_ < 1024 * 1024) nextGC_ = 1024 * 1024;
 
-        while (!grayStack_.empty()) {
-            GCObject* object = grayStack_.back();
-            grayStack_.pop_back();
-            blackenObject(this, object);
-        }
-
-        // Minor sweep
-        GCObject** current = &gcObjects_;
-        size_t newBytes = 0;
-        while (*current != nullptr) {
-            GCObject* obj = *current;
-            if (obj->color() == GCObject::Color::WHITE && !obj->isOld()) {
-                // Young and unreachable -> collect
-                *current = obj->next();
-                freeObject(obj);
-            } else {
-                // Survivor or already old -> keep
-                if (!obj->isOld()) obj->setOld(true);
-                obj->setColor(GCObject::Color::WHITE);
-                newBytes += obj->size();
-                current = &(obj->nextRef());
+                runFinalizers();
+                gcState_ = GCState::PAUSE;
+                break;
             }
         }
-        
-        bytesAllocated_ = newBytes;
-        nextGC_ = bytesAllocated_ * 2;
-        if (nextGC_ < 1024 * 1024) nextGC_ = 1024 * 1024;
-
-        runFinalizers();
         return;
     }
 
@@ -395,22 +412,10 @@ void VM::gcStep() {
 void VM::collectGarbage() {
     if (!gcEnabled_) return;
 
-    // Full collection
-    if (gcState_ == GCState::PAUSE) {
-        gcStep(); // PAUSE -> MARK
-    }
-
-    while (gcState_ == GCState::MARK) {
+    // Run until we finish a cycle
+    do {
         gcStep();
-    }
-
-    if (gcState_ == GCState::ATOMIC) {
-        gcStep(); // ATOMIC -> SWEEP
-    }
-
-    if (gcState_ == GCState::SWEEP) {
-        gcStep(); // SWEEP -> PAUSE
-    }
+    } while (gcState_ != GCState::PAUSE);
 }
 
 void VM::checkGC(size_t additionalBytes) {
