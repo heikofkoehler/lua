@@ -223,6 +223,24 @@ bool native_coroutine_wrap(VM* vm, int argCount) {
     return true;
 }
 
+bool native_coroutine_close(VM* vm, int argCount) {
+    if (argCount != 1) {
+        vm->runtimeError("coroutine.close expects 1 argument");
+        return false;
+    }
+    Value coVal = vm->pop();
+    if (!coVal.isThread()) {
+        vm->runtimeError("coroutine.close expects a thread");
+        return false;
+    }
+
+    CoroutineObject* co = coVal.asThreadObj();
+    vm->closeCoroutine(co);
+    
+    vm->push(Value::boolean(true));
+    return true;
+}
+
 } // anonymous namespace
 
 void registerCoroutineLibrary(VM* vm, TableObject* coroutineTable) {
@@ -232,4 +250,5 @@ void registerCoroutineLibrary(VM* vm, TableObject* coroutineTable) {
     vm->addNativeToTable(coroutineTable, "running", native_coroutine_running);
     vm->addNativeToTable(coroutineTable, "yield", native_coroutine_yield);
     vm->addNativeToTable(coroutineTable, "wrap", native_coroutine_wrap);
+    vm->addNativeToTable(coroutineTable, "close", native_coroutine_close);
 }

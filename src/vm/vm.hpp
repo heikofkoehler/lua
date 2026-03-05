@@ -79,6 +79,7 @@ public:
     // Coroutine operations
     CoroutineObject* createCoroutine(ClosureObject* closure);
     bool resumeCoroutine(CoroutineObject* co);
+    void closeCoroutine(CoroutineObject* co);
 
     // Upvalue operations
     UpvalueObject* captureUpvalue(size_t stackIndex);

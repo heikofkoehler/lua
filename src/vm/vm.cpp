@@ -300,6 +300,22 @@ void VM::closeFile(FileObject* file) {
     if (file) file->close();
 }
 
+void VM::closeCoroutine(CoroutineObject* co) {
+    if (co->status == CoroutineObject::Status::RUNNING || co->status == CoroutineObject::Status::NORMAL) {
+        runtimeError("cannot close a running coroutine");
+        return;
+    }
+    
+    // Close all open upvalues in this coroutine
+    for (UpvalueObject* upvalue : co->openUpvalues) {
+        if (!upvalue->isClosed()) {
+            upvalue->close(co->stack);
+        }
+    }
+    co->openUpvalues.clear();
+    co->status = CoroutineObject::Status::DEAD;
+}
+
 SocketObject* VM::createSocket(socket_t fd) {
     return allocateObject<SocketObject>(fd);
 }
