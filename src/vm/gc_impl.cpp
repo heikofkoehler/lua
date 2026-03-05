@@ -291,11 +291,41 @@ void VM::gcStep() {
             processWeakTables();
             removeUnmarkedWeakEntries();
 
+            // 3. Find objects to be finalized
+            // Objects that are white but have a __gc metamethod should be moved 
+            // to the toBeFinalized_ list and marked black (and their references).
+            GCObject** p = &gcObjects_;
+            while (*p != nullptr) {
+                GCObject* obj = *p;
+                if (obj->color() == GCObject::Color::WHITE && !obj->isFinalized()) {
+                    Value mm = getMetamethod(Value::fromObj(obj), "__gc");
+                    if (!mm.isNil()) {
+                        // Move to toBeFinalized_
+                        *p = obj->next();
+                        obj->setNext(toBeFinalized_);
+                        toBeFinalized_ = obj;
+                        
+                        // Resurrect: mark it gray so its references are caught
+                        grayObject(obj);
+                        continue;
+                    }
+                }
+                p = &(obj->nextRef());
+            }
+            
+            // Process the newly grayed objects
+            while (!grayStack_.empty()) {
+                GCObject* object = grayStack_.back();
+                grayStack_.pop_back();
+                blackenObject(this, object);
+            }
+
             gcState_ = GCState::SWEEP;
             break;
         }
         case GCState::SWEEP: {
             sweep();
+            runFinalizers();
             gcState_ = GCState::PAUSE;
             
             // Recompute bytesAllocated_ and nextGC_
@@ -307,7 +337,6 @@ void VM::gcStep() {
             }
             nextGC_ = bytesAllocated_ * 2;
             if (nextGC_ < 1024 * 1024) nextGC_ = 1024 * 1024;
-            // printf("DEBUG GC SWEEP: before=%zu after=%zu nextGC=%zu\n", before, bytesAllocated_, nextGC_);
             break;
         }
     }
@@ -335,9 +364,10 @@ void VM::collectGarbage() {
 }
 
 void VM::checkGC(size_t additionalBytes) {
-    if (isHandlingError_) return;
+    if (!gcEnabled_ || isHandlingError_) return;
 
     if (bytesAllocated_ + additionalBytes > nextGC_ || gcState_ != GCState::PAUSE) {
+
         // Perform steps of GC work
         // More aggressive: 4 steps per KB allocated
         size_t steps = 1 + (additionalBytes / 256); 
@@ -353,4 +383,39 @@ void VM::checkGC(size_t additionalBytes) {
             runtimeError("not enough memory");
         }
     }
+}
+
+void VM::runFinalizers() {
+    if (toBeFinalized_ == nullptr) return;
+    
+    bool oldEnabled = gcEnabled_;
+    gcEnabled_ = false;
+    
+    while (toBeFinalized_ != nullptr) {
+        GCObject* obj = toBeFinalized_;
+        toBeFinalized_ = obj->next();
+        
+        // Put back in main list so it can be collected next cycle if not resurrected
+        obj->setNext(gcObjects_);
+        gcObjects_ = obj;
+        
+        // Mark as finalized so we don't do it again
+        obj->setFinalized(true);
+        
+        // Call __gc
+        Value val = Value::fromObj(obj);
+        Value mm = getMetamethod(val, "__gc");
+        if (!mm.isNil()) {
+            push(mm);
+            push(val);
+            size_t baseFrames = currentCoroutine_->frames.size();
+            if (callValue(1, 1)) {
+                if (currentCoroutine_->frames.size() > baseFrames) {
+                    run(baseFrames);
+                }
+            }
+        }
+    }
+    
+    gcEnabled_ = oldEnabled;
 }

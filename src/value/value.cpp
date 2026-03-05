@@ -12,6 +12,21 @@
 #include <iomanip>
 #include <iostream>
 
+Value Value::fromObj(GCObject* obj) {
+    if (!obj) return nil();
+    switch (obj->type()) {
+        case GCObject::Type::STRING: return runtimeString(static_cast<StringObject*>(obj));
+        case GCObject::Type::TABLE: return table(static_cast<TableObject*>(obj));
+        case GCObject::Type::CLOSURE: return closure(static_cast<ClosureObject*>(obj));
+        case GCObject::Type::UPVALUE: return nil(); // Upvalues are internal
+        case GCObject::Type::FILE: return file(static_cast<FileObject*>(obj));
+        case GCObject::Type::SOCKET: return socket(static_cast<SocketObject*>(obj));
+        case GCObject::Type::USERDATA: return userdata(static_cast<UserdataObject*>(obj));
+        case GCObject::Type::COROUTINE: return thread(static_cast<CoroutineObject*>(obj));
+        default: return nil();
+    }
+}
+
 std::string Value::toString() const {
     std::ostringstream oss;
     print(oss);

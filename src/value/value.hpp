@@ -117,6 +117,8 @@ public:
         return pointerValue(TAG_USERDATA, userdata);
     }
 
+    static Value fromObj(GCObject* obj);
+
     // Type checking
     bool isNil() const { return bits_ == (QNAN | TAG_NIL); }
     bool isBool() const { return (bits_ & (QNAN | TAG_MASK)) == (QNAN | TAG_BOOL); }

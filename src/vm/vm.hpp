@@ -162,6 +162,7 @@ public:
     void markObject(GCObject* object);
     void grayObject(GCObject* object);
     void sweep();
+    void runFinalizers();
     void freeObject(GCObject* object);
     void addObject(GCObject* object);
     void processWeakTables();
@@ -252,6 +253,7 @@ private:
     GCState gcState_;             // Current incremental GC state
     GCMode gcMode_ = GCMode::INCREMENTAL; // Current GC mode
     GCObject* gcObjects_;         // Linked list of all GC objects
+    GCObject* toBeFinalized_;     // Linked list of objects to be finalized
     std::vector<GCObject*> grayStack_; // Worklist for marking
     size_t bytesAllocated_;       // Total bytes allocated
     size_t nextGC_;               // Threshold for next GC

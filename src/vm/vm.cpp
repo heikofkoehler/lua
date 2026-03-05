@@ -24,7 +24,7 @@ VM::VM() :
            mainCoroutine_(nullptr), currentCoroutine_(nullptr), 
            hadError_(false), inPcall_(false), isHandlingError_(false), lastErrorMessage_(""), stdlibInitialized_(false),
            gcState_(GCState::PAUSE),
-           gcObjects_(nullptr), bytesAllocated_(0), nextGC_(1024 * 1024), 
+           gcObjects_(nullptr), toBeFinalized_(nullptr), bytesAllocated_(0), nextGC_(1024 * 1024), 
            memoryLimit_(100 * 1024 * 1024), // Default 100MB limit
            gcEnabled_(true) {
     currentVM = this;
