@@ -48,6 +48,28 @@ bool native_debug_sethook(VM* vm, int argCount) {
     return true;
 }
 
+bool native_debug_gethook(VM* vm, int argCount) {
+    CoroutineObject* co = vm->currentCoroutine();
+    if (argCount >= 1) {
+        Value val = vm->peek(argCount - 1);
+        if (val.isThread()) {
+            co = val.asThreadObj();
+        }
+    }
+
+    std::string maskStr = "";
+    if (co->hookMask & CoroutineObject::MASK_CALL) maskStr += "c";
+    if (co->hookMask & CoroutineObject::MASK_RET) maskStr += "r";
+    if (co->hookMask & CoroutineObject::MASK_LINE) maskStr += "l";
+
+    for (int i = 0; i < argCount; i++) vm->pop();
+    vm->push(co->hook);
+    vm->push(Value::runtimeString(vm->internString(maskStr)));
+    vm->push(Value::number(static_cast<double>(co->baseHookCount)));
+    vm->currentCoroutine()->lastResultCount = 3;
+    return true;
+}
+
 bool native_debug_setmetatable(VM* vm, int argCount) {
     if (argCount != 2) {
         vm->runtimeError("debug.setmetatable expects 2 arguments");
@@ -321,6 +343,7 @@ bool native_debug_getmetatable(VM* vm, int argCount) {
 
 void registerDebugLibrary(VM* vm, TableObject* debugTable) {
     vm->addNativeToTable(debugTable, "sethook", native_debug_sethook);
+    vm->addNativeToTable(debugTable, "gethook", native_debug_gethook);
     vm->addNativeToTable(debugTable, "getmetatable", native_debug_getmetatable);
     vm->addNativeToTable(debugTable, "setmetatable", native_debug_setmetatable);
     vm->addNativeToTable(debugTable, "getlocal", native_debug_getlocal);
