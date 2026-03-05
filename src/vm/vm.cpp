@@ -1017,7 +1017,7 @@ Value VM::bitwiseNot(const Value& a) {
 }
 
 Value VM::equal(const Value& a, const Value& b) {
-    return Value::boolean(a.equals(b));
+    return Value::boolean(a == b);
 }
 
 Value VM::less(const Value& a, const Value& b) {

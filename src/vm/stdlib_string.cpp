@@ -355,7 +355,7 @@ bool native_string_find(VM* vm, int argCount) {
     const char* s = s_str.c_str();
     const char* p = p_str.c_str();
 
-    if (plainVal.isTruthy() || !strpbrk(p, "^$*+-.?()[]%")) {
+    if (!plainVal.isFalsey() || !strpbrk(p, "^$*+-.?()[]%")) {
         size_t pos = s_str.find(p_str, start - 1);
         if (pos != std::string::npos) {
             for (int i = 0; i < argCount; i++) vm->pop();
@@ -712,8 +712,10 @@ bool native_string_format(VM* vm, int argCount) {
                 snprintf(buf, sizeof(buf), sub_fmt.c_str(), (int)arg.asInteger());
                 result += buf;
             } else if (spec == 'p') {
-                if (arg.isObj()) {
-                    snprintf(buf, sizeof(buf), sub_fmt.c_str(), (void*)arg.asObj());
+                if (arg.isNil()) {
+                    snprintf(buf, sizeof(buf), "(null)");
+                } else if (arg.isObj()) {
+                    snprintf(buf, sizeof(buf), "0x%llx", (unsigned long long)reinterpret_cast<uintptr_t>(arg.asObj()));
                 } else {
                     snprintf(buf, sizeof(buf), "0x%llx", (unsigned long long)arg.asInteger());
                 }

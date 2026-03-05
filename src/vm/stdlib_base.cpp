@@ -36,7 +36,7 @@ bool native_collectgarbage(VM* vm, int argCount) {
         return true;
     } else if (opt == "isrunning") {
         for(int i=0; i<argCount; i++) vm->pop();
-        vm->push(Value::boolean(true));
+        vm->push(Value::boolean(vm->gcEnabled()));
         return true;
     } else if (opt == "incremental") {
         VM::GCMode old = vm->gcMode();
@@ -55,10 +55,13 @@ bool native_collectgarbage(VM* vm, int argCount) {
         for(int i=0; i<argCount; i++) vm->pop();
         vm->push(Value::boolean(true));
         return true;
-    } else if (opt == "stop" || opt == "restart") {
-        // Stubs for these commands
+    } else if (opt == "stop") {
+        vm->setGCEnabled(false);
         for(int i=0; i<argCount; i++) vm->pop();
-        vm->push(Value::boolean(true));
+        return true;
+    } else if (opt == "restart") {
+        vm->setGCEnabled(true);
+        for(int i=0; i<argCount; i++) vm->pop();
         return true;
     }
  else if (opt == "param") {
@@ -466,7 +469,7 @@ bool native_rawequal(VM* vm, int argCount) {
     Value b = vm->peek(0);
     Value a = vm->peek(1);
     for(int i=0; i<argCount; i++) vm->pop();
-    vm->push(Value::boolean(a.equals(b)));
+    vm->push(Value::boolean(a == b));
     return true;
 }
 

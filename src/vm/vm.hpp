@@ -159,6 +159,8 @@ public:
 
     GCMode gcMode() const { return gcMode_; }
     void setGCMode(GCMode mode) { gcMode_ = mode; }
+    bool gcEnabled() const { return gcEnabled_; }
+    void setGCEnabled(bool enabled) { gcEnabled_ = enabled; }
     void markRoots();
     void markValue(const Value& value);
     void markObject(GCObject* object);

@@ -91,6 +91,10 @@ void Value::print(std::ostream& os) const {
     }
 }
 
+bool Value::isFalsey() const {
+    return isNil() || (isBool() && !asBool());
+}
+
 bool Value::operator==(const Value& other) const {
     if (isNumber() && other.isNumber()) {
         if (isInteger() && other.isInteger()) {
@@ -110,7 +114,14 @@ bool Value::operator==(const Value& other) const {
         return asStringObj()->equals(other.asStringObj());
     }
 
-    return bits_ == other.bits_;
+    switch (type()) {
+        case Type::NIL: return true;
+        case Type::BOOL: return asBool() == other.asBool();
+        case Type::FUNCTION: return asFunctionIndex() == other.asFunctionIndex();
+        case Type::STRING: return asStringIndex() == other.asStringIndex();
+        case Type::NATIVE_FUNCTION: return asNativeFunctionIndex() == other.asNativeFunctionIndex();
+        default: return asObj() == other.asObj();
+    }
 }
 
 bool Value::isStringEqual(const std::string& str) const {
@@ -123,20 +134,27 @@ bool Value::isStringEqual(const std::string& str) const {
 }
 
 size_t Value::hash() const {
-    if (isNumber()) {
-        double n = asNumber();
-        double intPart;
-        if (std::modf(n, &intPart) == 0.0) {
-            // It's an exact integer, use integer hash
-            return std::hash<int64_t>()(static_cast<int64_t>(n));
+    switch (type()) {
+        case Type::NUMBER: {
+            double n = asNumber();
+            double intPart;
+            if (std::modf(n, &intPart) == 0.0) {
+                return std::hash<int64_t>()(static_cast<int64_t>(n));
+            }
+            return std::hash<double>()(n);
         }
-        return std::hash<double>()(n);
+        case Type::INTEGER: return std::hash<int64_t>()(asInteger());
+        case Type::BOOL: return std::hash<bool>()(asBool());
+        case Type::STRING: return std::hash<size_t>()(asStringIndex());
+        case Type::RUNTIME_STRING: {
+            StringObject* obj = asStringObj();
+            return std::hash<std::string_view>()(std::string_view(obj->chars(), obj->length()));
+        }
+        case Type::NATIVE_FUNCTION: return std::hash<size_t>()(asNativeFunctionIndex());
+        case Type::FUNCTION: return std::hash<size_t>()(asFunctionIndex());
+        case Type::NIL: return 0;
+        default: return std::hash<void*>()(reinterpret_cast<void*>(asObj()));
     }
-    if (isRuntimeString()) {
-        StringObject* obj = asStringObj();
-        return std::hash<std::string_view>()(std::string_view(obj->chars(), obj->length()));
-    }
-    return std::hash<uint64_t>()(bits_);
 }
 
 void Value::serialize(std::ostream& os, const Chunk* chunk) const {

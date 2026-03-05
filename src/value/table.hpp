@@ -19,7 +19,7 @@ struct ValueHash {
 // Equality for Value keys
 struct ValueEqual {
     bool operator()(const Value& a, const Value& b) const {
-        return a.equals(b);
+        return a == b;
     }
 };
 

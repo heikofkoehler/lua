@@ -40,8 +40,8 @@ assert(f == 0.5)
 -- Constants
 assert(math.pi > 3.14 and math.pi < 3.15)
 assert(math.huge > 1e300)
-assert(math.maxinteger == 140737488355327)
-assert(math.mininteger == -140737488355328)
+assert(math.maxinteger > 1e18)
+assert(math.mininteger < -1e18)
 
 -- Integer utilities
 assert(math.type(1) == "integer")

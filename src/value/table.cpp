@@ -71,7 +71,7 @@ Value TableObject::get(const std::string& key) const {
 
 Value TableObject::getByString(const Value& key) const {
     for (const auto& pair : map_) {
-        if (pair.first.equals(key)) {
+        if (pair.first == key) {
             return pair.second;
         }
     }
@@ -93,7 +93,7 @@ std::pair<Value, Value> TableObject::next(const Value& key) const {
             // Try string-based lookup if not found by exact value
             if (key.isString()) {
                 for (auto sit = map_.begin(); sit != map_.end(); ++sit) {
-                    if (sit->first.equals(key)) {
+                    if (sit->first == key) {
                         it = sit;
                         break;
                     }
