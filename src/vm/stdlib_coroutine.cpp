@@ -241,6 +241,23 @@ bool native_coroutine_close(VM* vm, int argCount) {
     return true;
 }
 
+bool native_coroutine_isyieldable(VM* vm, int argCount) {
+    CoroutineObject* co = vm->currentCoroutine();
+    if (argCount >= 1) {
+        Value val = vm->peek(argCount - 1);
+        if (val.isThread()) {
+            co = val.asThreadObj();
+        }
+    }
+    
+    // In our VM, all coroutines are yieldable since we don't have C call boundaries that prevent it yet
+    bool yieldable = (co != vm->mainCoroutine());
+    
+    for (int i = 0; i < argCount; i++) vm->pop();
+    vm->push(Value::boolean(yieldable));
+    return true;
+}
+
 } // anonymous namespace
 
 void registerCoroutineLibrary(VM* vm, TableObject* coroutineTable) {
@@ -250,5 +267,6 @@ void registerCoroutineLibrary(VM* vm, TableObject* coroutineTable) {
     vm->addNativeToTable(coroutineTable, "running", native_coroutine_running);
     vm->addNativeToTable(coroutineTable, "yield", native_coroutine_yield);
     vm->addNativeToTable(coroutineTable, "wrap", native_coroutine_wrap);
+    vm->addNativeToTable(coroutineTable, "isyieldable", native_coroutine_isyieldable);
     vm->addNativeToTable(coroutineTable, "close", native_coroutine_close);
 }

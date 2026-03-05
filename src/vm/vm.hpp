@@ -123,6 +123,7 @@ public:
 
     // Access to current coroutine
     CoroutineObject* currentCoroutine() { return currentCoroutine_; }
+    CoroutineObject* mainCoroutine() { return mainCoroutine_; }
     CallFrame* getFrame(int level);
 
     // JIT related
