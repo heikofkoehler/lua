@@ -224,7 +224,23 @@ bool native_tonumber(VM* vm, int argCount) {
 bool native_print(VM* vm, int argCount) {
     for (int i = 0; i < argCount; i++) {
         Value val = vm->peek(argCount - 1 - i);
-        std::cout << val.toString();
+        
+        // Try to call tostring(val)
+        vm->push(vm->getGlobal("tostring"));
+        vm->push(val);
+        
+        size_t prevFrames = vm->currentCoroutine()->frames.size();
+        if (vm->callValue(1, 2)) {
+            if (vm->currentCoroutine()->frames.size() > prevFrames) {
+                if (!vm->run(prevFrames)) return false;
+            }
+            Value res = vm->pop();
+            std::cout << res.toString();
+        } else {
+
+            std::cout << val.toString(); // Fallback
+        }
+        
         if (i < argCount - 1) std::cout << "\t";
     }
     std::cout << std::endl;
