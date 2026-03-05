@@ -1,7 +1,7 @@
 -- Complete IO Library Tests
 print("Testing IO Library...")
 
-local test_file = "tests/temp_io_test.txt"
+local test_file = "temp_io_test.txt"
 
 -- Basic file ops
 local f = io.open(test_file, "w")

@@ -20,7 +20,7 @@ local path = os.getenv("PATH")
 if path then assert(type(path) == "string") end
 
 -- remove/rename
-local test_file = "tests/temp_os_test.txt"
+local test_file = "temp_os_test.txt"
 local f = io.open(test_file, "w")
 f:write("hello")
 f:close()

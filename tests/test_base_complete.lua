@@ -68,7 +68,7 @@ assert(_G.print == print)
 local f = load("return 1+1")
 assert(f() == 2)
 
-local test_file = "tests/temp_base_test.lua"
+local test_file = "temp_base_test.lua"
 local fh = io.open(test_file, "w")
 fh:write("return 42")
 fh:close()
