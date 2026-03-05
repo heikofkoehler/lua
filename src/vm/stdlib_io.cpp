@@ -47,9 +47,9 @@ bool native_io_write(VM* vm, int argCount) {
     }
     
     if (!file) {
-        Value stdoutVal = vm->getGlobal("io");
-        if (stdoutVal.isTable()) {
-            Value out = stdoutVal.asTableObj()->get("stdout");
+        Value ioTableVal = vm->getGlobal("io");
+        if (ioTableVal.isTable()) {
+            Value out = ioTableVal.asTableObj()->get("stdout");
             if (out.isFile()) {
                 file = out.asFileObj();
             }
@@ -86,6 +86,16 @@ bool native_io_read(VM* vm, int argCount) {
         }
     }
     
+    if (!file) {
+        Value stdinVal = vm->getGlobal("io");
+        if (stdinVal.isTable()) {
+            Value in = stdinVal.asTableObj()->get("stdin");
+            if (in.isFile()) {
+                file = in.asFileObj();
+            }
+        }
+    }
+
     std::string fmt = "l";
     if (argCount > argStart) {
         Value fmtVal = vm->peek(argCount - 1 - argStart);
@@ -367,9 +377,9 @@ bool native_io_lines(VM* vm, int argCount) {
     vm->push(Value::boolean(toClose));
     
     size_t baseFrames = vm->currentCoroutine()->frames.size();
-    if (vm->callValue(2, 1)) {
+    if (vm->callValue(2, 2)) { // Request 1 result (2 in callValue terms)
         if (vm->currentCoroutine()->frames.size() > baseFrames) {
-            vm->run(baseFrames);
+            if (!vm->run(baseFrames)) return false;
         }
         vm->currentCoroutine()->lastResultCount = 1;
         return true;

@@ -1,36 +1,47 @@
--- Comprehensive IO test
+-- Complete IO Library Tests
+print("Testing IO Library...")
 
-print("=== File I/O Test ===")
+local test_file = "tests/temp_io_test.txt"
 
--- Test 1: Write to file
-print("Test 1: Writing to demo.txt")
-local outfile = io.open("demo.txt", "w")
-outfile:write("Line 1")
-outfile:write(" ")
-outfile:write("Line 2")
-outfile:close()
-print("Write complete")
+-- Basic file ops
+local f = io.open(test_file, "w")
+assert(f ~= nil)
+f:write("line 1\n", "line 2\n")
+f:flush()
+f:close()
 
--- Test 2: Read from file
-print("Test 2: Reading from demo.txt")
-local infile = io.open("demo.txt", "r")
-local content = infile:read()
-infile:close()
-print("File contents:")
-print(content)
+local f2 = io.open(test_file, "r")
+assert(f2:read("*l") == "line 1")
+assert(f2:read("*l") == "line 2")
+assert(f2:read("*a") == "")
+f2:close()
 
--- Test 3: Append to file
-print("Test 3: Appending to demo.txt")
-local appendfile = io.open("demo.txt", "a")
-appendfile:write(" Line 3")
-appendfile:close()
+-- seek
+local f3 = io.open(test_file, "r")
+f3:seek("set", 5)
+assert(f3:read(1) == "1")
+f3:close()
 
--- Test 4: Read again to see appended content
-print("Test 4: Reading updated file")
-local readfile = io.open("demo.txt", "r")
-local newcontent = readfile:read()
-readfile:close()
-print("Updated contents:")
-print(newcontent)
+-- lines
+local lines = {}
+local iter = io.lines(test_file)
+assert(type(iter) == "function")
+for line in iter do
+    table.insert(lines, line)
+end
+assert(#lines == 2)
+assert(lines[1] == "line 1")
 
-print("=== All tests complete ===")
+-- input/output
+io.output(test_file)
+io.write("new content")
+io.output():close()
+
+io.input(test_file)
+assert(io.read("*a") == "new content")
+io.input():close()
+
+-- cleanup
+os.remove(test_file)
+
+print("IO Library Tests Passed!")

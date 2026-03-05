@@ -201,21 +201,48 @@ bool native_tonumber(VM* vm, int argCount) {
         return false;
     }
     Value val = vm->peek(argCount - 1);
-
     std::string s = vm->getStringValue(val);
 
-    try {
-        size_t pos;
-        double num = std::stod(s, &pos);
-        for (int i = 0; i < argCount; i++) vm->pop();
-        if (pos != s.length()) {
+    if (argCount == 1) {
+        try {
+            size_t pos;
+            double num = std::stod(s, &pos);
+            if (pos != s.length()) {
+                for (int i = 0; i < argCount; i++) vm->pop();
+                vm->push(Value::nil());
+            } else {
+                double intpart;
+                if (std::modf(num, &intpart) == 0.0) {
+                    for (int i = 0; i < argCount; i++) vm->pop();
+                    vm->push(Value::integer(static_cast<int64_t>(num)));
+                } else {
+                    for (int i = 0; i < argCount; i++) vm->pop();
+                    vm->push(Value::number(num));
+                }
+            }
+        } catch (...) {
+            for (int i = 0; i < argCount; i++) vm->pop();
             vm->push(Value::nil());
-        } else {
-            vm->push(Value::number(num));
         }
-    } catch (...) {
-        for (int i = 0; i < argCount; i++) vm->pop();
-        vm->push(Value::nil());
+    } else {
+        int base = static_cast<int>(vm->peek(argCount - 2).asNumber());
+        if (base < 2 || base > 36) {
+            vm->runtimeError("bad argument #2 to 'tonumber' (base out of range)");
+            return false;
+        }
+        try {
+            size_t pos;
+            int64_t num = std::stoll(s, &pos, base);
+            for (int i = 0; i < argCount; i++) vm->pop();
+            if (pos != s.length()) {
+                vm->push(Value::nil());
+            } else {
+                vm->push(Value::integer(num));
+            }
+        } catch (...) {
+            for (int i = 0; i < argCount; i++) vm->pop();
+            vm->push(Value::nil());
+        }
     }
 
     return true;
