@@ -154,9 +154,11 @@ bool native_os_remove(VM* vm, int argCount) {
     
     if (res == 0) {
         vm->push(Value::boolean(true));
+        vm->currentCoroutine()->lastResultCount = 1;
     } else {
         vm->push(Value::nil());
         vm->push(Value::runtimeString(vm->internString("could not remove file")));
+        vm->currentCoroutine()->lastResultCount = 2;
     }
     return true;
 }
@@ -169,14 +171,16 @@ bool native_os_rename(VM* vm, int argCount) {
     Value newname = vm->peek(0);
     Value oldname = vm->peek(1);
     int res = std::rename(vm->getStringValue(oldname).c_str(), vm->getStringValue(newname).c_str());
-    
+
     for(int i=0; i<argCount; i++) vm->pop();
-    
+
     if (res == 0) {
         vm->push(Value::boolean(true));
+        vm->currentCoroutine()->lastResultCount = 1;
     } else {
         vm->push(Value::nil());
         vm->push(Value::runtimeString(vm->internString("could not rename file")));
+        vm->currentCoroutine()->lastResultCount = 2;
     }
     return true;
 }

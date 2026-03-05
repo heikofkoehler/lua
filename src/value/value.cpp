@@ -97,13 +97,7 @@ bool Value::isFalsey() const {
 
 bool Value::operator==(const Value& other) const {
     if (isNumber() && other.isNumber()) {
-        if (isInteger() && other.isInteger()) {
-            return asInteger() == other.asInteger();
-        }
-        double a = asNumber();
-        double b = other.asNumber();
-        if (std::isnan(a) && std::isnan(b)) return false;
-        return a == b;
+        return asNumber() == other.asNumber();
     }
     
     if (type() != other.type()) {
@@ -134,16 +128,16 @@ bool Value::isStringEqual(const std::string& str) const {
 }
 
 size_t Value::hash() const {
-    switch (type()) {
-        case Type::NUMBER: {
-            double n = asNumber();
-            double intPart;
-            if (std::modf(n, &intPart) == 0.0) {
-                return std::hash<int64_t>()(static_cast<int64_t>(n));
-            }
-            return std::hash<double>()(n);
+    if (isNumber()) {
+        double n = asNumber();
+        double intPart;
+        if (std::modf(n, &intPart) == 0.0) {
+            return std::hash<int64_t>()(static_cast<int64_t>(n));
         }
-        case Type::INTEGER: return std::hash<int64_t>()(asInteger());
+        return std::hash<double>()(n);
+    }
+
+    switch (type()) {
         case Type::BOOL: return std::hash<bool>()(asBool());
         case Type::STRING: return std::hash<size_t>()(asStringIndex());
         case Type::RUNTIME_STRING: {

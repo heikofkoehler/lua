@@ -236,8 +236,9 @@ bool native_coroutine_close(VM* vm, int argCount) {
 
     CoroutineObject* co = coVal.asThreadObj();
     vm->closeCoroutine(co);
-    
+
     vm->push(Value::boolean(true));
+    vm->currentCoroutine()->lastResultCount = 1;
     return true;
 }
 
