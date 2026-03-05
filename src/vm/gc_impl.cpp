@@ -172,11 +172,18 @@ void VM::writeBarrier(GCObject* object, const Value& value) {
 }
 
 void VM::writeBarrier(GCObject* object, GCObject* value) {
-    // Forward barrier: if black object points to white object, mark white object gray
+    // 1. Incremental Barrier (Forward)
+    // if black object points to white object, mark white object gray
     if (gcState_ == GCState::MARK && 
         object->color() == GCObject::Color::BLACK && 
         value->color() == GCObject::Color::WHITE) {
         grayObject(value);
+    }
+
+    // 2. Generational Barrier
+    // if old object points to young object, add old object to remembered set
+    if (gcMode_ == GCMode::GENERATIONAL && object->isOld() && !value->isOld()) {
+        rememberedSet_.push_back(object);
     }
 }
 
@@ -249,7 +256,47 @@ static void blackenObject(VM* vm, GCObject* object) {
 }
 
 void VM::gcStep() {
-    // printf("DEBUG GC STEP: state=%d gray=%zu allocated=%zu\n", (int)gcState_, grayStack_.size(), bytesAllocated_);
+    if (gcMode_ == GCMode::GENERATIONAL) {
+        // Simple generational minor collection
+        markRoots();
+        for (GCObject* obj : rememberedSet_) {
+            blackenObject(this, obj);
+        }
+        rememberedSet_.clear();
+
+        while (!grayStack_.empty()) {
+            GCObject* object = grayStack_.back();
+            grayStack_.pop_back();
+            blackenObject(this, object);
+        }
+
+        // Minor sweep
+        GCObject** current = &gcObjects_;
+        size_t newBytes = 0;
+        while (*current != nullptr) {
+            GCObject* obj = *current;
+            if (obj->color() == GCObject::Color::WHITE && !obj->isOld()) {
+                // Young and unreachable -> collect
+                *current = obj->next();
+                freeObject(obj);
+            } else {
+                // Survivor or already old -> keep
+                if (!obj->isOld()) obj->setOld(true);
+                obj->setColor(GCObject::Color::WHITE);
+                newBytes += obj->size();
+                current = &(obj->nextRef());
+            }
+        }
+        
+        bytesAllocated_ = newBytes;
+        nextGC_ = bytesAllocated_ * 2;
+        if (nextGC_ < 1024 * 1024) nextGC_ = 1024 * 1024;
+
+        runFinalizers();
+        return;
+    }
+
+    // Incremental GC logic below...
     switch (gcState_) {
         case GCState::PAUSE: {
             markRoots();

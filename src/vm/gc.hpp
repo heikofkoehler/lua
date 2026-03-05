@@ -24,12 +24,16 @@ public:
         BLACK
     };
 
-    GCObject(Type type) : type_(type), color_(Color::WHITE), next_(nullptr), isFinalized_(false) {}
+    GCObject(Type type) : type_(type), color_(Color::WHITE), next_(nullptr), isFinalized_(false), isOld_(false) {}
     virtual ~GCObject() = default;
 
     // Finalization state
     bool isFinalized() const { return isFinalized_; }
     void setFinalized(bool finalized) { isFinalized_ = finalized; }
+
+    // Generational state
+    bool isOld() const { return isOld_; }
+    void setOld(bool old) { isOld_ = old; }
 
     // Tri-color marking colors
     Color color() const { return color_; }
@@ -59,6 +63,7 @@ private:
     Color color_;
     GCObject* next_;  // Intrusive linked list
     bool isFinalized_;
+    bool isOld_;
 };
 
 #endif // LUA_GC_HPP

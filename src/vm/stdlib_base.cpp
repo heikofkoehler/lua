@@ -33,22 +33,26 @@ bool native_collectgarbage(VM* vm, int argCount) {
         double count = static_cast<double>(vm->bytesAllocated()) / 1024.0;
         for(int i=0; i<argCount; i++) vm->pop();
         vm->push(Value::number(count));
+        vm->currentCoroutine()->lastResultCount = 1;
         return true;
     } else if (opt == "isrunning") {
         for(int i=0; i<argCount; i++) vm->pop();
         vm->push(Value::boolean(vm->gcEnabled()));
+        vm->currentCoroutine()->lastResultCount = 1;
         return true;
     } else if (opt == "incremental") {
         VM::GCMode old = vm->gcMode();
         vm->setGCMode(VM::GCMode::INCREMENTAL);
         for(int i=0; i<argCount; i++) vm->pop();
         vm->push(Value::runtimeString(vm->internString(old == VM::GCMode::INCREMENTAL ? "incremental" : "generational")));
+        vm->currentCoroutine()->lastResultCount = 1;
         return true;
     } else if (opt == "generational") {
         VM::GCMode old = vm->gcMode();
         vm->setGCMode(VM::GCMode::GENERATIONAL);
         for(int i=0; i<argCount; i++) vm->pop();
         vm->push(Value::runtimeString(vm->internString(old == VM::GCMode::INCREMENTAL ? "incremental" : "generational")));
+        vm->currentCoroutine()->lastResultCount = 1;
         return true;
     } else if (opt == "step") {
         vm->collectGarbage();
@@ -97,6 +101,7 @@ bool native_collectgarbage(VM* vm, int argCount) {
     vm->collectGarbage();
     for(int i=0; i<argCount; i++) vm->pop();
     vm->push(Value::nil());
+    vm->currentCoroutine()->lastResultCount = 1;
     return true;
 }
 

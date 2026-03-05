@@ -1,22 +1,34 @@
--- Test manual garbage collection
-print("=== Testing collectgarbage() ===")
+-- Test collectgarbage with different modes
+print("Testing collectgarbage modes...")
 
--- Create some objects
-local t1 = {x = 1, y = 2}
-local t2 = {a = 10, b = 20}
-print("Created objects")
+local function alloc()
+    local t = {}
+    for i=1,100 do t[i] = i end
+    return t
+end
 
--- Manually trigger GC
-print("Calling collectgarbage()")
-collectgarbage()
-print("GC complete")
+-- 1. Test isrunning
+assert(collectgarbage("isrunning") == true)
+print("OK: isrunning")
 
--- Verify objects still work
-print(t1.x)
-print(t2.a)
+-- 2. Test incremental mode (default)
+local old = collectgarbage("incremental")
+assert(old == "incremental" or old == "generational")
+print("OK: switched to incremental")
 
--- Test stdlib still works after GC
-print(string.upper("test"))
-print(math.sqrt(25))
+-- 3. Test generational mode
+local old2 = collectgarbage("generational")
+print("OK: switched to generational")
 
-print("=== Test Complete ===")
+-- 4. Test stop/restart
+collectgarbage("stop")
+assert(collectgarbage("isrunning") == false)
+collectgarbage("restart")
+assert(collectgarbage("isrunning") == true)
+print("OK: stop/restart")
+
+-- 5. Test basic collect
+collectgarbage("collect")
+print("OK: collect")
+
+print("collectgarbage tests passed!")

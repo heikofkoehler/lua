@@ -259,6 +259,7 @@ private:
     GCObject* gcObjects_;         // Linked list of all GC objects
     GCObject* toBeFinalized_;     // Linked list of objects to be finalized
     std::vector<GCObject*> grayStack_; // Worklist for marking
+    std::vector<GCObject*> rememberedSet_; // Old objects pointing to young objects (Generational GC)
     size_t bytesAllocated_;       // Total bytes allocated
     size_t nextGC_;               // Threshold for next GC
     size_t memoryLimit_;          // Maximum bytes allowed before Emergency GC

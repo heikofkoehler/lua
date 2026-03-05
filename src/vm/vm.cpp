@@ -601,22 +601,25 @@ bool VM::pcall(int argCount) {
             success = run(prevFrames);
         }
     } catch (const RuntimeError& e) {
-        isHandlingError_ = false;
-        hadError_ = false;
         success = false;
     }
     
     inPcall_ = prevPcall;
+    isHandlingError_ = false;
+    hadError_ = false;
 
-    if (!success || hadError_) {
-        success = false;
+    if (!success) {
         isHandlingError_ = true; // Prevent GC/memory errors while unwinding and allocating error string
         // Runtime error occurred during execution
         // Stack and frames need to be unwound
         
         // Close TBC variables
         Value errorObj = Value::runtimeString(internString(lastErrorMessage_));
-        closeUpvalues(stackSizeBefore, nullptr, errorObj);
+        try {
+            closeUpvalues(stackSizeBefore, nullptr, errorObj);
+        } catch (const RuntimeError& e) {
+            // New error in cleanup replaces old one
+        }
 
         while (currentCoroutine_->frames.size() > prevFrames) {
             currentCoroutine_->frames.pop_back();
@@ -836,9 +839,15 @@ Value VM::readConstant() {
 
 void VM::runtimeError(const std::string& message, int level) {
     if (isHandlingError_) {
-        // Nested error during error handling - this is bad.
-        // Just throw without more printing.
-        throw RuntimeError(message);
+        // Nested error during error handling (e.g. error in __close)
+        // In Lua 5.4, the new error often replaces the old one.
+        // We'll allow it to be formatted.
+        isHandlingError_ = false; // Temporarily reset to allow formatting
+        try {
+            runtimeError("(error in __close) " + message, level);
+        } catch (const RuntimeError& e) {
+            throw e;
+        }
     }
 
     isHandlingError_ = true;
@@ -886,6 +895,7 @@ void VM::runtimeError(const std::string& message, int level) {
 }
 
 void VM::traceExecution() {
+#ifdef DEBUG_TRACE_EXECUTION
     // Print stack contents
     std::cout << "          ";
     for (const Value& value : currentCoroutine_->stack) {
@@ -895,6 +905,7 @@ void VM::traceExecution() {
 
     const Chunk* chunk = currentCoroutine_->frames.empty() ? currentCoroutine_->chunk : currentFrame().chunk;
     chunk->disassembleInstruction(currentFrame().ip);
+#endif
 }
 
 Value VM::add(const Value& a, const Value& b) {
