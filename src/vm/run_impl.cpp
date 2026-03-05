@@ -394,7 +394,7 @@ bool VM::run(size_t targetFrameCount) {
             case OpCode::OP_NEG: {
                 Value a = pop();
                 if (a.isNumber()) {
-                    push(Value::number(-a.asNumber()));
+                    push(negate(a));
                 } else {
                     Value func = getMetamethod(a, "__unm");
                     if (!func.isNil()) {
@@ -427,7 +427,7 @@ bool VM::run(size_t targetFrameCount) {
             case OpCode::OP_LEN: {
                 Value a = pop();
                 if (a.isString()) {
-                    push(Value::number(static_cast<double>(getStringValue(a).length())));
+                    push(Value::integer(static_cast<int64_t>(getStringValue(a).length())));
                 } else if (a.isTable()) {
                     Value mm = getMetamethod(a, "__len");
                     if (!mm.isNil()) {
@@ -435,7 +435,7 @@ bool VM::run(size_t targetFrameCount) {
                         push(a);
                         callValue(1, 2); // Expect 1 result (1+1=2)
                     } else {
-                        push(Value::number(static_cast<double>(a.asTableObj()->length())));
+                        push(Value::integer(static_cast<int64_t>(a.asTableObj()->length())));
                     }
                 } else {
                     Value mm = getMetamethod(a, "__len");

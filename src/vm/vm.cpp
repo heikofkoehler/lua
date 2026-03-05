@@ -213,31 +213,36 @@ CoroutineObject* VM::createCoroutine(ClosureObject* closure) {
     return co;
 }
 
-void VM::setupRootUpvalues(ClosureObject* closure) {
+void VM::setupRootUpvalues(ClosureObject* closure, const Value& env) {
     if (closure->upvalueCount() == 0) return;
 
     UpvalueObject* envUpvalue = nullptr;
     
-    // Try to inherit _ENV from current frame if we're called from Lua
-    if (!currentCoroutine_->frames.empty()) {
-        if (currentFrame().closure && currentFrame().closure->upvalueCount() > 0) {
-            envUpvalue = currentFrame().closure->getUpvalueObj(0);
-        }
-    }
-    
-    if (!envUpvalue) {
-        // Top-level call or native caller, use _G
-        Value gTable = Value::nil();
-        auto it = globals_.find("_G");
-        if (it != globals_.end()) {
-            gTable = it->second;
-        } else {
-            TableObject* table = createTable();
-            gTable = Value::table(table);
-            globals_["_G"] = gTable;
+    if (!env.isNil()) {
+        // Use explicit environment
+        envUpvalue = allocateObject<UpvalueObject>(env);
+    } else {
+        // Try to inherit _ENV from current frame if we're called from Lua
+        if (!currentCoroutine_->frames.empty()) {
+            if (currentFrame().closure && currentFrame().closure->upvalueCount() > 0) {
+                envUpvalue = currentFrame().closure->getUpvalueObj(0);
+            }
         }
         
-        envUpvalue = allocateObject<UpvalueObject>(gTable);
+        if (!envUpvalue) {
+            // Top-level call or native caller, use _G
+            Value gTable = Value::nil();
+            auto it = globals_.find("_G");
+            if (it != globals_.end()) {
+                gTable = it->second;
+            } else {
+                TableObject* table = createTable();
+                gTable = Value::table(table);
+                globals_["_G"] = gTable;
+            }
+            
+            envUpvalue = allocateObject<UpvalueObject>(gTable);
+        }
     }
     
     // Set all upvalues to envUpvalue initially to avoid nulls
@@ -269,11 +274,11 @@ UpvalueObject* VM::captureUpvalue(size_t stackIndex) {
     return upvalue;
 }
 
-void VM::closeUpvalues(size_t lastStackIndex, CoroutineObject* co) {
+void VM::closeUpvalues(size_t lastStackIndex, CoroutineObject* co, const Value& error) {
     if (co == nullptr) co = currentCoroutine_;
 
     // 1. Handle to-be-closed variables first (in reverse order)
-    closeTBCVariables(lastStackIndex, co);
+    closeTBCVariables(lastStackIndex, co, error);
 
     // 2. Handle standard upvalues
     auto it = co->openUpvalues.begin();
@@ -288,7 +293,7 @@ void VM::closeUpvalues(size_t lastStackIndex, CoroutineObject* co) {
     }
 }
 
-void VM::closeTBCVariables(size_t lastStackIndex, CoroutineObject* co) {
+void VM::closeTBCVariables(size_t lastStackIndex, CoroutineObject* co, const Value& error) {
     if (co == nullptr) co = currentCoroutine_;
 
     while (!co->tbcVariables.empty() && co->tbcVariables.back() >= lastStackIndex) {
@@ -298,11 +303,9 @@ void VM::closeTBCVariables(size_t lastStackIndex, CoroutineObject* co) {
         Value val = co->stack[index];
         Value mm = getMetamethod(val, "__close");
         if (!mm.isNil()) {
-            // Need to temporarily switch currentCoroutine if we're closing a different one?
-            // standard Lua says __close runs in the thread that is closing it.
             push(mm);
             push(val);
-            push(Value::nil()); // Error object (nil if no error)
+            push(error); // Error object
             
             size_t prevFrames = currentCoroutine_->frames.size();
             if (callValue(2, 1)) {
@@ -610,6 +613,11 @@ bool VM::pcall(int argCount) {
         isHandlingError_ = true; // Prevent GC/memory errors while unwinding and allocating error string
         // Runtime error occurred during execution
         // Stack and frames need to be unwound
+        
+        // Close TBC variables
+        Value errorObj = Value::runtimeString(internString(lastErrorMessage_));
+        closeUpvalues(stackSizeBefore, nullptr, errorObj);
+
         while (currentCoroutine_->frames.size() > prevFrames) {
             currentCoroutine_->frames.pop_back();
         }
@@ -837,41 +845,44 @@ void VM::runtimeError(const std::string& message, int level) {
     lastErrorMessage_ = message;
     hadError_ = true;
 
-    if (!inPcall_) {
-        // Get line number and source from current instruction
-        int line = -1;
-        std::string source = sourceName_;
-        
-        int targetFrame = -1;
-        if (level > 0 && !currentCoroutine_->frames.empty()) {
-            targetFrame = static_cast<int>(currentCoroutine_->frames.size()) - level;
-        }
+    // Get line number and source from current instruction
+    int line = -1;
+    std::string source = sourceName_;
 
-        if (targetFrame >= 0 && targetFrame < static_cast<int>(currentCoroutine_->frames.size())) {
-            const CallFrame& frame = currentCoroutine_->frames[targetFrame];
-            const Chunk* chunk = frame.chunk;
-            if (chunk) {
-                source = chunk->sourceName();
-                if (frame.ip > 0) {
-                    line = chunk->getLine(frame.ip - 1);
-                }
-            }
-        }
+    int targetFrame = -1;
+    if (level > 0 && !currentCoroutine_->frames.empty()) {
+        targetFrame = static_cast<int>(currentCoroutine_->frames.size()) - level;
+    }
 
-        if (line != -1) {
-            std::string displaySource = source;
-            if (!displaySource.empty() && displaySource[0] == '@') {
-                displaySource = displaySource.substr(1);
+    if (targetFrame >= 0 && targetFrame < static_cast<int>(currentCoroutine_->frames.size())) {
+        const CallFrame& frame = currentCoroutine_->frames[targetFrame];
+        const Chunk* chunk = frame.chunk;
+        if (chunk) {
+            source = chunk->sourceName();
+            if (frame.ip > 0) {
+                line = chunk->getLine(frame.ip - 1);
             }
-            std::cerr << displaySource << ":" << line << ": " << message << std::endl;
-        } else if (level != 0) {
-            std::cerr << source << ": " << message << std::endl;
-        } else {
-            std::cerr << message << std::endl;
         }
     }
 
-    throw RuntimeError(message);
+    std::string prefix = "";
+    if (line != -1) {
+        std::string displaySource = source;
+        if (!displaySource.empty() && displaySource[0] == '@') {
+            displaySource = displaySource.substr(1);
+        }
+        prefix = displaySource + ":" + std::to_string(line) + ": ";
+    } else if (level != 0) {
+        prefix = source + ": ";
+    }
+
+    lastErrorMessage_ = prefix + message;
+
+    if (!inPcall_) {
+        std::cerr << lastErrorMessage_ << std::endl;
+    }
+
+    throw RuntimeError(lastErrorMessage_);
 }
 
 void VM::traceExecution() {
@@ -892,7 +903,7 @@ Value VM::add(const Value& a, const Value& b) {
         return Value::nil();
     }
     if (a.isInteger() && b.isInteger()) {
-        return Value::integer(a.asInteger() + b.asInteger());
+        return Value::integer(static_cast<int64_t>(static_cast<uint64_t>(a.asInteger()) + static_cast<uint64_t>(b.asInteger())));
     }
     return Value::number(a.asNumber() + b.asNumber());
 }
@@ -903,7 +914,7 @@ Value VM::subtract(const Value& a, const Value& b) {
         return Value::nil();
     }
     if (a.isInteger() && b.isInteger()) {
-        return Value::integer(a.asInteger() - b.asInteger());
+        return Value::integer(static_cast<int64_t>(static_cast<uint64_t>(a.asInteger()) - static_cast<uint64_t>(b.asInteger())));
     }
     return Value::number(a.asNumber() - b.asNumber());
 }
@@ -914,7 +925,7 @@ Value VM::multiply(const Value& a, const Value& b) {
         return Value::nil();
     }
     if (a.isInteger() && b.isInteger()) {
-        return Value::integer(a.asInteger() * b.asInteger());
+        return Value::integer(static_cast<int64_t>(static_cast<uint64_t>(a.asInteger()) * static_cast<uint64_t>(b.asInteger())));
     }
     return Value::number(a.asNumber() * b.asNumber());
 }
@@ -1003,7 +1014,7 @@ Value VM::negate(const Value& a) {
         return Value::nil();
     }
     if (a.isInteger()) {
-        return Value::integer(-a.asInteger());
+        return Value::integer(static_cast<int64_t>(0ULL - static_cast<uint64_t>(a.asInteger())));
     }
     return Value::number(-a.asNumber());
 }
@@ -1013,7 +1024,7 @@ Value VM::bitwiseNot(const Value& a) {
         runtimeError("attempt to perform bitwise operation on non-number");
         return Value::nil();
     }
-    return Value::integer(~a.asInteger());
+    return Value::integer(static_cast<int64_t>(~static_cast<uint64_t>(a.asInteger())));
 }
 
 Value VM::equal(const Value& a, const Value& b) {

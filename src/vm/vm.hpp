@@ -83,9 +83,9 @@ public:
 
     // Upvalue operations
     UpvalueObject* captureUpvalue(size_t stackIndex);
-    void closeUpvalues(size_t lastStackIndex, CoroutineObject* co = nullptr);
-    void closeTBCVariables(size_t lastStackIndex, CoroutineObject* co = nullptr);
-    void setupRootUpvalues(ClosureObject* closure);
+    void closeUpvalues(size_t lastStackIndex, CoroutineObject* co = nullptr, const Value& error = Value::nil());
+    void closeTBCVariables(size_t lastStackIndex, CoroutineObject* co = nullptr, const Value& error = Value::nil());
+    void setupRootUpvalues(ClosureObject* closure, const Value& env = Value::nil());
 
     // File operations
     FileObject* openFile(const std::string& filename, const std::string& mode);

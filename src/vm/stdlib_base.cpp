@@ -504,12 +504,19 @@ bool native_loadfile(VM* vm, int argCount) {
         vm->runtimeError("loadfile expects at least 1 argument");
         return false;
     }
-    std::string path = vm->getStringValue(vm->peek(argCount - 1));
-    for(int i=0; i<argCount; i++) vm->pop();
+    Value pathVal = vm->peek(argCount - 1);
+    std::string path = vm->getStringValue(pathVal);
+    
+    Value env = Value::nil();
+    if (argCount >= 3) {
+        env = vm->peek(argCount - 3);
+    }
+
     std::string sourceName = "@" + path;
 
     std::ifstream file(path, std::ios::binary);
     if (!file.is_open()) {
+        for(int i=0; i<argCount; i++) vm->pop();
         vm->push(Value::nil());
         StringObject* errStr = vm->internString("Could not open file: " + path);
         vm->push(Value::runtimeString(errStr));
@@ -522,6 +529,7 @@ bool native_loadfile(VM* vm, int argCount) {
     if (file.gcount() == 4 && std::memcmp(sig, "\x1bLua", 4) == 0) {
         auto function = FunctionObject::deserialize(file);
         if (!function) {
+            for(int i=0; i<argCount; i++) vm->pop();
             vm->push(Value::nil());
             vm->push(Value::runtimeString(vm->internString("Could not deserialize bytecode in " + path)));
             return true;
@@ -530,7 +538,8 @@ bool native_loadfile(VM* vm, int argCount) {
         vm->registerFunction(function.release());
         vm->setSourceName(sourceName);
         ClosureObject* closure = vm->createClosure(funcPtr);
-        vm->setupRootUpvalues(closure);
+        vm->setupRootUpvalues(closure, env);
+        for(int i=0; i<argCount; i++) vm->pop();
         vm->push(Value::closure(closure));
         return true;
     }
@@ -548,6 +557,7 @@ bool native_loadfile(VM* vm, int argCount) {
         Parser parser(lexer);
         auto program = parser.parse();
         if (!program) {
+            for(int i=0; i<argCount; i++) vm->pop();
             vm->push(Value::nil());
             StringObject* errStr = vm->internString("Parse error in " + path);
             vm->push(Value::runtimeString(errStr));
@@ -555,8 +565,9 @@ bool native_loadfile(VM* vm, int argCount) {
         }
 
         CodeGenerator codegen;
-        auto function = codegen.generate(program.get(), "@" + path);
+        auto function = codegen.generate(program.get(), sourceName);
         if (!function) {
+            for(int i=0; i<argCount; i++) vm->pop();
             vm->push(Value::nil());
             StringObject* errStr = vm->internString("Code generation error in " + path);
             vm->push(Value::runtimeString(errStr));
@@ -567,16 +578,19 @@ bool native_loadfile(VM* vm, int argCount) {
         vm->registerFunction(function.release());
         vm->setSourceName(sourceName);
         ClosureObject* closure = vm->createClosure(funcPtr);
-        vm->setupRootUpvalues(closure);
+        vm->setupRootUpvalues(closure, env);
+        for(int i=0; i<argCount; i++) vm->pop();
         vm->push(Value::closure(closure));
         return true;
 
     } catch (const CompileError& e) {
+        for(int i=0; i<argCount; i++) vm->pop();
         vm->push(Value::nil());
         StringObject* errStr = vm->internString(e.what());
         vm->push(Value::runtimeString(errStr));
         return true;
     } catch (const std::exception& e) {
+        for(int i=0; i<argCount; i++) vm->pop();
         vm->push(Value::nil());
         StringObject* errStr = vm->internString(e.what());
         vm->push(Value::runtimeString(errStr));
@@ -623,14 +637,25 @@ bool native_load(VM* vm, int argCount) {
         vm->runtimeError("load expects at least 1 argument");
         return false;
     }
-    std::string source = vm->getStringValue(vm->peek(argCount - 1));
-    for(int i=0; i<argCount; i++) vm->pop();
+    Value sourceVal = vm->peek(argCount - 1);
+    std::string source = vm->getStringValue(sourceVal);
+    
     std::string sourceName = "[string \"load\"]";
+    if (argCount >= 2) {
+        Value nameVal = vm->peek(argCount - 2);
+        if (!nameVal.isNil()) sourceName = vm->getStringValue(nameVal);
+    }
+
+    Value env = Value::nil();
+    if (argCount >= 4) {
+        env = vm->peek(argCount - 4);
+    }
 
     if (source.length() >= 4 && std::memcmp(source.data(), "\x1bLua", 4) == 0) {
         std::istringstream is(source.substr(4), std::ios::binary);
         auto function = FunctionObject::deserialize(is);
         if (!function) {
+            for(int i=0; i<argCount; i++) vm->pop();
             vm->push(Value::nil());
             vm->push(Value::runtimeString(vm->internString("Could not deserialize bytecode")));
             return true;
@@ -639,7 +664,8 @@ bool native_load(VM* vm, int argCount) {
         vm->registerFunction(function.release());
         vm->setSourceName(sourceName);
         ClosureObject* closure = vm->createClosure(funcPtr);
-        vm->setupRootUpvalues(closure);
+        vm->setupRootUpvalues(closure, env);
+        for(int i=0; i<argCount; i++) vm->pop();
         vm->push(Value::closure(closure));
         return true;
     }
@@ -650,14 +676,16 @@ bool native_load(VM* vm, int argCount) {
         Parser parser(lexer);
         auto program = parser.parse();
         if (!program) {
+            for(int i=0; i<argCount; i++) vm->pop();
             vm->push(Value::nil());
             vm->push(Value::runtimeString(vm->internString("parse error")));
             return true;
         }
 
         CodeGenerator codegen;
-        auto function = codegen.generate(program.get(), "[string \"load\"]");
+        auto function = codegen.generate(program.get(), sourceName);
         if (!function) {
+            for(int i=0; i<argCount; i++) vm->pop();
             vm->push(Value::nil());
             vm->push(Value::runtimeString(vm->internString("code generation error")));
             return true;
@@ -667,15 +695,18 @@ bool native_load(VM* vm, int argCount) {
         vm->registerFunction(function.release());
         vm->setSourceName(sourceName);
         ClosureObject* closure = vm->createClosure(funcPtr);
-        vm->setupRootUpvalues(closure);
+        vm->setupRootUpvalues(closure, env);
+        for(int i=0; i<argCount; i++) vm->pop();
         vm->push(Value::closure(closure));
         return true;
 
     } catch (const CompileError& e) {
+        for(int i=0; i<argCount; i++) vm->pop();
         vm->push(Value::nil());
         vm->push(Value::runtimeString(vm->internString(e.what())));
         return true;
     } catch (const std::exception& e) {
+        for(int i=0; i<argCount; i++) vm->pop();
         vm->push(Value::nil());
         vm->push(Value::runtimeString(vm->internString(e.what())));
         return true;
