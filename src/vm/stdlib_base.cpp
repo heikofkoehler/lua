@@ -554,6 +554,40 @@ bool native_loadfile(VM* vm, int argCount) {
     }
 }
 
+bool native_dofile(VM* vm, int argCount) {
+    if (argCount < 1) {
+        // Lua dofile(nil) reads from stdin, but for now we require a filename
+        vm->runtimeError("dofile expects a filename");
+        return false;
+    }
+    
+    // Use loadfile logic
+    if (!native_loadfile(vm, argCount)) return false;
+    
+    // loadfile returns (function) or (nil, error)
+    Value res = vm->peek(0);
+    if (res.isNil()) {
+        Value err = vm->peek(1);
+        vm->runtimeError(vm->getStringValue(err));
+        return false;
+    }
+    
+    // Pop the nil and error if they exist, or just the function?
+    // native_loadfile pops arguments and pushes 1 or 2 values.
+    // If successful, it pushes only 1 value (the closure).
+    
+    // Call the closure
+    size_t prevFrames = vm->currentCoroutine()->frames.size();
+    if (vm->callValue(0, 0)) { // 0 args, multiple returns
+        if (vm->currentCoroutine()->frames.size() > prevFrames) {
+            if (!vm->run(prevFrames)) return false;
+        }
+        return true;
+    }
+    
+    return false;
+}
+
 bool native_load(VM* vm, int argCount) {
     if (argCount < 1) {
         vm->runtimeError("load expects at least 1 argument");
@@ -813,6 +847,9 @@ void registerBaseLibrary(VM* vm) {
 
     size_t loadfileIdx = vm->registerNativeFunction("loadfile", native_loadfile);
     vm->setGlobal("loadfile", Value::nativeFunction(loadfileIdx));
+
+    size_t dofileIdx = vm->registerNativeFunction("dofile", native_dofile);
+    vm->setGlobal("dofile", Value::nativeFunction(dofileIdx));
 
     size_t loadIdx = vm->registerNativeFunction("load", native_load);
     vm->setGlobal("load", Value::nativeFunction(loadIdx));
