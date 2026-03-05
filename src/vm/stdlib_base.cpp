@@ -297,8 +297,25 @@ bool native_pairs(VM* vm, int argCount) {
         vm->runtimeError("pairs expects 1 argument");
         return false;
     }
-    Value table = vm->peek(0);
-    if (!table.isTable()) {
+    Value val = vm->peek(0);
+
+    Value mm = vm->getMetamethod(val, "__pairs");
+    if (!mm.isNil()) {
+        vm->pop();
+        vm->push(mm);
+        vm->push(val);
+        size_t prevFrames = vm->currentCoroutine()->frames.size();
+        if (vm->callValue(1, 4)) {
+            if (vm->currentCoroutine()->frames.size() > prevFrames) {
+                if (!vm->run(prevFrames)) return false;
+            }
+            vm->currentCoroutine()->lastResultCount = 3;
+            return true;
+        }
+        return false;
+    }
+
+    if (!val.isTable()) {
         vm->runtimeError("bad argument #1 to 'pairs' (table expected)");
         return false;
     }
@@ -306,7 +323,7 @@ bool native_pairs(VM* vm, int argCount) {
     size_t nextIdx = vm->registerNativeFunction("next", native_next);
     vm->pop();
     vm->push(Value::nativeFunction(nextIdx));
-    vm->push(table);
+    vm->push(val);
     vm->push(Value::nil());
     vm->currentCoroutine()->lastResultCount = 3;
     return true;
