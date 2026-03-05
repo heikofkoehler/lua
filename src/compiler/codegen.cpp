@@ -1834,7 +1834,9 @@ void CodeGenerator::pushCompilerState() {
     enclosingCompiler_ = &compilerStack_.back();
 
     // Reset for new function
+    std::string sourceName = enclosingCompiler_->chunk->sourceName();
     chunk_ = std::make_unique<Chunk>();
+    chunk_->setSourceName(sourceName);
     locals_.clear();
     upvalues_.clear();
     finishedLocals_.clear();

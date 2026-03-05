@@ -332,35 +332,60 @@ void registerDebugLibrary(VM* vm, TableObject* debugTable) {
     vm->addNativeToTable(debugTable, "getregistry", native_debug_getregistry);
     
     vm->addNativeToTable(debugTable, "traceback", [](VM* vm, int argCount) -> bool {
-        // Simple traceback implementation
-        std::string result = "stack traceback:\n";
+        std::string message = "";
+        int level = 1;
+        int argStart = 0;
+
+        if (argCount >= 1 && vm->peek(argCount - 1).isString()) {
+            message = vm->getStringValue(vm->peek(argCount - 1));
+            argStart = 1;
+        }
+        if (argCount > argStart && vm->peek(argCount - 1 - argStart).isNumber()) {
+            level = static_cast<int>(vm->peek(argCount - 1 - argStart).asNumber());
+        }
+
+        std::string result = "";
+        if (!message.empty()) result += message + "\n";
+        result += "stack traceback:\n";
+
         auto& frames = vm->currentCoroutine()->frames;
-        for (int i = static_cast<int>(frames.size()) - 1; i >= 0; i--) {
+        for (int i = static_cast<int>(frames.size()) - level; i >= 0; i--) {
             const auto& frame = frames[i];
             result += "  ";
             if (frame.closure) {
-                result += frame.closure->function()->name();
+                FunctionObject* func = frame.closure->function();
+                std::string source = func->chunk()->sourceName();
+                if (!source.empty() && source[0] == '@') source = source.substr(1);
+
+                int line = -1;
+                if (frame.ip > 0) {
+                    line = func->chunk()->getLine(frame.ip - 1);
+                }
+
+                result += source + ":" + (line != -1 ? std::to_string(line) : "?") + ": in function '";
+                result += func->name() + "'";
             } else {
-                result += "[C function]";
+                result += "[C function]: in ?";
             }
             result += "\n";
         }
-        
+
         for(int i=0; i<argCount; i++) vm->pop();
         vm->push(Value::runtimeString(vm->internString(result)));
         return true;
     });
-
     vm->addNativeToTable(debugTable, "getinfo", [](VM* vm, int argCount) -> bool {
         if (argCount < 1) {
             vm->push(Value::nil());
             return true;
         }
         Value f = vm->peek(argCount - 1);
+        std::string what = (argCount >= 2) ? vm->getStringValue(vm->peek(argCount - 2)) : "flnSu";
         TableObject* info = vm->createTable();
-        
+
         ClosureObject* closure = nullptr;
         int line = -1;
+        std::string source = "=[C]";
 
         if (f.isNumber()) {
             int level = static_cast<int>(f.asNumber());
@@ -369,10 +394,9 @@ void registerDebugLibrary(VM* vm, TableObject* debugTable) {
             if (frame) {
                 closure = frame->closure;
                 if (closure) {
-                    // Back up IP by 1 because it usually points to the NEXT instruction
-                    // after the call to getinfo.
                     size_t ip = (frame->ip > 0) ? frame->ip - 1 : 0;
                     line = frame->closure->function()->chunk()->getLine(ip);
+                    source = frame->closure->function()->chunk()->sourceName();
                 }
             } else {
                 for(int i=0; i<argCount; i++) vm->pop();
@@ -381,8 +405,11 @@ void registerDebugLibrary(VM* vm, TableObject* debugTable) {
             }
         } else if (f.isClosure()) {
             closure = f.asClosureObj();
+            source = closure->function()->chunk()->sourceName();
         } else if (f.isNativeFunction()) {
             info->set("what", Value::runtimeString(vm->internString("C")));
+            info->set("source", Value::runtimeString(vm->internString("=[C]")));
+            info->set("short_src", Value::runtimeString(vm->internString("[C]")));
             for(int i=0; i<argCount; i++) vm->pop();
             vm->push(Value::table(info));
             return true;
@@ -392,14 +419,31 @@ void registerDebugLibrary(VM* vm, TableObject* debugTable) {
             FunctionObject* func = closure->function();
             info->set("name", Value::runtimeString(vm->internString(func->name())));
             info->set("what", Value::runtimeString(vm->internString("Lua")));
+            info->set("source", Value::runtimeString(vm->internString(source)));
+
+            std::string short_src = source;
+            if (short_src.length() > 60) short_src = "..." + short_src.substr(short_src.length() - 57);
+            info->set("short_src", Value::runtimeString(vm->internString(short_src)));
+
             info->set("nups", Value::number(func->upvalueCount()));
+            info->set("nparams", Value::number(func->arity()));
+            info->set("isvararg", Value::boolean(func->hasVarargs()));
+
             if (line != -1) {
                 info->set("currentline", Value::number(line));
             }
+
+            // For now, our FunctionObject doesn't store linedefined/lastlinedefined.
+            // We'll set them to -1 or use the first instruction's line.
+            info->set("linedefined", Value::number(1)); // Placeholder
+            info->set("lastlinedefined", Value::number(-1));
+
+            info->set("func", Value::closure(closure));
         }
-        
+
         for(int i=0; i<argCount; i++) vm->pop();
         vm->push(Value::table(info));
         return true;
     });
+
 }
