@@ -339,6 +339,60 @@ bool native_debug_getmetatable(VM* vm, int argCount) {
     return true;
 }
 
+bool native_debug_getuservalue(VM* vm, int argCount) {
+    if (argCount < 1) { vm->runtimeError("debug.getuservalue expects at least 1 argument"); return false; }
+    Value udVal = vm->peek(argCount - 1);
+    if (!udVal.isUserdata()) {
+        vm->push(Value::nil());
+        vm->push(Value::boolean(false));
+        vm->currentCoroutine()->lastResultCount = 2;
+        return true;
+    }
+    UserdataObject* ud = udVal.asUserdataObj();
+    int n = 1;
+    if (argCount >= 2) {
+        n = static_cast<int>(vm->peek(argCount - 2).asNumber());
+    }
+    
+    for (int i = 0; i < argCount; i++) vm->pop();
+    
+    if (n >= 1 && n <= ud->numUserValues()) {
+        vm->push(ud->getUserValue(n - 1));
+        vm->push(Value::boolean(true));
+    } else {
+        vm->push(Value::nil());
+        vm->push(Value::boolean(false));
+    }
+    vm->currentCoroutine()->lastResultCount = 2;
+    return true;
+}
+
+bool native_debug_setuservalue(VM* vm, int argCount) {
+    if (argCount < 2) { vm->runtimeError("debug.setuservalue expects at least 2 arguments"); return false; }
+    Value udVal = vm->peek(argCount - 1);
+    Value val = vm->peek(argCount - 2);
+    int n = 1;
+    if (argCount >= 3) {
+        n = static_cast<int>(vm->peek(argCount - 3).asNumber());
+    }
+    
+    if (!udVal.isUserdata()) {
+        vm->runtimeError("bad argument #1 to 'setuservalue' (userdata expected)");
+        return false;
+    }
+    UserdataObject* ud = udVal.asUserdataObj();
+    
+    if (n >= 1 && n <= ud->numUserValues()) {
+        ud->setUserValue(n - 1, val);
+        for (int i = 0; i < argCount; i++) vm->pop();
+        vm->push(udVal);
+    } else {
+        for (int i = 0; i < argCount; i++) vm->pop();
+        vm->push(Value::nil()); // out of bounds returns nil in Lua 5.4, or error depending on version. Lua 5.4 says: returns u or nil.
+    }
+    return true;
+}
+
 } // anonymous namespace
 
 void registerDebugLibrary(VM* vm, TableObject* debugTable) {
@@ -346,6 +400,8 @@ void registerDebugLibrary(VM* vm, TableObject* debugTable) {
     vm->addNativeToTable(debugTable, "gethook", native_debug_gethook);
     vm->addNativeToTable(debugTable, "getmetatable", native_debug_getmetatable);
     vm->addNativeToTable(debugTable, "setmetatable", native_debug_setmetatable);
+    vm->addNativeToTable(debugTable, "getuservalue", native_debug_getuservalue);
+    vm->addNativeToTable(debugTable, "setuservalue", native_debug_setuservalue);
     vm->addNativeToTable(debugTable, "getlocal", native_debug_getlocal);
     vm->addNativeToTable(debugTable, "setlocal", native_debug_setlocal);
     vm->addNativeToTable(debugTable, "getupvalue", native_debug_getupvalue);

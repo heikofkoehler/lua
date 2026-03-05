@@ -8,6 +8,15 @@ void UserdataObject::setMetatable(const Value& mt) {
     metatable_ = mt;
 }
 
+void UserdataObject::setUserValue(int index, const Value& val) {
+    if (index >= 0 && static_cast<size_t>(index) < userValues_.size()) {
+        if (val.isObj() && VM::currentVM) {
+            VM::currentVM->writeBarrier(this, val.asObj());
+        }
+        userValues_[index] = val;
+    }
+}
+
 void UserdataObject::markReferences() {
     // Handled in blackenObject
 }

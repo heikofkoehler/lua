@@ -240,6 +240,9 @@ static void blackenObject(VM* vm, GCObject* object) {
         case GCObject::Type::USERDATA: {
             UserdataObject* ud = static_cast<UserdataObject*>(object);
             vm->markValue(ud->metatable());
+            for (int i = 0; i < ud->numUserValues(); ++i) {
+                vm->markValue(ud->getUserValue(i));
+            }
             break;
         }
     }

@@ -21,6 +21,10 @@ assert(count == 2)
 -- Format
 assert(string.format("hello %s", "world") == "hello world")
 assert(string.format("num: %d, hex: %x", 42, 42) == "num: 42, hex: 2a")
+assert(string.format("%q", nil) == "nil")
+assert(string.format("%q", true) == "true")
+assert(string.format("%q", 42) == "42")
+assert(string.format("%q", "a\nb") == "\"a\\nb\"")
 
 -- Repetition
 assert(string.rep("a", 3) == "aaa")
@@ -34,6 +38,13 @@ assert(b == 0x41)
 assert(i == 12345)
 assert(next_pos == 10)
 assert(string.packsize("bi") == 9)
+
+-- Advanced Packing
+assert(string.packsize("!4xbT") == 10)
+local data2 = string.pack("x!8XbT", 0x42, 999)
+local val1, val2 = string.unpack("x!8XbT", data2)
+assert(val1 == 0x42)
+assert(val2 == 999)
 
 -- Dump
 local d = string.dump(function() return 42 end)

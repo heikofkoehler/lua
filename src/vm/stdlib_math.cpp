@@ -193,11 +193,55 @@ bool native_math_modf(VM* vm, int argCount) {
     return true;
 }
 
+struct Xoshiro256StarStar {
+    using result_type = uint64_t;
+    uint64_t s[4];
+
+    Xoshiro256StarStar(uint64_t seed) {
+        set_seed(seed);
+    }
+
+    void set_seed(uint64_t seed) {
+        uint64_t z = seed;
+        for (int i = 0; i < 4; i++) {
+            z = (z ^ (z >> 30)) * 0xbf58476d1ce4e5b9ULL;
+            z = (z ^ (z >> 27)) * 0x94d049bb133111ebULL;
+            s[i] = z ^ (z >> 31);
+        }
+    }
+
+    static constexpr uint64_t min() { return 0; }
+    static constexpr uint64_t max() { return UINT64_MAX; }
+
+    uint64_t operator()() {
+        const uint64_t result = rotl(s[1] * 5, 7) * 9;
+        const uint64_t t = s[1] << 17;
+        s[2] ^= s[0];
+        s[3] ^= s[1];
+        s[1] ^= s[2];
+        s[0] ^= s[3];
+        s[2] ^= t;
+        s[3] = rotl(s[3], 45);
+        return result;
+    }
+
+    static inline uint64_t rotl(const uint64_t x, int k) {
+        return (x << k) | (x >> (64 - k));
+    }
+};
+
+static Xoshiro256StarStar& get_rng() {
+    static Xoshiro256StarStar rng(std::random_device{}());
+    return rng;
+}
+
 bool native_math_random(VM* vm, int argCount) {
-    static std::mt19937 rng(std::random_device{}());
+    auto& rng = get_rng();
     if (argCount == 0) {
-        std::uniform_real_distribution<double> dist(0.0, 1.0);
-        vm->push(Value::number(dist(rng)));
+        // [0, 1) distribution
+        uint64_t rv = rng();
+        double d = (rv >> 11) * (1.0 / 9007199254740992.0);
+        vm->push(Value::number(d));
     } else if (argCount == 1) {
         int64_t m = vm->peek(0).asInteger();
         vm->pop();
@@ -216,11 +260,20 @@ bool native_math_random(VM* vm, int argCount) {
 }
 
 bool native_math_randomseed(VM* vm, int argCount) {
-    static std::mt19937 rng(std::random_device{}());
+    auto& rng = get_rng();
+    uint64_t seed = 0;
     if (argCount >= 1) {
-        rng.seed(static_cast<unsigned int>(vm->peek(argCount - 1).asNumber()));
+        seed = static_cast<uint64_t>(vm->peek(argCount - 1).asInteger());
+    } else {
+        seed = std::random_device{}();
     }
+    rng.set_seed(seed);
+    
     for (int i = 0; i < argCount; i++) vm->pop();
+    
+    // In Lua 5.4, math.randomseed returns the seeds it used.
+    // Since we only use 1 seed argument conceptually, we'll return it.
+    vm->push(Value::integer(static_cast<int64_t>(seed)));
     return true;
 }
 

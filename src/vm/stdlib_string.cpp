@@ -668,22 +668,35 @@ bool native_string_format(VM* vm, int argCount) {
                 snprintf(buf, sizeof(buf), sub_fmt.c_str(), s.c_str());
                 result += buf;
             } else if (spec == 'q') {
-                std::string s = vm->getStringValue(arg);
-                result += '"';
-                for (char c : s) {
-                    if (c == '"' || c == '\\' || c == '\n') {
-                        result += '\\';
-                        if (c == '\n') result += 'n';
-                        else result += c;
-                    } else if (iscntrl((unsigned char)c)) {
-                        char b2[5];
-                        snprintf(b2, sizeof(b2), "\\%03d", (unsigned char)c);
-                        result += b2;
+                if (arg.isNil()) {
+                    result += "nil";
+                } else if (arg.isBool()) {
+                    result += arg.asBool() ? "true" : "false";
+                } else if (arg.isNumber()) {
+                    if (arg.isInteger()) {
+                        snprintf(buf, sizeof(buf), "%lld", (long long)arg.asInteger());
                     } else {
-                        result += c;
+                        snprintf(buf, sizeof(buf), "%.14g", arg.asNumber()); // simpler approach for float
                     }
+                    result += buf;
+                } else {
+                    std::string s = vm->getStringValue(arg);
+                    result += '"';
+                    for (char c : s) {
+                        if (c == '"' || c == '\\' || c == '\n') {
+                            result += '\\';
+                            if (c == '\n') result += 'n';
+                            else result += c;
+                        } else if (iscntrl((unsigned char)c)) {
+                            char b2[5];
+                            snprintf(b2, sizeof(b2), "\\%03d", (unsigned char)c);
+                            result += b2;
+                        } else {
+                            result += c;
+                        }
+                    }
+                    result += '"';
                 }
-                result += '"';
             } else if (spec == 'd' || spec == 'i' || spec == 'o' || spec == 'u' || spec == 'x' || spec == 'X') {
                 if (!arg.isNumber()) { vm->runtimeError("number expected for %" + std::string(1, spec)); return false; }
                 // Use ll for 64-bit integers. We need to inject 'll' before the specifier
@@ -727,11 +740,12 @@ struct PackState {
 
 static size_t get_size(char spec, int& size) {
     switch (spec) {
-        case 'b': case 'B': size = 1; return 1;
+        case 'b': case 'B': case 'x': size = 1; return 1;
         case 'h': case 'H': size = 2; return 2;
         case 'i': case 'I': case 'l': case 'L': case 'j': case 'J': case 'T': size = 8; return 8; // simplified
         case 'f': size = 4; return 4;
         case 'd': case 'n': size = 8; return 8;
+        case 'X': size = 0; return 0; // simplified alignment
         default: size = 0; return 0;
     }
 }
@@ -741,6 +755,12 @@ bool native_string_packsize(VM* vm, int argCount) {
     std::string fmt = vm->getStringValue(vm->peek(argCount - 1));
     size_t total = 0;
     for (size_t i = 0; i < fmt.length(); i++) {
+        if (fmt[i] == '!' || fmt[i] == '<' || fmt[i] == '>' || fmt[i] == '=') {
+            if (fmt[i] == '!' && i + 1 < fmt.length() && isdigit((unsigned char)fmt[i+1])) {
+                i++; // skip alignment number
+            }
+            continue;
+        }
         int size;
         if (get_size(fmt[i], size) > 0) total += size;
         else if (fmt[i] == 's') {
@@ -761,8 +781,17 @@ bool native_string_pack(VM* vm, int argCount) {
 
     for (size_t i = 0; i < fmt.length(); i++) {
         char spec = fmt[i];
-        if (spec == '<') continue; // simplified
-        if (spec == '>') continue;
+        if (spec == '<' || spec == '>' || spec == '=' || spec == '!') {
+            if (spec == '!' && i + 1 < fmt.length() && isdigit((unsigned char)fmt[i+1])) {
+                i++;
+            }
+            continue;
+        }
+        if (spec == 'X') continue;
+        if (spec == 'x') {
+            result.push_back('\0');
+            continue;
+        }
         
         if (argIdx >= argCount) { vm->runtimeError("bad argument to 'pack' (no value)"); return false; }
         Value val = vm->peek(argCount - 1 - argIdx);
@@ -770,7 +799,7 @@ bool native_string_pack(VM* vm, int argCount) {
         if (spec == 'b' || spec == 'B') {
             unsigned char b = static_cast<unsigned char>(val.asNumber());
             result.push_back(b);
-        } else if (spec == 'i' || spec == 'I' || spec == 'j' || spec == 'J') {
+        } else if (spec == 'i' || spec == 'I' || spec == 'j' || spec == 'J' || spec == 'T') {
             int64_t v = val.asInteger();
             result.append(reinterpret_cast<char*>(&v), 8);
         } else if (spec == 'n' || spec == 'd') {
@@ -810,13 +839,23 @@ bool native_string_unpack(VM* vm, int argCount) {
 
     for (size_t i = 0; i < fmt.length(); i++) {
         char spec = fmt[i];
-        if (spec == '<' || spec == '>') continue;
+        if (spec == '<' || spec == '>' || spec == '=' || spec == '!') {
+            if (spec == '!' && i + 1 < fmt.length() && isdigit((unsigned char)fmt[i+1])) {
+                i++;
+            }
+            continue;
+        }
+        if (spec == 'X') continue;
+        if (spec == 'x') {
+            current += 1;
+            continue;
+        }
 
         if (spec == 'b' || spec == 'B') {
             if (current + 1 > (int)data.length()) { vm->runtimeError("data string too short"); return false; }
             vm->push(Value::number(static_cast<unsigned char>(data[current])));
             current += 1;
-        } else if (spec == 'i' || spec == 'I' || spec == 'j' || spec == 'J') {
+        } else if (spec == 'i' || spec == 'I' || spec == 'j' || spec == 'J' || spec == 'T') {
             if (current + 8 > (int)data.length()) { vm->runtimeError("data string too short"); return false; }
             int64_t v;
             std::memcpy(&v, &data[current], 8);
