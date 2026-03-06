@@ -539,7 +539,7 @@ bool VM::run(const FunctionObject& function, const std::vector<Value>& args) {
         }
 
 #ifdef PRINT_CODE
-        function.chunk()->disassemble(function.name());
+        function.disassemble();
 #endif
 
         // Create root closure

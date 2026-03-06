@@ -310,6 +310,54 @@ int runFile(const std::string& path, VM& vm) {
     }
 }
 
+// Disassemble file (source or bytecode)
+int disassembleFile(const std::string& path) {
+    try {
+        std::ifstream file(path, std::ios::binary);
+        if (!file.is_open()) {
+            throw std::runtime_error("Could not open file: " + path);
+        }
+        
+        // Peek at signature
+        char sig[4];
+        file.read(sig, 4);
+        bool isBytecode = (file.gcount() == 4 && std::memcmp(sig, "\x1bLua", 4) == 0);
+        
+        if (isBytecode) {
+            auto function = FunctionObject::deserialize(file);
+            if (!function) {
+                std::cerr << "Error: Could not deserialize bytecode" << std::endl;
+                return 1;
+            }
+            function->disassemble();
+            return 0;
+        } else {
+            // Seek back to start if not bytecode
+            file.clear();
+            file.seekg(0);
+            std::stringstream buffer;
+            buffer << file.rdbuf();
+            std::string source = buffer.str();
+            
+            Lexer lexer(source);
+            lexer.setSourceName("@" + path);
+            Parser parser(lexer);
+            auto program = parser.parse();
+            if (!program) return 1;
+
+            CodeGenerator codegen;
+            auto function = codegen.generate(program.get(), "@" + path);
+            if (!function) return 1;
+            
+            function->disassemble();
+            return 0;
+        }
+    } catch (const std::exception& e) {
+        std::cerr << "Error: " << e.what() << std::endl;
+        return 1;
+    }
+}
+
 // Interactive REPL
 void repl(VM& vm) {
     std::string buffer;
@@ -436,6 +484,7 @@ void printUsage(const char* program) {
     std::cerr << "    -c, --compile    Compile source to bytecode" << std::endl;
     std::cerr << "    -o, --output     Output file for bytecode (default: out.luac)" << std::endl;
     std::cerr << "    -b, --bytecode   Execute input as pre-compiled bytecode" << std::endl;
+    std::cerr << "    -l, --list       List (disassemble) bytecode" << std::endl;
     std::cerr << "    -h, --help       Print this help message" << std::endl;
     std::cerr << "  Run without arguments to start REPL" << std::endl;
 }
@@ -443,6 +492,7 @@ void printUsage(const char* program) {
 int main(int argc, char* argv[]) {
     bool verbose = false;
     bool compileOnly = false;
+    bool listBytecode = false;
     bool isBytecode = false;
     bool interactive = false;
     bool ignoreEnv = false;
@@ -465,17 +515,18 @@ int main(int argc, char* argv[]) {
             interactive = true;
         } else if (!stopFlags && arg == "-E") {
             ignoreEnv = true;
+        } else if (!stopFlags && (arg == "-l" || arg == "--list")) {
+            listBytecode = true;
         } else if (!stopFlags && arg.length() >= 2 && arg[0] == '-' && arg[1] == 'l') {
-            std::string lib;
+            // Check if it's -l followed by library name or just -l for list
             if (arg.length() > 2) {
-                lib = arg.substr(2);
-            } else if (i + 1 < argc) {
-                lib = argv[++i];
+                loadLibs.push_back(arg.substr(2));
+            } else if (i + 1 < argc && argv[i+1][0] != '-') {
+                loadLibs.push_back(argv[++i]);
             } else {
-                std::cerr << "Error: -l option requires an argument" << std::endl;
-                return 1;
+                // It was just -l at the end or followed by another flag
+                listBytecode = true;
             }
-            loadLibs.push_back(lib);
         } else if (!stopFlags && arg.length() >= 2 && arg[0] == '-' && arg[1] == 'e') {
             std::string code;
             if (arg.length() > 2) {
@@ -606,6 +657,8 @@ int main(int argc, char* argv[]) {
         if (compileOnly) {
             if (outputPath.empty()) outputPath = "out.luac";
             result = compileFile(scriptPath, outputPath);
+        } else if (listBytecode) {
+            result = disassembleFile(scriptPath);
         } else if (isBytecode) {
             result = runBytecode(scriptPath, vm);
         } else {

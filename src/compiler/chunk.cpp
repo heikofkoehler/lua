@@ -81,22 +81,64 @@ int Chunk::getLine(size_t offset) const {
 }
 
 void Chunk::disassemble(const std::string& name) const {
-    std::cout << "== " << name << " ==" << std::endl;
+    std::cout << "--- Chunk: " << name << " ---" << std::endl;
+    if (!constants_.empty()) {
+        std::cout << "Constants (" << constants_.size() << "):" << std::endl;
+        for (size_t i = 0; i < constants_.size(); i++) {
+            std::cout << "  [" << std::setw(3) << i << "] ";
+            constants_[i].print(std::cout);
+            std::cout << std::endl;
+        }
+    }
 
+    if (!identifiers_.empty()) {
+        std::cout << "Identifiers (" << identifiers_.size() << "):" << std::endl;
+        for (size_t i = 0; i < identifiers_.size(); i++) {
+            std::cout << "  [" << std::setw(3) << i << "] " << identifiers_[i] << std::endl;
+        }
+    }
+
+    std::cout << "Bytecode (" << code_.size() << " bytes):" << std::endl;
     for (size_t offset = 0; offset < code_.size();) {
         offset = disassembleInstruction(offset);
     }
+
+    // Recursively disassemble sub-functions
+    for (auto* func : functions_) {
+        func->disassemble();
+    }
+}
+
+void FunctionObject::disassemble() const {
+    std::cout << "----------------------------------------------------------------" << std::endl;
+    std::cout << "Function:  " << name_ << std::endl;
+    std::cout << "Params:    " << arity_ << (hasVarargs_ ? "+" : "") << std::endl;
+    std::cout << "Upvalues:  " << upvalueCount_ << std::endl;
+    
+    if (!localVars_.empty()) {
+        std::cout << "Locals (" << localVars_.size() << "):" << std::endl;
+        for (const auto& l : localVars_) {
+            std::cout << "  [" << std::right << std::setfill(' ') << std::setw(3) << l.slot << "] " 
+                      << std::left << std::setw(16) << l.name 
+                      << " " << std::right << std::setfill('0') << std::setw(4) << l.startPC 
+                      << "-" << std::setw(4) << l.endPC << std::endl;
+        }
+        std::cout << std::setfill(' ');
+    }
+
+    chunk_->disassemble(name_);
 }
 
 size_t Chunk::disassembleInstruction(size_t offset) const {
-    std::cout << std::setfill('0') << std::setw(4) << offset << " ";
+    std::cout << std::right << std::setfill('0') << std::setw(4) << offset << " ";
 
     // Print line number
     if (offset > 0 && lines_[offset] == lines_[offset - 1]) {
         std::cout << "   | ";
     } else {
-        std::cout << std::setw(4) << lines_[offset] << " ";
+        std::cout << std::right << std::setfill(' ') << std::setw(4) << lines_[offset] << " ";
     }
+    std::cout << std::setfill(' ');
 
     uint8_t instruction = code_[offset];
     OpCode op = static_cast<OpCode>(instruction);
@@ -108,7 +150,8 @@ size_t Chunk::disassembleInstruction(size_t offset) const {
             uint32_t index = code_[offset + 1];
             index |= (code_[offset + 2] << 8);
             index |= (code_[offset + 3] << 16);
-            std::cout << std::left << std::setw(16) << "OP_CONSTANT_LONG" << " " << std::setw(4) << index << " '";
+            std::cout << std::left << std::setw(16) << "OP_CONSTANT_LONG" << " " 
+                      << std::right << std::setfill(' ') << std::setw(4) << index << " '";
             std::cout << constants_[index];
             std::cout << "'" << std::endl;
             return offset + 4;
@@ -204,7 +247,7 @@ size_t Chunk::disassembleInstruction(size_t offset) const {
         case OpCode::OP_CLOSURE: {
             uint8_t constant = code_[offset + 1];
             std::cout << std::left << std::setw(16) << "OP_CLOSURE" << " "
-                      << std::setfill('0') << std::setw(4) << static_cast<int>(constant) << " '";
+                      << std::right << std::setfill(' ') << std::setw(4) << static_cast<int>(constant) << " '";
             std::cout << constants_[constant] << "'" << std::endl;
             
             FunctionObject* func = getFunction(constants_[constant].asFunctionIndex());
@@ -212,8 +255,8 @@ size_t Chunk::disassembleInstruction(size_t offset) const {
             for (int i = 0; i < func->upvalueCount(); i++) {
                 uint8_t isLocal = code_[currentOffset++];
                 uint8_t index = code_[currentOffset++];
-                std::cout << std::setfill('0') << std::setw(4) << currentOffset - 2 << "    |                     "
-                          << (isLocal ? "local" : "upvalue") << " " << static_cast<int>(index) << std::endl;
+                std::cout << std::right << std::setfill('0') << std::setw(4) << currentOffset - 2 << "    |                     "
+                          << std::left << std::setfill(' ') << (isLocal ? "local" : "upvalue") << " " << static_cast<int>(index) << std::endl;
             }
             return currentOffset;
         }
@@ -223,7 +266,7 @@ size_t Chunk::disassembleInstruction(size_t offset) const {
             constant |= (code_[offset + 2] << 8);
             constant |= (code_[offset + 3] << 16);
             std::cout << std::left << std::setw(16) << "OP_CLOSURE_LONG" << " "
-                      << std::setfill('0') << std::setw(4) << constant << " '";
+                      << std::right << std::setfill(' ') << std::setw(4) << constant << " '";
             std::cout << constants_[constant] << "'" << std::endl;
             
             FunctionObject* func = getFunction(constants_[constant].asFunctionIndex());
@@ -231,8 +274,8 @@ size_t Chunk::disassembleInstruction(size_t offset) const {
             for (int i = 0; i < func->upvalueCount(); i++) {
                 uint8_t isLocal = code_[currentOffset++];
                 uint8_t index = code_[currentOffset++];
-                std::cout << std::setfill('0') << std::setw(4) << currentOffset - 2 << "    |                     "
-                          << (isLocal ? "local" : "upvalue") << " " << static_cast<int>(index) << std::endl;
+                std::cout << std::right << std::setfill('0') << std::setw(4) << currentOffset - 2 << "    |                     "
+                          << std::left << std::setfill(' ') << (isLocal ? "local" : "upvalue") << " " << static_cast<int>(index) << std::endl;
             }
             return currentOffset;
         }
@@ -291,7 +334,7 @@ size_t Chunk::simpleInstruction(const char* name, size_t offset) const {
 size_t Chunk::constantInstruction(const char* name, size_t offset) const {
     uint8_t constantIndex = code_[offset + 1];
     std::cout << std::left << std::setw(16) << name
-              << std::right << std::setw(4) << static_cast<int>(constantIndex)
+              << std::right << std::setfill(' ') << std::setw(4) << static_cast<int>(constantIndex)
               << " '";
     constants_[constantIndex].print(std::cout);
     std::cout << "'" << std::endl;
@@ -301,7 +344,7 @@ size_t Chunk::constantInstruction(const char* name, size_t offset) const {
 size_t Chunk::jumpInstruction(const char* name, int sign, size_t offset) const {
     uint16_t jump = static_cast<uint16_t>(code_[offset + 1] | (code_[offset + 2] << 8));
     std::cout << std::left << std::setw(16) << name
-              << std::right << std::setw(4) << offset
+              << std::right << std::setfill(' ') << std::setw(4) << offset
               << " -> " << (offset + 3 + sign * jump) << std::endl;
     return offset + 3;
 }
@@ -309,7 +352,7 @@ size_t Chunk::jumpInstruction(const char* name, int sign, size_t offset) const {
 size_t Chunk::byteInstruction(const char* name, size_t offset) const {
     uint8_t slot = code_[offset + 1];
     std::cout << std::left << std::setw(16) << name
-              << std::right << std::setw(4) << static_cast<int>(slot);
+              << std::right << std::setfill(' ') << std::setw(4) << static_cast<int>(slot);
 
     // If it's a global variable instruction, show the name
     if (std::string(name).find("GLOBAL") != std::string::npos && slot < identifiers_.size()) {
@@ -324,7 +367,7 @@ size_t Chunk::twoByteInstruction(const char* name, size_t offset) const {
     uint8_t byte1 = code_[offset + 1];
     uint8_t byte2 = code_[offset + 2];
     std::cout << std::left << std::setw(16) << name
-              << std::right << std::setw(4) << static_cast<int>(byte1)
+              << std::right << std::setfill(' ') << std::setw(4) << static_cast<int>(byte1)
               << " " << std::setw(4) << static_cast<int>(byte2) << std::endl;
     return offset + 3;
 }

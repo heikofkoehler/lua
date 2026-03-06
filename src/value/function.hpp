@@ -43,6 +43,8 @@ public:
         localVars_.push_back({name, startPC, endPC, slot});
     }
 
+    void disassemble() const;
+
     // Serialization
     void serialize(std::ostream& os) const;
     static std::unique_ptr<FunctionObject> deserialize(std::istream& is);
