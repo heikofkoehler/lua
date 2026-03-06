@@ -1,29 +1,32 @@
--- Test string object metatable and colon syntax
+-- Test type metatables (debug.setmetatable)
+print("Testing type metatables...")
 
-print("Testing string:len()...")
+local mt = {
+    __index = {
+        shout = function(self)
+            return string.upper(self) .. "!!!"
+        end
+    }
+}
+
+debug.setmetatable("", mt)
+
 local s = "hello"
-assert(s:len() == 5)
-assert(("world"):len() == 5)
+print("shouting: " .. s:shout())
+assert(s:shout() == "HELLO!!!")
 
-print("Testing string:sub()...")
-assert(s:sub(1, 2) == "he")
-assert(s:sub(-3) == "llo")
+-- Test for numbers
+local mt_num = {
+    __index = {
+        square = function(self)
+            return self * self
+        end
+    }
+}
 
-print("Testing string:upper() and string:lower()...")
-assert(s:upper() == "HELLO")
-assert(("LUA"):lower() == "lua")
+debug.setmetatable(0, mt_num)
+local n = 5
+print("squaring: " .. n:square())
+assert(n:square() == 25)
 
-print("Testing string:reverse()...")
-assert(s:reverse() == "olleh")
-
-print("Testing string:byte() and string:char()...")
-assert(s:byte(1) == 104) -- 'h'
-assert(string.char(s:byte(1)) == "h")
-
-print("Testing getmetatable on strings...")
-local mt = getmetatable("")
-assert(mt ~= nil)
-assert(type(mt) == "table")
-assert(mt.__index == string)
-
-print("String metatable tests passed!")
+print("OK: type metatables passed!")

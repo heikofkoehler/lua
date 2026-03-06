@@ -12,10 +12,13 @@
 bool VM::run(size_t targetFrameCount) {
     // Main execution loop
     while (true) {
+        if (currentCoroutine_->status == CoroutineObject::Status::SUSPENDED) {
+            return true;
+        }
         if (currentCoroutine_->frames.size() <= targetFrameCount) {
             return !hadError_;
         }
-        
+
         // Handle debug hooks
         if (stdlibInitialized_ && !currentCoroutine_->inHook && currentCoroutine_->hookMask != 0) {
             bool triggerCount = false;
@@ -237,6 +240,7 @@ bool VM::run(size_t targetFrameCount) {
             case OpCode::OP_CLOSE_UPVALUE: {
                 // Close upvalue at top of stack (and TBC variables)
                 closeUpvalues(currentCoroutine_->stack.size() - 1);
+                if (currentCoroutine_->status == CoroutineObject::Status::SUSPENDED) return true;
                 pop();
                 break;
             }
@@ -652,6 +656,7 @@ bool VM::run(size_t targetFrameCount) {
                 if (!callValue(argCount, retCount)) {
                     return false;
                 }
+                if (currentCoroutine_->status == CoroutineObject::Status::SUSPENDED) return true;
                 // If it was a Lua call, trigger hook
                 if (currentCoroutine_->frames.size() > prevFrames && 
                     (currentCoroutine_->hookMask & CoroutineObject::MASK_CALL)) {
@@ -722,13 +727,20 @@ bool VM::run(size_t targetFrameCount) {
 
             case OpCode::OP_RETURN_VALUE:
             case OpCode::OP_RETURN_VALUE_MULTI: {
-                // Handle debug hook before cleanup
+                uint8_t operand = readByte();
+                
+                size_t stackBase = currentFrame().stackBase;
+                closeUpvalues(stackBase);
+                
+                if (currentCoroutine_->status == CoroutineObject::Status::SUSPENDED) {
+                    return true;
+                }
+
+                // Handle debug hook before returning
                 if (currentCoroutine_->hookMask & CoroutineObject::MASK_RET) {
                     callHook("return");
                 }
 
-                // Read the count of return values
-                uint8_t operand = readByte();
                 size_t actualCount;
                 if (op == OpCode::OP_RETURN_VALUE_MULTI) {
                     actualCount = static_cast<size_t>(operand) + currentCoroutine_->lastResultCount;
@@ -763,11 +775,7 @@ bool VM::run(size_t targetFrameCount) {
                 }
                 // If expectedRetCount == 0, keep all values (no adjustment)
 
-                // Close upvalues for locals that are going out of scope
-                size_t stackBase = currentFrame().stackBase;
-                closeUpvalues(stackBase);
-
-                // Pop all locals and arguments (down to stackBase)
+                // Pop all remaining locals and arguments (down to stackBase)
                 while (currentCoroutine_->stack.size() > stackBase) {
                     pop();
                 }
@@ -997,15 +1005,19 @@ bool VM::run(size_t targetFrameCount) {
                 return true; // Return to resumer
             }
 
-            case OpCode::OP_RETURN:
+            case OpCode::OP_RETURN: {
+                size_t stackBase = currentFrame().stackBase;
+                closeUpvalues(stackBase);
+
+                if (currentCoroutine_->status == CoroutineObject::Status::SUSPENDED) {
+                    return true;
+                }
+
                 if (currentCoroutine_->hookMask & CoroutineObject::MASK_RET) {
                     callHook("return");
                 }
 
                 {
-                    size_t stackBase = currentFrame().stackBase;
-                    closeUpvalues(stackBase);
-
                     // Pop all locals and arguments
                     while (currentCoroutine_->stack.size() > stackBase) {
                         pop();
@@ -1041,6 +1053,7 @@ bool VM::run(size_t targetFrameCount) {
                     currentCoroutine_->lastResultCount = 1;
                 }
                 break;
+            }
 
             default:
                 runtimeError("Unknown opcode");

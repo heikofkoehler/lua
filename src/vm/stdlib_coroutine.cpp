@@ -107,27 +107,27 @@ bool native_coroutine_resume(VM* vm, int argCount) {
     if (!success) {
         vm->push(Value::boolean(false));
         vm->push(Value::runtimeString(vm->internString("error in coroutine")));
+        vm->currentCoroutine()->lastResultCount = 2;
         return true;
     }
 
-    vm->push(Value::boolean(true));
+    // Success results are already pushed by VM::resumeCoroutine
+    size_t count = vm->currentCoroutine()->lastResultCount;
     
-    if (co->status == CoroutineObject::Status::SUSPENDED) {
-        size_t count = co->yieldedValues.size();
-        for (const auto& val : co->yieldedValues) {
-            vm->push(val);
-        }
-        vm->currentCoroutine()->lastResultCount = count + 1;
-        co->yieldedValues.clear();
-    } else {
-        size_t count = co->stack.size();
-        for (const auto& val : co->stack) {
-            vm->push(val);
-        }
-        vm->currentCoroutine()->lastResultCount = count + 1;
-        co->stack.clear();
-    }
+    // We need to shift them to push 'true' at the beginning
+    std::vector<Value> results;
+    for(size_t i=0; i<count; i++) results.push_back(vm->pop());
+    std::reverse(results.begin(), results.end());
 
+    vm->push(Value::boolean(true));
+    for(const auto& v : results) vm->push(v);
+    vm->currentCoroutine()->lastResultCount = count + 1;
+    
+    if (co->status == CoroutineObject::Status::DEAD) {
+        co->stack.clear();
+    } else {
+        co->yieldedValues.clear();
+    }
     return true;
 }
 
@@ -169,6 +169,7 @@ bool native_coroutine_yield(VM* vm, int argCount) {
     co->status = CoroutineObject::Status::SUSPENDED;
     co->yieldCount = argCount;
     co->retCount = 0; 
+    vm->currentCoroutine()->lastResultCount = 0;
 
     return true;
 }

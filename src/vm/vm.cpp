@@ -310,8 +310,10 @@ void VM::closeTBCVariables(size_t lastStackIndex, CoroutineObject* co, const Val
             
             size_t prevFrames = currentCoroutine_->frames.size();
             if (callValue(2, 1)) {
+                if (currentCoroutine_->status == CoroutineObject::Status::SUSPENDED) return;
                 if (currentCoroutine_->frames.size() > prevFrames) {
-                    run(prevFrames);
+                    if (!run(prevFrames)) return;
+                    if (currentCoroutine_->status == CoroutineObject::Status::SUSPENDED) return;
                 }
             }
         }
@@ -1137,6 +1139,10 @@ bool VM::callValue(int argCount, int retCount, bool isTailCall) {
         }
 
         size_t resultCount = currentCoroutine_->lastResultCount;
+        if (currentCoroutine_->status == CoroutineObject::Status::SUSPENDED) {
+            resultCount = 0;
+        }
+
         std::vector<Value> results;
         results.reserve(resultCount);
         for (size_t i = 0; i < resultCount; i++) {
@@ -1148,7 +1154,7 @@ bool VM::callValue(int argCount, int retCount, bool isTailCall) {
             pop();
         }
 
-        if (retCount > 0) {
+        if (retCount > 0 && currentCoroutine_->status != CoroutineObject::Status::SUSPENDED) {
             size_t expected = static_cast<size_t>(retCount - 1);
             if (results.size() > expected) {
                 results.resize(expected);
@@ -1255,14 +1261,29 @@ bool VM::resumeCoroutine(CoroutineObject* co) {
     co->caller = oldCo;
 
     // Run until the coroutine returns or yields.
-    // We should run until the frame count returns to what it was BEFORE we resumed.
-    // If it was suspended, it had N frames. We want it to run until it finishes those N frames (or yields).
-    // So target should be the number of frames BEFORE the current top frame was pushed.
-    // But since it was suspended at some IP in the top frame, we want to run until THAT frame is popped.
-    size_t targetFrames = co->frames.empty() ? 0 : co->frames.size() - 1;
-    bool result = run(targetFrames);
+    // We should run until all frames are popped (target 0) or it yields.
+    bool result = run(0);
 
     currentCoroutine_ = oldCo;
+
+    if (result) {
+        if (co->status == CoroutineObject::Status::SUSPENDED) {
+            // Push yielded values to caller
+            for (const auto& val : co->yieldedValues) {
+                push(val);
+            }
+            currentCoroutine_->lastResultCount = co->yieldedValues.size();
+        } else if (co->status == CoroutineObject::Status::DEAD) {
+            // Push return values to caller (everything on stack)
+            size_t count = co->stack.size();
+            for (const auto& val : co->stack) {
+                push(val);
+            }
+            currentCoroutine_->lastResultCount = count;
+            co->stack.clear();
+        }
+    }
+
     return result;
 }
 
