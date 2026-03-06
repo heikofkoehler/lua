@@ -561,7 +561,7 @@ bool VM::run(const FunctionObject& function, const std::vector<Value>& args) {
         }
 
         // Use callValue to push the frame correctly
-        if (!callValue(static_cast<int>(args.size()), 1)) {
+        if (!callValue(static_cast<int>(args.size()), 0)) {
             return false;
         }
 

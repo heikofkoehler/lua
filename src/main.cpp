@@ -8,6 +8,18 @@
 #include <sstream>
 #include <string>
 #include <unistd.h>
+#include <cstring>
+#include <vector>
+
+// ANSI Color Codes
+#define COLOR_RESET   "\033[0m"
+#define COLOR_BOLD    "\033[1m"
+#define COLOR_RED     "\033[31m"
+#define COLOR_GREEN   "\033[32m"
+#define COLOR_YELLOW  "\033[33m"
+#define COLOR_BLUE    "\033[34m"
+#define COLOR_CYAN    "\033[36m"
+#define COLOR_MAGENTA "\033[35m"
 
 // Read file into string
 std::string readFile(const std::string& path) {
@@ -21,48 +33,65 @@ std::string readFile(const std::string& path) {
     return buffer.str();
 }
 
-// Run Lua source code
-bool run(const std::string& source, VM& vm, const std::string& name = "chunk", bool silent = false) {
+// Result status for REPL
+enum class RunStatus {
+    OK,
+    COMPILE_ERROR,
+    RUNTIME_ERROR,
+    INCOMPLETE
+};
+
+// Internal run implementation that returns status and error
+RunStatus runInternal(const std::string& source, VM& vm, const std::string& name, std::string& outError) {
     try {
-        // Lexical analysis
         Lexer lexer(source);
         lexer.setSourceName(name);
 
-        // Parsing
         Parser parser(lexer);
         auto program = parser.parse();
 
-        if (!program) {
-            if (!silent) std::cerr << "Parse error" << std::endl;
-            return false;
-        }
+        if (!program) return RunStatus::COMPILE_ERROR;
 
-        // Code generation
         CodeGenerator codegen;
         auto function = codegen.generate(program.get(), name);
 
-        if (!function) {
-            if (!silent) std::cerr << "Code generation error" << std::endl;
-            return false;
-        }
+        if (!function) return RunStatus::COMPILE_ERROR;
 
-        // Execution
-        return vm.run(*function);
-    } catch (const CompileError& e) {
-        if (!silent) {
-            std::string displayPath = name;
-            if (!displayPath.empty() && displayPath[0] == '=') {
-                displayPath = displayPath.substr(1);
-            }
-            std::cerr << displayPath << ":" << e.line() << ": " << e.what() << std::endl;
+        if (vm.run(*function)) {
+            return RunStatus::OK;
         }
-        return false;
+        return RunStatus::RUNTIME_ERROR;
+    } catch (const CompileError& e) {
+        outError = e.what();
+        // Detect incomplete input
+        if (outError.find("near <eof>") != std::string::npos || 
+            outError.find("unfinished string") != std::string::npos ||
+            outError.find("unfinished long string") != std::string::npos ||
+            outError.find("unfinished long comment") != std::string::npos) {
+            return RunStatus::INCOMPLETE;
+        }
+        return RunStatus::COMPILE_ERROR;
     } catch (const RuntimeError& e) {
-        return false;
+        outError = e.what();
+        return RunStatus::RUNTIME_ERROR;
     } catch (const std::exception& e) {
-        if (!silent) std::cerr << "Error: " << e.what() << std::endl;
-        return false;
+        outError = e.what();
+        return RunStatus::RUNTIME_ERROR;
     }
+}
+
+// Run Lua source code
+bool run(const std::string& source, VM& vm, const std::string& name = "chunk", bool silent = false) {
+    std::string error;
+    RunStatus status = runInternal(source, vm, name, error);
+    if (status != RunStatus::OK && !silent) {
+        std::string displayPath = name;
+        if (!displayPath.empty() && displayPath[0] == '=') {
+            displayPath = displayPath.substr(1);
+        }
+        std::cerr << error << std::endl;
+    }
+    return status == RunStatus::OK;
 }
 
 
@@ -182,55 +211,106 @@ int runFile(const std::string& path, VM& vm) {
 
 // Interactive REPL
 void repl(VM& vm) {
-    std::string line;
+    std::string buffer;
+    bool multiLine = false;
+
+    std::cout << COLOR_BOLD << "Lua 5.5.0 REPL" << COLOR_RESET << " - Type 'help' for commands" << std::endl;
 
     while (true) {
-        Value promptVal = vm.getGlobal("_PROMPT");
-        std::string prompt = "> ";
-        if (!promptVal.isNil()) {
-            prompt = promptVal.toString();
+        std::string prompt;
+        if (!multiLine) {
+            Value promptVal = vm.getGlobal("_PROMPT");
+            prompt = promptVal.isString() ? promptVal.toString() : COLOR_CYAN "> " COLOR_RESET;
+        } else {
+            Value promptVal = vm.getGlobal("_PROMPT2");
+            prompt = promptVal.isString() ? promptVal.toString() : COLOR_CYAN ">> " COLOR_RESET;
         }
+        
         std::cout << prompt;
         std::cout.flush();
 
+        std::string line;
         if (!std::getline(std::cin, line)) {
             std::cout << std::endl;
             break;
         }
 
-        // Check for exit command
-        if (line == "exit" || line == "quit") {
-            return;
+        // Meta commands
+        if (!multiLine) {
+            if (line == "exit" || line == "quit") return;
+            if (line == "help") {
+                std::cout << COLOR_YELLOW << "REPL Meta Commands:" << COLOR_RESET << std::endl;
+                std::cout << "  exit, quit     Exit the REPL" << std::endl;
+                std::cout << "  help           Show this help" << std::endl;
+                std::cout << "  globals        List all global variables" << std::endl;
+                std::cout << "  =expr          Evaluate and print expression" << std::endl;
+                continue;
+            }
+            if (line == "globals") {
+                auto& globals = vm.globals();
+                std::cout << COLOR_YELLOW << "Global Variables:" << COLOR_RESET << std::endl;
+                for (auto const& [key, val] : globals) {
+                    std::cout << "  " << key << "\t = " << val.toString() << std::endl;
+                }
+                continue;
+            }
+            if (!line.empty() && line[0] == '=') {
+                line = "return " + line.substr(1);
+            }
         }
 
-        // Skip empty lines
-        if (line.empty()) {
-            continue;
-        }
-
-        // Run the line
-        // Try to evaluate as expression first by prepending "return "
-        std::string expr = "return " + line;
-        bool ok = run(expr, vm, "=stdin", true);
-        if (!ok) {
-            // Fallback to normal execution
-            run(line, vm, "=stdin", false);
+        if (buffer.empty()) {
+            buffer = line;
         } else {
-            // Print results if any
-            for (size_t i = 0; i < vm.currentCoroutine()->lastResultCount; i++) {
-                std::cout << vm.peek(vm.currentCoroutine()->lastResultCount - 1 - i).toString();
-                if (i < vm.currentCoroutine()->lastResultCount - 1) std::cout << "\t";
+            buffer += "\n" + line;
+        }
+
+        if (buffer.empty()) continue;
+
+        // Try to evaluate as expression first if not in multi-line mode
+        if (!multiLine) {
+            // Only prepend 'return ' if it's not already there
+            std::string expr = buffer;
+            if (expr.length() < 7 || expr.substr(0, 7) != "return ") {
+                expr = "return " + buffer;
             }
-            if (vm.currentCoroutine()->lastResultCount > 0) std::cout << std::endl;
             
-            // Pop results
-            for (size_t i = 0; i < vm.currentCoroutine()->lastResultCount; i++) {
-                vm.pop();
+            std::string err;
+            RunStatus status = runInternal(expr, vm, "=stdin", err);
+            
+            if (status == RunStatus::OK) {
+                // Print results
+                for (size_t i = 0; i < vm.currentCoroutine()->lastResultCount; i++) {
+                    std::cout << COLOR_GREEN << vm.peek(vm.currentCoroutine()->lastResultCount - 1 - i).toString() << COLOR_RESET;
+                    if (i < vm.currentCoroutine()->lastResultCount - 1) std::cout << "\t";
+                }
+                if (vm.currentCoroutine()->lastResultCount > 0) std::cout << std::endl;
+                
+                // Pop results
+                for (size_t i = 0; i < vm.currentCoroutine()->lastResultCount; i++) {
+                    vm.pop();
+                }
+                buffer.clear();
+                multiLine = false;
+                continue;
             }
         }
 
-        // Reset VM for next input (optional - you might want to keep state)
-        // vm.reset();
+        // Run the buffer normally
+        std::string err;
+        RunStatus status = runInternal(buffer, vm, "=stdin", err);
+
+        if (status == RunStatus::INCOMPLETE) {
+            multiLine = true;
+            continue;
+        } else if (status == RunStatus::OK) {
+            buffer.clear();
+            multiLine = false;
+        } else {
+            std::cerr << COLOR_RED << err << COLOR_RESET << std::endl;
+            buffer.clear();
+            multiLine = false;
+        }
     }
 }
 
