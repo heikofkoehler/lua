@@ -186,12 +186,47 @@ bool native_os_rename(VM* vm, int argCount) {
 }
 
 bool native_os_setlocale(VM* vm, int argCount) {
-    std::string locale = "C";
+    std::string locale;
+    int category = LC_ALL;
+    
     if (argCount >= 1) {
         Value v = vm->peek(argCount - 1);
-        if (v.isString()) locale = vm->getStringValue(v);
+        if (v.isNil()) {
+            // Get locale
+            locale = "";
+        } else if (v.isString()) {
+            locale = vm->getStringValue(v);
+        } else {
+            vm->runtimeError("bad argument #1 to 'setlocale' (string expected, got " + v.typeToString() + ")");
+            return false;
+        }
+        
+        if (argCount >= 2) {
+            Value v2 = vm->peek(argCount - 2);
+            if (v2.isString()) {
+                std::string catStr = vm->getStringValue(v2);
+                if (catStr == "all") category = LC_ALL;
+                else if (catStr == "collate") category = LC_COLLATE;
+                else if (catStr == "ctype") category = LC_CTYPE;
+                else if (catStr == "monetary") category = LC_MONETARY;
+                else if (catStr == "numeric") category = LC_NUMERIC;
+                else if (catStr == "time") category = LC_TIME;
+                else {
+                    vm->runtimeError("bad argument #2 to 'setlocale' (invalid category '" + catStr + "')");
+                    return false;
+                }
+            } else if (!v2.isNil()) {
+                vm->runtimeError("bad argument #2 to 'setlocale' (string expected, got " + v2.typeToString() + ")");
+                return false;
+            }
+        }
+    } else {
+        // No arguments: return current "all" locale
+        locale = "";
     }
-    const char* res = std::setlocale(LC_ALL, locale.c_str());
+
+    const char* l_ptr = (argCount >= 1 && !vm->peek(argCount - 1).isNil()) ? locale.c_str() : nullptr;
+    const char* res = std::setlocale(category, l_ptr);
     
     Value result = Value::nil();
     if (res) {

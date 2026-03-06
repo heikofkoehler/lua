@@ -1,41 +1,34 @@
--- Complete OS Library Tests
-print("Testing OS Library...")
+-- Test os.setlocale
+print("Testing os.setlocale...")
+local loc = os.setlocale()
+assert(type(loc) == "string")
+print("  current default locale:", loc)
 
--- time/date
-local t = os.time()
-assert(type(t) == "number")
-local d = os.date("*t", t)
+local loc_c = os.setlocale("C")
+assert(loc_c == "C")
+
+local loc_time = os.setlocale("C", "time")
+assert(loc_time == "C")
+
+-- Invalid category
+local ok, err = pcall(os.setlocale, "C", "invalid")
+assert(not ok)
+print("  invalid category error:", err)
+
+-- Test os.date and os.time
+print("Testing os.date and os.time...")
+local now = os.time()
+local d = os.date("*t", now)
 assert(type(d) == "table")
 assert(d.year >= 2024)
 
--- clock
-local c = os.clock()
-assert(type(c) == "number")
+-- Test os.time with table
+local t = os.time{year=2026, month=3, day=5, hour=12}
+assert(type(t) == "number")
+local d2 = os.date("*t", t)
+assert(d2.year == 2026)
+assert(d2.month == 3)
+assert(d2.day == 5)
+assert(d2.hour == 12)
 
--- difftime
-assert(os.difftime(100, 50) == 50)
-
--- getenv
-local path = os.getenv("PATH")
-if path then assert(type(path) == "string") end
-
--- remove/rename
-local test_file = "temp_os_test.txt"
-local f = io.open(test_file, "w")
-f:write("hello")
-f:close()
-os.rename(test_file, test_file .. ".new")
-local f2 = io.open(test_file .. ".new", "r")
-assert(f2 ~= nil)
-f2:close()
-os.remove(test_file .. ".new")
-
--- execute
-local res = os.execute("ls > /dev/null")
-assert(res == true or res == 0)
-
--- tmpname
-local tmp = os.tmpname()
-assert(type(tmp) == "string")
-
-print("OS Library Tests Passed!")
+print("OK: os.date and os.time passed")

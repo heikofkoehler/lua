@@ -609,7 +609,16 @@ bool VM::pcall(int argCount) {
         if (success && currentCoroutine_->frames.size() > prevFrames) {
             success = run(prevFrames);
         }
-    } catch (const RuntimeError& e) {
+        
+        // Even if run returns true, it might have encountered an error but stayed in loop (though unlikely now)
+        if (hadError_) success = false;
+    } catch (const RuntimeError&) {
+        success = false;
+    } catch (const std::exception& e) {
+        lastErrorMessage_ = e.what();
+        success = false;
+    } catch (...) {
+        lastErrorMessage_ = "unknown error";
         success = false;
     }
     
