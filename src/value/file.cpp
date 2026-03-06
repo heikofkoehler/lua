@@ -85,6 +85,21 @@ std::string FileObject::readAll() {
     return buffer.str();
 }
 
+std::string FileObject::read(size_t bytes) {
+    if (!isOpen() || bytes == 0) return "";
+
+    std::string result(bytes, '\0');
+    if (cfile_) {
+        size_t n = fread(&result[0], 1, bytes, cfile_);
+        result.resize(n);
+        return result;
+    }
+
+    stream_->read(&result[0], bytes);
+    result.resize(stream_->gcount());
+    return result;
+}
+
 std::string FileObject::readLine() {
     if (!isOpen()) return "";
 

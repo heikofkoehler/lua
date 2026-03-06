@@ -42,6 +42,9 @@ public:
     // Read entire file contents
     std::string readAll();
 
+    // Read specific number of bytes
+    std::string read(size_t bytes);
+
     // Read one line
     std::string readLine();
 

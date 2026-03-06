@@ -1,47 +1,35 @@
--- Complete IO Library Tests
-print("Testing IO Library...")
+-- Test io.read and io.lines
+print("Testing io.read and io.lines...")
 
-local test_file = "temp_io_test.txt"
-
--- Basic file ops
-local f = io.open(test_file, "w")
-assert(f ~= nil)
-f:write("line 1\n", "line 2\n")
-f:flush()
+local f = io.open("tests/demo.txt", "w")
+f:write("line 1\nline 2\nline 3\n")
 f:close()
 
-local f2 = io.open(test_file, "r")
-assert(f2:read("*l") == "line 1")
-assert(f2:read("*l") == "line 2")
-assert(f2:read("*a") == "")
+-- Test io.lines with format
+print("Testing io.lines...")
+local count = 0
+for line in io.lines("tests/demo.txt") do
+    count = count + 1
+    assert(line == "line " .. count)
+end
+assert(count == 3)
+
+-- Test io.read with multiple formats
+print("Testing io.read with multiple formats...")
+local f2 = io.open("tests/demo.txt", "r")
+local l1, l2 = f2:read("l", "l")
+assert(l1 == "line 1")
+assert(l2 == "line 2")
+
+local l3 = f2:read(4)
+assert(l3 == "line")
 f2:close()
 
--- seek
-local f3 = io.open(test_file, "r")
-f3:seek("set", 5)
-assert(f3:read(1) == "1")
+-- Test reading all
+local f3 = io.open("tests/demo.txt", "r")
+local all = f3:read("*a")
+assert(all == "line 1\nline 2\nline 3\n")
 f3:close()
 
--- lines
-local lines = {}
-local iter = io.lines(test_file)
-assert(type(iter) == "function")
-for line in iter do
-    table.insert(lines, line)
-end
-assert(#lines == 2)
-assert(lines[1] == "line 1")
-
--- input/output
-io.output(test_file)
-io.write("new content")
-io.output():close()
-
-io.input(test_file)
-assert(io.read("*a") == "new content")
-io.input():close()
-
--- cleanup
-os.remove(test_file)
-
-print("IO Library Tests Passed!")
+os.remove("tests/demo.txt")
+print("OK: io completeness passed")

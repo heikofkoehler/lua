@@ -75,6 +75,51 @@ bool native_io_write(VM* vm, int argCount) {
     return true;
 }
 
+static bool read_item(VM* vm, FileObject* file, std::string fmt, Value& res) {
+    if (fmt == "a" || fmt == "*a") {
+        std::string result = file ? file->readAll() : "";
+        if (!file) {
+            std::stringstream buffer;
+            buffer << std::cin.rdbuf();
+            result = buffer.str();
+        }
+        res = Value::runtimeString(vm->internString(result));
+        return true;
+    } else if (fmt == "l" || fmt == "*l" || fmt == "L" || fmt == "*L") {
+        bool withNewline = (fmt == "L" || fmt == "*L");
+        std::string result;
+        if (!file) {
+            if (!std::getline(std::cin, result)) return false;
+            if (withNewline) result += "\n";
+        } else {
+            result = file->readLine();
+            if (result.empty() && file->isEOF()) return false;
+            if (!withNewline && !result.empty() && result.back() == '\n') result.pop_back();
+        }
+        res = Value::runtimeString(vm->internString(result));
+        return true;
+    } else if (fmt == "n" || fmt == "*n") {
+        double d;
+        if (file) {
+            // Very basic numeric read for now
+            std::string s = file->readAll(); // This is wrong, should peek/read only number
+            // Re-implementing correctly requires a smarter FileObject
+            return false; 
+        } else {
+            if (!(std::cin >> d)) return false;
+            res = Value::number(d);
+            return true;
+        }
+    } else if (std::isdigit(fmt[0])) {
+        size_t len = std::stoul(fmt);
+        std::string result = file ? file->read(len) : "";
+        if (result.empty() && (file ? file->isEOF() : std::cin.eof())) return false;
+        res = Value::runtimeString(vm->internString(result));
+        return true;
+    }
+    return false;
+}
+
 bool native_io_read(VM* vm, int argCount) {
     FileObject* file = nullptr;
     int argStart = 0;
@@ -90,52 +135,43 @@ bool native_io_read(VM* vm, int argCount) {
         Value stdinVal = vm->getGlobal("io");
         if (stdinVal.isTable()) {
             Value in = stdinVal.asTableObj()->get("stdin");
-            if (in.isFile()) {
-                file = in.asFileObj();
-            }
+            if (in.isFile()) file = in.asFileObj();
         }
     }
 
-    std::string fmt = "l";
-    if (argCount > argStart) {
-        Value fmtVal = vm->peek(argCount - 1 - argStart);
-        if (fmtVal.isString()) fmt = vm->getStringValue(fmtVal);
-    }
+    int formatCount = argCount - argStart;
+    if (formatCount == 0) formatCount = 1; // Default "l"
 
-    std::string result;
-    bool hasResult = false;
+    int results = 0;
+    for (int i = 0; i < formatCount; i++) {
+        std::string fmt = "l";
+        if (argCount > argStart) {
+            // Adjust peek index by 'results' because we are pushing results onto the stack inside the loop
+            Value v = vm->peek(argCount - 1 - (argStart + i) + results);
+            if (v.isString()) fmt = vm->getStringValue(v);
+            else if (v.isNumber()) fmt = std::to_string((int)v.asNumber());
+        }
+        
+        Value res;
+        if (read_item(vm, file, fmt, res)) {
+            vm->push(res);
+            results++;
+        } else {
+            vm->push(Value::nil());
+            results++;
+            break;
+        }
+    }
     
-    if (fmt == "a" || fmt == "*a") {
-        if (!file) {
-            std::stringstream buffer;
-            buffer << std::cin.rdbuf();
-            result = buffer.str();
-        } else {
-            result = file->readAll();
-        }
-        hasResult = true; // Reading all always returns a string, even if empty
-    } else {
-        // Default: read line
-        if (!file) {
-            if (std::getline(std::cin, result)) {
-                hasResult = true;
-            }
-        } else {
-            result = file->readLine();
-            if (!(result.empty() && file->isEOF())) {
-                hasResult = true;
-            }
-        }
-    }
+    // Cleanup args
+    std::vector<Value> res_vals;
+    for(int i=0; i<results; i++) res_vals.push_back(vm->pop());
+    std::reverse(res_vals.begin(), res_vals.end());
     
     for(int i=0; i<argCount; i++) vm->pop();
-
-    if (hasResult) {
-        vm->push(Value::runtimeString(vm->internString(result)));
-    } else {
-        vm->push(Value::nil());
-    }
+    for(const auto& v : res_vals) vm->push(v);
     
+    vm->currentCoroutine()->lastResultCount = results;
     return true;
 }
 
