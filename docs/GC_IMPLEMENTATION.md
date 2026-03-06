@@ -76,10 +76,23 @@ Roots include:
 - **Throughput**: Slightly lower due to write barrier overhead and state management.
 - **Space**: Minimal overhead for color storage and the gray stack.
 
-## Testing
+## JIT Considerations
 
-Verified with `tests/test_incremental_gc.lua`:
-- Basic collection functionality.
-- Incremental progress during allocations.
-- Correctness of write barriers.
-- Recovery from memory pressure.
+The JIT compiler must interact carefully with the garbage collector to maintain correctness and performance:
+
+### GC Checks in JIT Code
+JIT-compiled functions need periodic GC checks, especially during loops:
+- **Allocation Points**: Any operation that might allocate (table creation, string concatenation) must trigger `checkGC()`
+- **Loop Safety**: Long-running loops should include GC checkpoints to prevent memory exhaustion
+- **Fallback Mechanism**: Complex operations that allocate fall back to the interpreter, which handles GC automatically
+
+### Current Limitations
+The current JIT implementation lacks GC integration:
+- No GC checkpoints in compiled loops
+- Allocation-heavy operations not yet supported
+- Potential for memory leaks in hot JIT code
+
+### Future Enhancements
+- Add C ABI calls to `VM::checkGC()` in JIT templates
+- Implement GC-safe points in loop constructs
+- Support allocation operations with proper GC coordination

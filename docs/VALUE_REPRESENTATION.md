@@ -39,5 +39,38 @@ On 64-bit systems, only 48 bits of the address space are typically used. This al
 - **Stack Efficiency**: The VM stack is a simple `std::vector<Value>`, which is just a vector of `uint64_t` internally. This is very cache-friendly.
 - **Small Footprint**: Every Lua value, no matter how complex, is always exactly 8 bytes.
 
-## Type Checking
-Type checking is performed by masking the 64-bit value and comparing it against the type tags. This is implemented using constexpr functions for high performance.
+## JIT Assembly Considerations
+
+When generating native code for arithmetic operations, the JIT compiler must handle NaN-boxed values directly in ARM64 assembly:
+
+### Double Extraction
+For arithmetic operations, the JIT extracts the double value from a NaN-boxed value:
+```arm64
+// Check if value is a double (exponent != 0x7FF)
+tst x_value, #0x7FF0000000000000
+b.eq handle_non_double
+
+// Value is already a double, use directly
+fmov d_result, x_value
+```
+
+### Type Validation
+Before arithmetic, the JIT validates that operands are numbers:
+```arm64
+// Extract type tag from NaN-box
+ubfx x_tag, x_value, #48, #16
+cmp x_tag, #0xFFF3  // Check for integer tag
+b.eq convert_integer_to_double
+cmp x_tag, #0x7FF   // Check for double (no NaN bits set)
+b.ne type_error
+```
+
+### Boxing Results
+After arithmetic, results are stored back as NaN-boxed doubles:
+```arm64
+// Result is already in d_result register
+fmov x_result, d_result
+// No additional boxing needed for doubles
+```
+
+This approach ensures the JIT maintains full compatibility with the interpreter's value representation while achieving native performance for hot numeric code paths.

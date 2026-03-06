@@ -49,8 +49,19 @@ Coroutines are implemented as first-class objects (`CoroutineObject`). Each coro
 - `coroutine.yield()` saves the current `ip` and frame state and returns control to the `resume()` caller.
 - `coroutine.resume()` restores the state and continues execution from the saved `ip`.
 
-## Error Handling
+## JIT Compilation (Optional)
 
-Errors are handled using C++ exceptions (`RuntimeError`). 
-- `pcall` and `xpcall` catch these exceptions, unwind the stack to the protected boundary, and return a boolean status to Lua code.
-- Standard library errors (like `math.sqrt(-1)`) also throw `RuntimeError`.
+The VM includes an optional Just-In-Time (JIT) compiler that can compile hot functions to native machine code for improved performance.
+
+### JIT Architecture
+- **Template JIT**: Each bytecode opcode is mapped to a pre-written template of native ARM64 instructions.
+- **Hotness Detection**: Functions are monitored for execution frequency. When a function exceeds a hotness threshold (50 iterations for loops, 10 for calls), it's compiled to native code.
+- **Fallback Mechanism**: JIT-compiled functions can fall back to the interpreter for unsupported opcodes or error conditions.
+
+### JIT Integration
+- **Entry Point**: At the start of each function execution, if JIT code exists, it's called instead of the interpreter loop.
+- **State Mapping**: JIT code directly accesses the VM's coroutine stack and frame structures.
+- **NaN-boxing**: Native code handles Lua's NaN-boxed value representation for efficient type checking and arithmetic.
+
+### Current JIT Status
+The JIT compiler currently supports basic arithmetic, stack operations, control flow, and function returns. Complex operations like table creation and function calls fall back to the interpreter.
