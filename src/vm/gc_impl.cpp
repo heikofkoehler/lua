@@ -294,7 +294,7 @@ void VM::gcStep() {
                         freeObject(obj);
                     } else {
                         // Survivor or already old -> keep
-                        if (!obj->isOld()) obj->setOld(true);
+                        if (!obj->isOld()) obj->setAge(obj->age() + 1);
                         obj->setColor(GCObject::Color::WHITE);
                         newBytes += obj->size();
                         current = &(obj->nextRef());

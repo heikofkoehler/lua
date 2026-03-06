@@ -2,6 +2,7 @@
 #define LUA_GC_HPP
 
 #include <cstddef>
+#include <cstdint>
 
 // Base class for all garbage-collected objects
 // Uses intrusive linked list for tracking all allocated objects
@@ -24,7 +25,7 @@ public:
         BLACK
     };
 
-    GCObject(Type type) : type_(type), color_(Color::WHITE), next_(nullptr), isFinalized_(false), isOld_(false) {}
+    GCObject(Type type) : type_(type), color_(Color::WHITE), next_(nullptr), isFinalized_(false), age_(0) {}
     virtual ~GCObject() = default;
 
     // Finalization state
@@ -32,8 +33,10 @@ public:
     void setFinalized(bool finalized) { isFinalized_ = finalized; }
 
     // Generational state
-    bool isOld() const { return isOld_; }
-    void setOld(bool old) { isOld_ = old; }
+    uint8_t age() const { return age_; }
+    void setAge(uint8_t age) { age_ = age; }
+    bool isOld() const { return age_ >= 2; }
+    void setOld() { age_ = 2; }
 
     // Tri-color marking colors
     Color color() const { return color_; }
@@ -63,7 +66,7 @@ private:
     Color color_;
     GCObject* next_;  // Intrusive linked list
     bool isFinalized_;
-    bool isOld_;
+    uint8_t age_;
 };
 
 #endif // LUA_GC_HPP
