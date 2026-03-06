@@ -6,7 +6,7 @@ SCRIPT="tests/temp_test.lua"
 echo "print('hello cli')" > $SCRIPT
 
 cleanup() {
-    rm -f $SCRIPT out1.luac out2.luac out3.luac list.txt
+    rm -f $SCRIPT out1.luac out2.luac out3.luac list.txt combo1.luac combo2.luac out.luac
 }
 
 trap cleanup EXIT
@@ -45,6 +45,34 @@ if grep -q "OP_RETURN" list.txt; then
 else
     echo "✗ -L -o redirection failed"
     cat list.txt
+    exit 1
+fi
+
+echo "Testing -c -o combination..."
+$LUA_BIN -c -o combo1.luac $SCRIPT
+if [ -f combo1.luac ]; then
+    echo "✓ -c -o worked"
+else
+    echo "✗ -c -o failed"
+    exit 1
+fi
+
+echo "Testing -o -c combination (order independence)..."
+$LUA_BIN -o combo2.luac -c $SCRIPT
+if [ -f combo2.luac ]; then
+    echo "✓ -o -c worked"
+else
+    echo "✗ -o -c failed"
+    exit 1
+fi
+
+echo "Testing -c default output (out.luac)..."
+$LUA_BIN -c $SCRIPT
+if [ -f out.luac ]; then
+    echo "✓ -c default output worked"
+    rm out.luac
+else
+    echo "✗ -c default output failed"
     exit 1
 fi
 
