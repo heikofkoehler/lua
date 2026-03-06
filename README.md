@@ -105,6 +105,12 @@ make
 ```bash
 ./lua
 ```
+The REPL features:
+- **Auto-completion**: Tab-completion for globals, keywords, and nested table fields (e.g., `math.s<TAB>`).
+- **History**: Persistent command history across sessions (saved to `lua_history.txt`).
+- **Multi-line Support**: Automatically detects incomplete statements (like `if true then`) and provides a continuation prompt `>>`.
+- **Implicit Evaluation**: Typing `2 + 2` automatically evaluates and prints `4`. 
+- **Meta-commands**: Support for `=expr`, `globals`, and `help`.
 
 ## Example Programs
 
