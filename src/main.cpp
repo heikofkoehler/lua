@@ -311,7 +311,7 @@ int runFile(const std::string& path, VM& vm) {
 }
 
 // Disassemble file (source or bytecode)
-int disassembleFile(const std::string& path) {
+int disassembleFile(const std::string& path, const std::string& outputPath) {
     try {
         std::ifstream file(path, std::ios::binary);
         if (!file.is_open()) {
@@ -323,14 +323,32 @@ int disassembleFile(const std::string& path) {
         file.read(sig, 4);
         bool isBytecode = (file.gcount() == 4 && std::memcmp(sig, "\x1bLua", 4) == 0);
         
+        // Set up output stream
+        std::ofstream outFile;
+        if (!outputPath.empty()) {
+            outFile.open(outputPath);
+            if (!outFile.is_open()) {
+                std::cerr << "Could not open output file: " << outputPath << std::endl;
+                return 1;
+            }
+        }
+
+        // We need to temporarily redirect std::cout for Chunk::disassemble
+        // because it uses std::cout directly.
+        // A better fix would be to change Chunk::disassemble to take an ostream.
+        std::streambuf* oldCoutStreamBuf = std::cout.rdbuf();
+        if (!outputPath.empty()) {
+            std::cout.rdbuf(outFile.rdbuf());
+        }
+
         if (isBytecode) {
             auto function = FunctionObject::deserialize(file);
             if (!function) {
+                if (!outputPath.empty()) std::cout.rdbuf(oldCoutStreamBuf);
                 std::cerr << "Error: Could not deserialize bytecode" << std::endl;
                 return 1;
             }
             function->disassemble();
-            return 0;
         } else {
             // Seek back to start if not bytecode
             file.clear();
@@ -343,15 +361,25 @@ int disassembleFile(const std::string& path) {
             lexer.setSourceName("@" + path);
             Parser parser(lexer);
             auto program = parser.parse();
-            if (!program) return 1;
+            if (!program) {
+                if (!outputPath.empty()) std::cout.rdbuf(oldCoutStreamBuf);
+                return 1;
+            }
 
             CodeGenerator codegen;
             auto function = codegen.generate(program.get(), "@" + path);
-            if (!function) return 1;
+            if (!function) {
+                if (!outputPath.empty()) std::cout.rdbuf(oldCoutStreamBuf);
+                return 1;
+            }
             
             function->disassemble();
-            return 0;
         }
+
+        if (!outputPath.empty()) {
+            std::cout.rdbuf(oldCoutStreamBuf);
+        }
+        return 0;
     } catch (const std::exception& e) {
         std::cerr << "Error: " << e.what() << std::endl;
         return 1;
@@ -511,7 +539,7 @@ int main(int argc, char* argv[]) {
                 std::cout << "Lua 5.5.0 (MVP)" << std::endl;
                 return 0;
             }
-        } else if (!stopFlags && arg == "-i") {
+        } else if (!stopFlags && (arg == "-i")) {
             interactive = true;
         } else if (!stopFlags && arg == "-E") {
             ignoreEnv = true;
@@ -543,11 +571,20 @@ int main(int argc, char* argv[]) {
             compileOnly = true;
         } else if (!stopFlags && (arg == "-b" || arg == "--bytecode")) {
             isBytecode = true;
-        } else if (!stopFlags && (arg == "-o" || arg == "--output")) {
-            if (i + 1 < argc) {
+        } else if (!stopFlags && arg.length() >= 2 && arg[0] == '-' && arg[1] == 'o') {
+            if (arg.length() > 2) {
+                outputPath = arg.substr(2);
+            } else if (i + 1 < argc) {
                 outputPath = argv[++i];
             } else {
                 std::cerr << "Error: -o option requires an argument" << std::endl;
+                return 1;
+            }
+        } else if (!stopFlags && arg == "--output") {
+            if (i + 1 < argc) {
+                outputPath = argv[++i];
+            } else {
+                std::cerr << "Error: --output option requires an argument" << std::endl;
                 return 1;
             }
         } else if (!stopFlags && (arg == "-h" || arg == "--help")) {
@@ -589,6 +626,12 @@ int main(int argc, char* argv[]) {
 
     VM vm;
     vm.setTraceExecution(verbose);
+
+    // If -o is specified without -c, imply -c
+    if (!outputPath.empty() && !compileOnly && !listBytecode && !isBytecode && executeStrings.empty() && !interactive) {
+        compileOnly = true;
+    }
+
     if (scriptPath == "-") {
         vm.setSourceName("=[string \"stdin\"]");
     } else if (!scriptPath.empty()) {
@@ -659,7 +702,7 @@ int main(int argc, char* argv[]) {
             if (outputPath.empty()) outputPath = "out.luac";
             result = compileFile(scriptPath, outputPath);
         } else if (listBytecode) {
-            result = disassembleFile(scriptPath);
+            result = disassembleFile(scriptPath, outputPath);
         } else if (isBytecode) {
             result = runBytecode(scriptPath, vm);
         } else {
