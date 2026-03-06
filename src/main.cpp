@@ -286,6 +286,10 @@ int runFile(const std::string& path, VM& vm) {
         file.read(sig, 4);
         bool isBytecode = (file.gcount() == 4 && std::memcmp(sig, "\x1bLua", 4) == 0);
         
+        // Seek back to start
+        file.clear();
+        file.seekg(0);
+
         vm.setSourceName("@" + path);
 
         if (isBytecode) {
@@ -296,9 +300,6 @@ int runFile(const std::string& path, VM& vm) {
             }
             return vm.run(*function) ? 0 : 1;
         } else {
-            // Seek back to start if not bytecode
-            file.clear();
-            file.seekg(0);
             std::stringstream buffer;
             buffer << file.rdbuf();
             std::string source = buffer.str();
@@ -323,6 +324,10 @@ int disassembleFile(const std::string& path, const std::string& outputPath) {
         file.read(sig, 4);
         bool isBytecode = (file.gcount() == 4 && std::memcmp(sig, "\x1bLua", 4) == 0);
         
+        // Seek back to start
+        file.clear();
+        file.seekg(0);
+
         // Set up output stream
         std::ofstream outFile;
         if (!outputPath.empty()) {
@@ -350,9 +355,6 @@ int disassembleFile(const std::string& path, const std::string& outputPath) {
             }
             function->disassemble();
         } else {
-            // Seek back to start if not bytecode
-            file.clear();
-            file.seekg(0);
             std::stringstream buffer;
             buffer << file.rdbuf();
             std::string source = buffer.str();

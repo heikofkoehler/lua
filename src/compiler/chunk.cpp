@@ -391,9 +391,6 @@ size_t Chunk::yieldInstruction(const char* name, size_t offset) const {
 }
 
 void Chunk::serialize(std::ostream& os) const {
-    // Magic number
-    os.write("LUA\x01", 4);
-    
     // Source Name
     uint32_t nameLen = static_cast<uint32_t>(sourceName_.length());
     os.write(reinterpret_cast<const char*>(&nameLen), sizeof(nameLen));
@@ -427,17 +424,11 @@ void Chunk::serialize(std::ostream& os) const {
 }
 
 std::unique_ptr<Chunk> Chunk::deserialize(std::istream& is) {
-    char magic[4];
-    is.read(magic, 4);
-    if (std::memcmp(magic, "LUA\x01", 4) != 0) {
-        throw std::runtime_error("Invalid bytecode format");
-    }
-    
     auto chunk = std::make_unique<Chunk>();
     
     // Source Name
     uint32_t nameLen;
-    is.read(reinterpret_cast<char*>(&nameLen), sizeof(nameLen));
+    if (!is.read(reinterpret_cast<char*>(&nameLen), sizeof(nameLen))) return nullptr;
     std::string sourceName(nameLen, '\0');
     is.read(&sourceName[0], nameLen);
     chunk->sourceName_ = sourceName;
@@ -476,6 +467,9 @@ std::unique_ptr<Chunk> Chunk::deserialize(std::istream& is) {
 }
 
 void FunctionObject::serialize(std::ostream& os) const {
+    // Magic number at the top of the function (which is the top of the file)
+    os.write("\x1bLua", 4);
+
     uint32_t nameLen = static_cast<uint32_t>(name_.length());
     os.write(reinterpret_cast<const char*>(&nameLen), sizeof(nameLen));
     os.write(name_.c_str(), nameLen);
@@ -501,8 +495,13 @@ void FunctionObject::serialize(std::ostream& os) const {
 }
 
 std::unique_ptr<FunctionObject> FunctionObject::deserialize(std::istream& is) {
+    char magic[4];
+    if (!is.read(magic, 4) || std::memcmp(magic, "\x1bLua", 4) != 0) {
+        throw std::runtime_error("Invalid bytecode magic number");
+    }
+
     uint32_t nameLen;
-    is.read(reinterpret_cast<char*>(&nameLen), sizeof(nameLen));
+    if (!is.read(reinterpret_cast<char*>(&nameLen), sizeof(nameLen))) return nullptr;
     std::string name(nameLen, '\0');
     is.read(&name[0], nameLen);
     
