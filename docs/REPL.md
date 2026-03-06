@@ -43,3 +43,27 @@ The REPL uses a "try-return" strategy:
 2. If compilation succeeds and execution is successful, it prints the return values.
 3. If compilation fails with a syntax error, it attempts to compile the input string as-is (as a statement).
 4. If this also fails with an "incomplete" error (e.g., "near <eof>"), it buffers the line and waits for more input.
+
+## Bytecode Disassembly
+
+The VM includes a standalone disassembler tool accessible via the `-l` or `--list` flag. This tool allows you to inspect the compiled bytecode of any Lua source or pre-compiled bytecode file.
+
+### Usage
+```bash
+./lua -l myscript.lua
+```
+
+### Output Information
+- **Function Prototype**: Shows the function name, number of parameters, and whether it accepts varargs.
+- **Upvalues**: Lists the number of upvalues captured by the function.
+- **Local Variables**: Displays a table of local variables, including their names, their assigned stack slots, and the range of bytecode instructions (PC) where they are active.
+- **Constants**: Lists all constants (numbers, strings, sub-functions) used in the chunk.
+- **Bytecode**: A detailed instruction-by-instruction breakdown, including:
+    - Bytecode offset (PC)
+    - Source line number
+    - Opcode name
+    - Operands (slots, constant indices, jump targets)
+    - Human-readable hints (e.g., global variable names or constant values)
+
+### Recursive Traversal
+The disassembler automatically traverses all nested functions and closures defined within the main chunk, providing a complete structural view of the entire file.

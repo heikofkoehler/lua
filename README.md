@@ -101,6 +101,17 @@ make
 ./lua tests/test.lua
 ```
 
+### Bytecode Disassembly
+```bash
+./lua -l tests/simple.lua
+```
+The disassembler provides:
+- **Function Metadata**: Name, parameter count, vararg status, and upvalue count.
+- **Local Variables**: Shows variable names, their stack slots, and their valid PC ranges.
+- **Constant Pool**: Lists all numbers, strings, and sub-function prototypes.
+- **Recursive View**: Automatically disassembles nested functions and closures.
+- **Line Numbers**: Maps bytecode offsets back to source code lines.
+
 ### Interactive REPL
 ```bash
 ./lua
