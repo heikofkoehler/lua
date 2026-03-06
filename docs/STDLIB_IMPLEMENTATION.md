@@ -1,138 +1,74 @@
-# Standard Library Implementation Summary
+# Standard Library Implementation
 
-## Overview
-
-Successfully implemented a comprehensive standard library system for the Lua VM with 21 functions across 3 namespaces (string, table, math) plus constants.
+The Lua VM implements a significant portion of the Lua 5.4 standard library. Native functions are implemented in C++ and registered into global tables during VM initialization.
 
 ## Architecture
 
-### Native Function System
+- **Native Function Signature**: `bool (*)(VM* vm, int argCount)`
+- **Calling Convention**: Arguments are on the VM stack. The function is responsible for popping arguments and pushing results. It returns `true` on success and `false` on runtime error.
+- **Namespaces**: Most functions are organized into tables like `math`, `string`, `table`, `io`, `os`, `debug`, `coroutine`, `utf8`, and `socket`.
 
-- **New Value Type**: `TAG_NATIVE_FUNCTION` (tag 9) for C++ function pointers
-- **Function Signature**: `bool (*)(VM* vm, int argCount)`
-- **Storage**: VM maintains vector of native function pointers
-- **Call Mechanism**: Modified `OP_CALL` to dispatch both closures and native functions
-- **Stack Convention**: Functions pop arguments, push results
+## Implemented Libraries
 
-### Key Design Decisions
+### 1. Base Library (`_G`)
+- `print(...)`: Variadic print to stdout.
+- `type(v)`: Returns type name string.
+- `tostring(v)`, `tonumber(v)`: Conversion functions.
+- `pcall(f, ...)`, `xpcall(f, msgh, ...)`: Protected calls.
+- `assert(v, [msg])`: basic assertion.
+- `error(msg, [level])`: Raises a runtime error.
+- `collectgarbage([opt])`: Interface to the GC.
+- `require(modname)`: Module loading system.
+- `load(chunk, [name, mode, env])`: Dynamic compilation.
 
-1. **Table-Based Namespaces**: Standard library organized as global tables (`string`, `table`, `math`)
-2. **Unified String Pool**: Native function names stored in chunk's string pool for consistent key matching
-3. **Deferred Initialization**: Standard library initialized on first `run()` call when chunk is available
-4. **No Opcode Consumption**: Unlimited functions without consuming bytecode opcodes
+### 2. String Library (`string`)
+- Full Lua **Pattern Matching** support: `find`, `match`, `gmatch`, `gsub`.
+- Formatting: `format` (supports %s, %d, %f, %x, %q).
+- Binary packing: `pack`, `unpack`, `packsize`.
+- Utilities: `sub`, `len`, `byte`, `char`, `upper`, `lower`, `reverse`.
 
-## Implemented Functions
+### 3. Table Library (`table`)
+- `insert`, `remove`, `concat`.
+- `pack`, `unpack` (multi-return support).
+- `sort` (custom comparator support).
+- `move`.
 
-### String Library (7 functions)
+### 4. Math Library (`math`)
+- Complete trig/log suite: `sin`, `cos`, `tan`, `asin`, `acos`, `atan`, `exp`, `log`.
+- Utilities: `sqrt`, `abs`, `floor`, `ceil`, `min`, `max`, `random`, `randomseed`.
+- Constants: `pi`, `huge`, `maxinteger`, `mininteger`.
 
-| Function | Description | Example |
-|----------|-------------|---------|
-| `string.len(s)` | Returns string length | `len("hello")` → 5 |
-| `string.sub(s, i, j)` | Returns substring (1-indexed, supports negative indices) | `sub("hello", 2, 4)` → "ell" |
-| `string.upper(s)` | Converts to uppercase | `upper("hello")` → "HELLO" |
-| `string.lower(s)` | Converts to lowercase | `lower("WORLD")` → "world" |
-| `string.reverse(s)` | Reverses string | `reverse("Lua")` → "auL" |
-| `string.byte(s, i)` | Returns byte value at position (default 1) | `byte("A")` → 65 |
-| `string.char(...)` | Creates string from byte values | `char(72, 105)` → "Hi" |
+### 5. I/O Library (`io` and `file`)
+- **Multi-format reading**: `io.read` and `file:read` support "l", "L", "a", and specific byte counts (e.g., `f:read(4)`).
+- File objects with method-call syntax: `f:write()`, `f:close()`, `f:seek()`, `f:lines()`.
+- Pipes: `io.popen`.
 
-### Table Library (3 functions)
+### 6. OS Library (`os`)
+- `os.date`, `os.time`, `os.difftime`.
+- `os.execute`, `os.getenv`, `os.remove`, `os.rename`.
+- `os.setlocale` (full category support).
 
-| Function | Description | Example |
-|----------|-------------|---------|
-| `table.insert(t, [pos,] value)` | Inserts element at position or end | `insert(t, 40)` |
-| `table.remove(t, [pos])` | Removes and returns element at position or end | `remove(t, 1)` → value |
-| `table.concat(t, [sep])` | Concatenates array elements with separator | `concat({"a","b"}, ",")` → "a,b" |
+### 7. Debug Library (`debug`)
+- `debug.sethook`, `debug.gethook`.
+- `debug.traceback`, `debug.getinfo`.
+- `debug.getmetatable`, `debug.setmetatable` (can set metatables for non-table types).
 
-### Math Library (11 functions + 1 constant)
+### 8. Coroutine Library (`coroutine`)
+- `create`, `resume`, `yield`, `status`, `close`, `running`.
 
-| Function | Description | Example |
-|----------|-------------|---------|
-| `math.sqrt(x)` | Square root | `sqrt(16)` → 4 |
-| `math.abs(x)` | Absolute value | `abs(-42)` → 42 |
-| `math.floor(x)` | Round down | `floor(3.7)` → 3 |
-| `math.ceil(x)` | Round up | `ceil(3.2)` → 4 |
-| `math.sin(x)` | Sine (radians) | `sin(0)` → 0 |
-| `math.cos(x)` | Cosine (radians) | `cos(0)` → 1 |
-| `math.tan(x)` | Tangent (radians) | `tan(0)` → 0 |
-| `math.exp(x)` | e^x | `exp(1)` → 2.718... |
-| `math.log(x)` | Natural logarithm | `log(2.718...)` → 1 |
-| `math.min(...)` | Minimum of arguments | `min(5,2,8,1)` → 1 |
-| `math.max(...)` | Maximum of arguments | `max(5,2,8,1)` → 8 |
-| `math.pi` | π constant | `pi` → 3.14159... |
+### 9. UTF-8 Library (`utf8`)
+- `char`, `codes`, `codepoint`, `len`, `offset`.
 
-## Usage
+### 10. Socket Library (`socket`)
+- Experimental built-in socket support for basic networking (TCP/UDP).
 
-Due to current parser limitations (no dot notation in expressions), functions are accessed via bracket notation:
+## Implementation Details
 
-```lua
--- String operations
-local len_fn = string["len"]
-print(len_fn("hello"))  -- 5
+### Dot Notation
+The VM supports full dot notation for table access (`math.sin(1)`) and method calls (`file:read()`). The parser and code generator handle these by emitting `OP_GET_TABLE` and `OP_SELF` instructions.
 
--- Table operations
-local insert_fn = table["insert"]
-local t = {10, 20, 30}
-insert_fn(t, 40)
-
--- Math operations
-local sqrt_fn = math["sqrt"]
-print(sqrt_fn(16))  -- 4
-```
-
-## Files Modified
-
-1. **src/value/value.hpp** - Added TAG_NATIVE_FUNCTION, type checking, value creation
-2. **src/value/value.cpp** - Added toString() for native functions
-3. **src/vm/vm.hpp** - Added NativeFunction type, registration methods, public stack operations
-4. **src/vm/vm.cpp** - Modified OP_CALL, added registration and initialization
-5. **CMakeLists.txt** - Added stdlib source files
-
-## Files Created
-
-1. **src/vm/stdlib_string.cpp** - String library implementation
-2. **src/vm/stdlib_table.cpp** - Table library implementation
-3. **src/vm/stdlib_math.cpp** - Math library implementation
-
-## Key Implementation Details
-
-### Native Function Call Flow
-
-1. Compiler generates `OP_CALL` with argument count
-2. VM checks if callee is native function or closure
-3. For native functions:
-   - Retrieve function pointer from VM's function table
-   - Call C++ function with VM pointer and argument count
-   - Function pops arguments, pushes results
-   - VM cleans up function value from stack
-4. Results left on stack for caller
-
-### String Pool Management
-
-- Standard library function names added to chunk's string pool during initialization
-- Uses `Value::string()` (TAG_STRING) for keys, not `Value::runtimeString()`
-- Ensures keys match compile-time string constants from user code
+### String Interning
+Native functions use interned strings for keys to ensure O(1) lookup in namespaces. Strings are interned globally across the VM state.
 
 ### Error Handling
-
-- Native functions validate argument counts and types
-- Call `vm->runtimeError()` and return false on error
-- VM halts execution on native function errors
-
-## Future Extensibility
-
-The architecture supports unlimited future expansion:
-
-- Add new functions without modifying compiler or opcodes
-- Create new namespaces (io, os, debug, etc.)
-- Functions are first-class values (can be stored, passed, returned)
-- Clean separation between VM core and standard library
-
-## Testing
-
-Comprehensive tests created:
-- `tests/test_string_bracket.lua` - All string functions
-- `tests/test_table_bracket.lua` - All table functions
-- `tests/test_math_bracket.lua` - All math functions
-- `tests/stdlib_demo_simple.lua` - Complete demonstration
-
-All tests pass successfully with expected output.
+Native functions should use `vm->runtimeError(message)` to report issues. This ensures the VM state is consistent and `pcall` can catch the error.

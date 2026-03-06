@@ -1,125 +1,82 @@
 # Standard Library Quick Start Guide
 
-## Accessing Functions
+The Lua VM provides a comprehensive standard library. Functions are organized into namespaces (tables) and can be accessed using standard Lua dot notation.
 
-Due to parser limitations, use bracket notation to access standard library functions:
+## String Library
 
 ```lua
--- Get function from namespace
-local len = string["len"]
+local s = "hello world"
 
--- Call the function
-local result = len("hello")
-print(result)  -- 5
+print(string.len(s))       -- 11
+print(string.upper(s))     -- HELLO WORLD
+print(string.sub(s, 1, 5)) -- hello
+
+-- Pattern Matching
+print(string.match(s, "%w+")) -- hello
+for word in string.gmatch(s, "%w+") do
+    print(word)
+end
+
+-- Method syntax (available for strings)
+print(s:reverse()) -- dlrow olleh
 ```
 
-## String Functions
+## Table Library
 
 ```lua
--- Length
-local len = string["len"]
-print(len("hello"))  -- 5
-
--- Case conversion
-local upper = string["upper"]
-local lower = string["lower"]
-print(upper("hello"))  -- HELLO
-print(lower("WORLD"))  -- world
-
--- Substring (1-indexed, inclusive)
-local sub = string["sub"]
-print(sub("hello", 2, 4))  -- ell
-print(sub("hello", -3))    -- llo (negative = from end)
-
--- Reverse
-local reverse = string["reverse"]
-print(reverse("lua"))  -- aul
-
--- Byte/Char conversion
-local byte = string["byte"]
-local char = string["char"]
-print(byte("A"))      -- 65
-print(char(72, 105))  -- Hi
-```
-
-## Table Functions
-
-```lua
--- Insert at end
-local insert = table["insert"]
 local t = {10, 20, 30}
-insert(t, 40)
-print(t[4])  -- 40
 
--- Insert at position
-insert(t, 2, 15)
-print(t[2])  -- 15
+table.insert(t, 40)    -- Append 40
+table.insert(t, 1, 5)  -- Insert 5 at index 1
+table.remove(t, 2)     -- Remove element at index 2
 
--- Remove
-local remove = table["remove"]
-local val = remove(t, 1)
-print(val)  -- 10
-
--- Concatenate array elements
-local concat = table["concat"]
-local items = {"a", "b", "c"}
-print(concat(items, ", "))  -- a, b, c
-print(concat(items))        -- abc (no separator)
+print(table.concat(t, ", ")) -- 5, 20, 30, 40
 ```
 
-## Math Functions
+## Math Library
 
 ```lua
--- Basic operations
-local sqrt = math["sqrt"]
-local abs = math["abs"]
-local floor = math["floor"]
-local ceil = math["ceil"]
-print(sqrt(16))    -- 4
-print(abs(-5))     -- 5
-print(floor(3.7))  -- 3
-print(ceil(3.2))   -- 4
+print(math.sqrt(16)) -- 4.0
+print(math.sin(math.pi / 2)) -- 1.0
+print(math.floor(3.7)) -- 3
+print(math.random(1, 10)) -- Random integer between 1 and 10
+```
 
--- Trigonometry (radians)
-local sin = math["sin"]
-local cos = math["cos"]
-local tan = math["tan"]
-print(sin(0))  -- 0
-print(cos(0))  -- 1
+## I/O Library
 
--- Exponential/Logarithm
-local exp = math["exp"]
-local log = math["log"]
-print(exp(1))  -- 2.718...
-print(log(2.718...))  -- ~1
+```lua
+local f = io.open("test.txt", "w")
+f:write("Hello Lua!")
+f:close()
 
--- Min/Max (variadic)
-local min = math["min"]
-local max = math["max"]
-print(min(5, 2, 8, 1))  -- 1
-print(max(5, 2, 8, 1))  -- 8
+local f2 = io.open("test.txt", "r")
+local content = f2:read("*a")
+print(content) -- Hello Lua!
+f2:close()
+```
 
--- Constants
-local pi = math["pi"]
-print(pi)  -- 3.14159...
+## OS Library
+
+```lua
+print(os.date()) -- Current date/time string
+print(os.time()) -- Current timestamp
+os.remove("test.txt")
+```
+
+## Debug Library
+
+```lua
+-- Print a stack traceback
+print(debug.traceback())
+
+-- Get info about a function
+local info = debug.getinfo(print)
+print(info.name) -- print
 ```
 
 ## Tips
 
-1. **Cache functions**: Store function references in local variables for repeated use
-2. **Argument validation**: Functions check argument types and counts, errors halt execution
-3. **Lua semantics**: String indices are 1-based, negative indices count from end
-4. **Variadic functions**: `min` and `max` accept any number of arguments
-
-## Running Examples
-
-```bash
-cd build
-./lua ../tests/stdlib_demo_simple.lua
-```
-
-See also:
-- `test_string_bracket.lua` - String library tests
-- `test_table_bracket.lua` - Table library tests
-- `test_math_bracket.lua` - Math library tests
-- `STDLIB_IMPLEMENTATION.md` - Technical implementation details
+1. **Dot Notation**: Use `math.sin(x)` instead of `math["sin"](x)`.
+2. **Method Syntax**: Use `obj:method()` for file and string objects.
+3. **1-Based Indexing**: All Lua libraries use 1-based indexing for strings and tables.
+4. **Error Handling**: Use `pcall` to wrap standard library calls that might fail.

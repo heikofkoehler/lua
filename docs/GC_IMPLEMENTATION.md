@@ -21,14 +21,30 @@ The collector operates in four main states:
 3.  **ATOMIC**: Final marking phase. Re-scans roots and finishes the gray stack in a single non-interruptible step. Handles weak tables.
 4.  **SWEEP**: Incremental/Atomic sweeping phase. Frees white objects and resets surviving objects to white for the next cycle.
 
-### Write Barriers
+### GC Modes
 
-To maintain the tri-color invariant (black objects never point to white objects), the VM implements write barriers:
+The collector supports two modes of operation:
+
+### 1. Incremental Mode (Default)
+Standard tri-color marking as described above. collection work is spread across allocations to maintain low latency.
+
+### 2. Generational Mode
+Optimized for short-lived objects (Lua 5.4 style).
+- **Young Generation**: New objects are created here.
+- **Old Generation**: Objects that survive multiple collection cycles are promoted to the old generation.
+- **Minor Collection**: Frequently collects only the young generation.
+- **Major Collection**: Performs a full collection cycle.
+- **Promotion**: Surviving objects must persist through two minor collection cycles before being promoted to 'old', ensuring they are truly long-lived.
+
+## Write Barriers
+
+To maintain the tri-color invariant (black objects never point to white objects) and the generational invariant (old objects pointing to young objects must be tracked), the VM implements write barriers:
 - **Forward Barrier**: If a white object is stored in a black object, the white object is moved to gray.
 - **Backward Barrier**: If a black object is modified, it is moved back to gray. Used for objects that are modified frequently, like the coroutine stack.
+- **Generational Barrier**: When an old object is modified to point to a young object, the old object is added to the `rememberedSet_`.
 
 Implemented in:
-- `TableObject::set` (Forward)
+- `TableObject::set` (Forward/Generational)
 - `ClosureObject::setUpvalue` (Forward)
 - `UpvalueObject::set/close` (Forward)
 - `VM::OP_SET_LOCAL` (Backward for Coroutine)
