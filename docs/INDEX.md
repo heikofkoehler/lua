@@ -15,5 +15,5 @@ Welcome to the internal documentation for the Lua VM project. These documents pr
 
 ## Feature Spotlights
 - [Dot Notation and Method Calls](DOT_NOTATION.md): Implementation details for table access and `obj:method()` syntax.
-- [Bytecode Disassembler](REPL.md#bytecode-disassembly): How to use the `-l` flag to inspect compiled code.
+- [Bytecode Disassembler](REPL.md#bytecode-disassembly): How to use the `-L` flag to inspect compiled code.
 - [JIT Compilation Plan](JIT_COMPILATION_PLAN.md): Current status and future goals for the experimental JIT compiler.

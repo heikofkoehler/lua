@@ -46,11 +46,11 @@ The REPL uses a "try-return" strategy:
 
 ## Bytecode Disassembly
 
-The VM includes a standalone disassembler tool accessible via the `-l` or `--list` flag. This tool allows you to inspect the compiled bytecode of any Lua source or pre-compiled bytecode file.
+The VM includes a standalone disassembler tool accessible via the `-L` or `--list` flag. This tool allows you to inspect the compiled bytecode of any Lua source or pre-compiled bytecode file.
 
 ### Usage
 ```bash
-./lua -l myscript.lua
+./lua -L myscript.lua
 ```
 
 ### Output Information

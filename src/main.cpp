@@ -484,7 +484,7 @@ void printUsage(const char* program) {
     std::cerr << "    -c, --compile    Compile source to bytecode" << std::endl;
     std::cerr << "    -o, --output     Output file for bytecode (default: out.luac)" << std::endl;
     std::cerr << "    -b, --bytecode   Execute input as pre-compiled bytecode" << std::endl;
-    std::cerr << "    -l, --list       List (disassemble) bytecode" << std::endl;
+    std::cerr << "    -L, --list       List (disassemble) bytecode" << std::endl;
     std::cerr << "    -h, --help       Print this help message" << std::endl;
     std::cerr << "  Run without arguments to start REPL" << std::endl;
 }
@@ -515,18 +515,19 @@ int main(int argc, char* argv[]) {
             interactive = true;
         } else if (!stopFlags && arg == "-E") {
             ignoreEnv = true;
-        } else if (!stopFlags && (arg == "-l" || arg == "--list")) {
+        } else if (!stopFlags && (arg == "-L" || arg == "--list")) {
             listBytecode = true;
         } else if (!stopFlags && arg.length() >= 2 && arg[0] == '-' && arg[1] == 'l') {
-            // Check if it's -l followed by library name or just -l for list
+            std::string lib;
             if (arg.length() > 2) {
-                loadLibs.push_back(arg.substr(2));
-            } else if (i + 1 < argc && argv[i+1][0] != '-') {
-                loadLibs.push_back(argv[++i]);
+                lib = arg.substr(2);
+            } else if (i + 1 < argc) {
+                lib = argv[++i];
             } else {
-                // It was just -l at the end or followed by another flag
-                listBytecode = true;
+                std::cerr << "Error: -l option requires an argument" << std::endl;
+                return 1;
             }
+            loadLibs.push_back(lib);
         } else if (!stopFlags && arg.length() >= 2 && arg[0] == '-' && arg[1] == 'e') {
             std::string code;
             if (arg.length() > 2) {

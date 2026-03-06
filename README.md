@@ -103,7 +103,7 @@ make
 
 ### Bytecode Disassembly
 ```bash
-./lua -l tests/simple.lua
+./lua -L tests/simple.lua
 ```
 The disassembler provides:
 - **Function Metadata**: Name, parameter count, vararg status, and upvalue count.
