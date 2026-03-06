@@ -6,7 +6,7 @@ SCRIPT="tests/temp_test.lua"
 echo "print('hello cli')" > $SCRIPT
 
 cleanup() {
-    rm -f $SCRIPT out1.luac out2.luac out3.luac list.txt combo1.luac combo2.luac out.luac
+    rm -f $SCRIPT out1.luac out2.luac out3.luac list.txt combo1.luac combo2.luac out.luac post_script.luac
 }
 
 trap cleanup EXIT
@@ -73,6 +73,16 @@ if [ -f out.luac ]; then
     rm out.luac
 else
     echo "✗ -c default output failed"
+    exit 1
+fi
+
+echo "Testing flag after script (user request)..."
+$LUA_BIN -c $SCRIPT --output post_script.luac
+if [ -f post_script.luac ]; then
+    echo "✓ flag after script worked"
+    rm post_script.luac
+else
+    echo "✗ flag after script failed"
     exit 1
 fi
 

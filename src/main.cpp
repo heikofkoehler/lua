@@ -533,93 +533,84 @@ int main(int argc, char* argv[]) {
 
     for (int i = 1; i < argc; i++) {
         std::string arg = argv[i];
-        if (!stopFlags && (arg == "-v" || arg == "--verbose")) {
-            verbose = true;
-            if (argc == 2) {
-                std::cout << "Lua 5.5.0 (MVP)" << std::endl;
-                return 0;
-            }
-        } else if (!stopFlags && (arg == "-i")) {
-            interactive = true;
-        } else if (!stopFlags && arg == "-E") {
-            ignoreEnv = true;
-        } else if (!stopFlags && (arg == "-L" || arg == "--list")) {
-            listBytecode = true;
-        } else if (!stopFlags && arg.length() >= 2 && arg[0] == '-' && arg[1] == 'l') {
-            std::string lib;
-            if (arg.length() > 2) {
-                lib = arg.substr(2);
-            } else if (i + 1 < argc) {
-                lib = argv[++i];
-            } else {
-                std::cerr << "Error: -l option requires an argument" << std::endl;
-                return 1;
-            }
-            loadLibs.push_back(lib);
-        } else if (!stopFlags && arg.length() >= 2 && arg[0] == '-' && arg[1] == 'e') {
-            std::string code;
-            if (arg.length() > 2) {
-                code = arg.substr(2);
-            } else if (i + 1 < argc) {
-                code = argv[++i];
-            } else {
-                std::cerr << "Error: -e option requires an argument" << std::endl;
-                return 1;
-            }
-            executeStrings.push_back(code);
-        } else if (!stopFlags && (arg == "-c" || arg == "--compile")) {
-            compileOnly = true;
-        } else if (!stopFlags && (arg == "-b" || arg == "--bytecode")) {
-            isBytecode = true;
-        } else if (!stopFlags && arg.length() >= 2 && arg[0] == '-' && arg[1] == 'o') {
-            if (arg.length() > 2) {
-                outputPath = arg.substr(2);
-            } else if (i + 1 < argc) {
-                outputPath = argv[++i];
-            } else {
-                std::cerr << "Error: -o option requires an argument" << std::endl;
-                return 1;
-            }
-        } else if (!stopFlags && arg == "--output") {
-            if (i + 1 < argc) {
-                outputPath = argv[++i];
-            } else {
-                std::cerr << "Error: --output option requires an argument" << std::endl;
-                return 1;
-            }
-        } else if (!stopFlags && (arg == "-h" || arg == "--help")) {
-            printUsage(argv[0]);
-            return 0;
-        } else if (!stopFlags && arg == "--") {
-            stopFlags = true;
-        } else if (!stopFlags && arg == "-") {
+        
+        if (stopFlags) {
             if (scriptPath.empty()) {
-                scriptPath = "-";
+                scriptPath = arg;
                 scriptIndex = i;
-                stopFlags = true;
-            } else {
-                std::cerr << "Too many arguments" << std::endl;
-                return 1;
             }
-        } else if (!stopFlags && arg[0] == '-' && arg.length() > 1) {
-            // Handle combined short flags like -vi
-            for (size_t j = 1; j < arg.length(); j++) {
-                char c = arg[j];
-                if (c == 'v') verbose = true;
-                else if (c == 'i') interactive = true;
-                else if (c == 'E') { /* ignore for now */ }
-                else if (c == 'W') { /* ignore for now */ }
-                else {
-                    std::cerr << "Unknown option: -" << c << std::endl;
-                    return 1;
+            continue;
+        }
+
+        if (arg == "--") {
+            stopFlags = true;
+            continue;
+        }
+
+        if (arg[0] == '-' && arg.length() > 1) {
+            if (arg == "-v" || arg == "--verbose") {
+                verbose = true;
+            } else if (arg == "-i") {
+                interactive = true;
+            } else if (arg == "-E") {
+                ignoreEnv = true;
+            } else if (arg == "-L" || arg == "--list") {
+                listBytecode = true;
+            } else if (arg == "-c" || arg == "--compile") {
+                compileOnly = true;
+            } else if (arg == "-b" || arg == "--bytecode") {
+                isBytecode = true;
+            } else if (arg.substr(0, 2) == "-o" || arg == "--output") {
+                if (arg == "-o") {
+                    if (i + 1 < argc) outputPath = argv[++i];
+                    else { std::cerr << "Error: -o requires an argument" << std::endl; return 1; }
+                } else if (arg == "--output") {
+                    if (i + 1 < argc) outputPath = argv[++i];
+                    else { std::cerr << "Error: --output requires an argument" << std::endl; return 1; }
+                } else {
+                    outputPath = arg.substr(2);
+                }
+            } else if (arg.substr(0, 2) == "-l") {
+                std::string lib;
+                if (arg == "-l") {
+                    if (i + 1 < argc) lib = argv[++i];
+                    else { std::cerr << "Error: -l requires an argument" << std::endl; return 1; }
+                } else {
+                    lib = arg.substr(2);
+                }
+                loadLibs.push_back(lib);
+            } else if (arg.substr(0, 2) == "-e") {
+                std::string code;
+                if (arg == "-e") {
+                    if (i + 1 < argc) code = argv[++i];
+                    else { std::cerr << "Error: -e requires an argument" << std::endl; return 1; }
+                } else {
+                    code = arg.substr(2);
+                }
+                executeStrings.push_back(code);
+            } else if (arg == "-h" || arg == "--help") {
+                printUsage(argv[0]);
+                return 0;
+            } else if (scriptPath.empty()) {
+                // Combined short flags (only if no script yet, to avoid consuming script args)
+                for (size_t j = 1; j < arg.length(); j++) {
+                    char c = arg[j];
+                    if (c == 'v') verbose = true;
+                    else if (c == 'i') interactive = true;
+                    else if (c == 'E') ignoreEnv = true;
+                    else {
+                        std::cerr << "Unknown option: -" << c << std::endl;
+                        return 1;
+                    }
                 }
             }
+            // If scriptPath is set, we just let unknown flags pass through to 'arg' table
         } else {
             if (scriptPath.empty()) {
                 scriptPath = arg;
                 scriptIndex = i;
-                // Once we find the script, the remaining arguments are for the script
-                stopFlags = true;
+                // Standard Lua stops parsing flags here, but we allow it for better UX.
+                // We only stop if explicitly requested with --.
             }
         }
     }
@@ -627,7 +618,7 @@ int main(int argc, char* argv[]) {
     VM vm;
     vm.setTraceExecution(verbose);
 
-    // If -o is specified without -c, imply -c
+    // If -o is specified without -c or -L or execution flags, imply -c
     if (!outputPath.empty() && !compileOnly && !listBytecode && !isBytecode && executeStrings.empty() && !interactive) {
         compileOnly = true;
     }
