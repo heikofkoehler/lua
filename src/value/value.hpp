@@ -32,11 +32,12 @@ public:
         SOCKET,   // Pointer to SocketObject
         RUNTIME_STRING, // Pointer to StringObject
         NATIVE_FUNCTION, // Native function index
+        C_FUNCTION,      // lua_CFunction pointer
         THREAD,   // Pointer to CoroutineObject
         USERDATA  // Pointer to UserdataObject
     };
 
-    static constexpr int NUM_TYPES = 14;
+    static constexpr int NUM_TYPES = 15;
 
 private:
     Type type_;
@@ -46,6 +47,7 @@ private:
         int64_t integer_;
         size_t index_;
         GCObject* obj_;
+        void* cfunc_; // for lua_CFunction
     };
 
 public:
@@ -53,6 +55,13 @@ public:
 
     static Value nil() {
         return Value();
+    }
+
+    static Value cFunction(void* f) {
+        Value v;
+        v.type_ = Type::C_FUNCTION;
+        v.cfunc_ = f;
+        return v;
     }
 
     static Value boolean(bool value) {
@@ -164,11 +173,12 @@ public:
     bool isFile() const { return type_ == Type::FILE; }
     bool isSocket() const { return type_ == Type::SOCKET; }
     bool isNativeFunction() const { return type_ == Type::NATIVE_FUNCTION; }
+    bool isCFunction() const { return type_ == Type::C_FUNCTION; }
     bool isThread() const { return type_ == Type::THREAD; }
     bool isUserdata() const { return type_ == Type::USERDATA; }
 
     bool isFunction() const {
-        return isFunctionObject() || isClosure() || isNativeFunction();
+        return isFunctionObject() || isClosure() || isNativeFunction() || isCFunction();
     }
 
     bool isObj() const {
@@ -195,6 +205,7 @@ public:
     size_t asFunctionIndex() const { return index_; }
     size_t asStringIndex() const { return index_; }
     size_t asNativeFunctionIndex() const { return index_; }
+    void* asCFunction() const { return cfunc_; }
     
     GCObject* asObj() const { return obj_; }
     StringObject* asStringObj() const { return reinterpret_cast<StringObject*>(obj_); }

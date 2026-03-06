@@ -1,5 +1,7 @@
 #include "vm/vm.hpp"
 #include "vm/jit.hpp"
+#include "api/lua_state.h"
+#include "api/lua.h"
 #include "compiler/lexer.hpp"
 #include "compiler/parser.hpp"
 #include "compiler/codegen.hpp"
@@ -1126,16 +1128,29 @@ bool VM::callBinaryMetamethod(const Value& a, const Value& b, const std::string&
 bool VM::callValue(int argCount, int retCount, bool isTailCall) {
     Value callee = peek(argCount);
     
-    if (callee.isNativeFunction()) {
-        NativeFunction function = nativeFunctions_[callee.asNativeFunctionIndex()];
-        
+    if (callee.isNativeFunction() || callee.isCFunction()) {
         size_t funcPosition = currentCoroutine_->stack.size() - argCount - 1;
-        
-        // Initialize with 1, native function may override this
         currentCoroutine_->lastResultCount = 1;
 
-        if (!function(this, argCount)) {
-            return false;
+        if (callee.isNativeFunction()) {
+            NativeFunction function = nativeFunctions_[callee.asNativeFunctionIndex()];
+            if (!function(this, argCount)) {
+                return false;
+            }
+        } else {
+            lua_CFunction function = reinterpret_cast<lua_CFunction>(callee.asCFunction());
+            lua_State L;
+            L.vm = this;
+            L.is_owned = false;
+            L.stackBase = funcPosition + 1; // first argument
+            L.argCount = argCount;
+            
+            lua_State* oldL = currentL_;
+            currentL_ = &L;
+            int nres = function(&L);
+            currentL_ = oldL;
+            
+            currentCoroutine_->lastResultCount = nres;
         }
 
         size_t resultCount = currentCoroutine_->lastResultCount;

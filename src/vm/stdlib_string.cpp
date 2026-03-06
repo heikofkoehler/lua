@@ -790,13 +790,15 @@ bool native_string_packsize(VM* vm, int argCount) {
             total += 1;
         } else if (spec == 'X') {
             if (i + 1 < fmt.length()) {
+                char nextSpec = fmt[i+1];
                 int dummy;
-                size_t xSize = get_spec_size(fmt[i+1], dummy);
-                if (xSize > 0) {
+                size_t xSize = get_spec_size(nextSpec, dummy);
+                if (xSize > 0 && nextSpec != 'x') {
                     size_t align = std::min(xSize, currentAlignment);
                     maxAlignment = std::max(maxAlignment, align);
                     apply_alignment(total, align);
                 }
+                i++; // Skip the next specifier so it is NOT processed as data
             }
         } else if (spec == 's' || spec == 'z') {
             vm->runtimeError("variable-length format in string.packsize");
@@ -836,14 +838,16 @@ bool native_string_pack(VM* vm, int argCount) {
 
         if (spec == 'X') {
             if (i + 1 < fmt.length()) {
+                char nextSpec = fmt[i+1];
                 int dummy;
-                size_t xSize = get_spec_size(fmt[i+1], dummy);
-                if (xSize > 0) {
+                size_t xSize = get_spec_size(nextSpec, dummy);
+                if (xSize > 0 && nextSpec != 'x') {
                     size_t align = std::min(xSize, currentAlignment);
                     maxAlignment = std::max(maxAlignment, align);
                     size_t offset = result.length();
                     apply_alignment(offset, align, &result);
                 }
+                i++; // Skip the next specifier
             }
             continue;
         }
@@ -938,13 +942,15 @@ bool native_string_unpack(VM* vm, int argCount) {
 
         if (spec == 'X') {
             if (i + 1 < fmt.length()) {
+                char nextSpec = fmt[i+1];
                 int dummy;
-                size_t xSize = get_spec_size(fmt[i+1], dummy);
-                if (xSize > 0) {
+                size_t xSize = get_spec_size(nextSpec, dummy);
+                if (xSize > 0 && nextSpec != 'x') {
                     size_t align = std::min(xSize, currentAlignment);
                     maxAlignment = std::max(maxAlignment, align);
                     apply_alignment(current, align);
                 }
+                i++; // Skip the next specifier
             }
             continue;
         }

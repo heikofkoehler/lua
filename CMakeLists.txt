@@ -69,11 +69,16 @@ set(SOURCES
     src/vm/stdlib_coroutine.cpp
     src/vm/stdlib_debug.cpp
     src/vm/stdlib_utf8.cpp
+    src/api/lua_api.cpp
     src/value/socket.cpp
 )
 
+# Core sources for reuse in tests
+set(CORE_SOURCES ${SOURCES})
+list(REMOVE_ITEM CORE_SOURCES src/main.cpp)
+
 # Create executable
-add_executable(lua ${SOURCES})
+add_executable(lua src/main.cpp ${CORE_SOURCES})
 
 # Target-specific compile options
 if(MSVC)
@@ -97,6 +102,15 @@ set_target_properties(lua PROPERTIES
 # Dummy shared library for loadlib testing
 add_library(dummy_module SHARED tests/dummy_module.cpp)
 target_include_directories(dummy_module PRIVATE ${CMAKE_SOURCE_DIR}/src)
+
+# C API Test Executable
+add_executable(test_c_api tests/test_c_api.cpp ${CORE_SOURCES})
+target_compile_options(test_c_api PRIVATE -Wall -Wextra -Wpedantic -Wno-gnu-anonymous-struct -Wno-nested-anon-types)
+target_include_directories(test_c_api PRIVATE ${CMAKE_SOURCE_DIR}/src)
+if(USE_JIT)
+    target_link_libraries(test_c_api PRIVATE asmjit::asmjit)
+endif()
+set_target_properties(test_c_api PROPERTIES RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR})
 
 if(MSVC)
     target_compile_options(dummy_module PRIVATE /W4 /WX)

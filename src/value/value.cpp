@@ -86,6 +86,7 @@ void Value::print(std::ostream& os) const {
         case Type::FILE: os << "file: " << asFileObj(); break;
         case Type::SOCKET: os << "socket: " << asSocketObj(); break;
         case Type::NATIVE_FUNCTION: os << "<native function>"; break;
+        case Type::C_FUNCTION: os << "<C function>"; break;
         case Type::THREAD: os << "thread: " << asThreadObj(); break;
         case Type::USERDATA: os << "userdata: " << asUserdataObj(); break;
     }
@@ -114,6 +115,7 @@ bool Value::operator==(const Value& other) const {
         case Type::FUNCTION: return asFunctionIndex() == other.asFunctionIndex();
         case Type::STRING: return asStringIndex() == other.asStringIndex();
         case Type::NATIVE_FUNCTION: return asNativeFunctionIndex() == other.asNativeFunctionIndex();
+        case Type::C_FUNCTION: return asCFunction() == other.asCFunction();
         default: return asObj() == other.asObj();
     }
 }
@@ -145,6 +147,7 @@ size_t Value::hash() const {
             return std::hash<std::string_view>()(std::string_view(obj->chars(), obj->length()));
         }
         case Type::NATIVE_FUNCTION: return std::hash<size_t>()(asNativeFunctionIndex());
+        case Type::C_FUNCTION: return std::hash<void*>()(asCFunction());
         case Type::FUNCTION: return std::hash<size_t>()(asFunctionIndex());
         case Type::NIL: return 0;
         default: return std::hash<void*>()(reinterpret_cast<void*>(asObj()));

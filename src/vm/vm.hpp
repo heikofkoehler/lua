@@ -21,6 +21,8 @@
 // Virtual Machine: Stack-based bytecode interpreter
 // Executes compiled Lua bytecode
 
+struct lua_State;
+
 // Native function signature
 // Returns true on success, false on error
 // Pops argCount arguments from stack, pushes results onto stack
@@ -193,7 +195,11 @@ public:
     void setTypeMetatable(Value::Type type, const Value& mt);
     Value getTypeMetatable(Value::Type type) const;
 
+    lua_State* currentL() const { return currentL_; }
+    void setCurrentL(lua_State* L) { currentL_ = L; }
+
 private:
+    lua_State* currentL_ = nullptr;
     // GC-aware object allocation helper
     template<typename T, typename... Args>
     T* allocateObject(Args&&... args) {
