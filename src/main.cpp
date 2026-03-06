@@ -10,6 +10,8 @@
 #include <unistd.h>
 #include <cstring>
 #include <vector>
+#include <algorithm>
+#include "linenoise.h"
 
 // ANSI Color Codes
 #define COLOR_RESET   "\033[0m"
@@ -20,6 +22,105 @@
 #define COLOR_BLUE    "\033[34m"
 #define COLOR_CYAN    "\033[36m"
 #define COLOR_MAGENTA "\033[35m"
+
+// Global VM pointer for linenoise completion
+static VM* replVM = nullptr;
+
+// Completion callback for linenoise
+void completion(const char* buf, linenoiseCompletions* lc) {
+    if (!replVM) return;
+
+    std::string line(buf);
+    if (line.empty()) return;
+
+    // Find the start of the identifier being completed
+    size_t start = line.find_last_of(" \t+-*/%^#=<>()[]{};:,.");
+    std::string prefix;
+    std::string search;
+    
+    if (start == std::string::npos) {
+        search = line;
+    } else {
+        prefix = line.substr(0, start + 1);
+        search = line.substr(start + 1);
+    }
+
+    // Handle table member completion (e.g., math.s or table.sub.f)
+    size_t dot = search.find_last_of('.');
+    TableObject* targetTable = nullptr;
+    std::string tablePrefix;
+    std::string memberSearch;
+
+    if (dot != std::string::npos) {
+        std::string fullTableName = search.substr(0, dot);
+        memberSearch = search.substr(dot + 1);
+        
+        // Traverse tables (e.g., math.sin -> lookup "math")
+        std::vector<std::string> parts;
+        size_t last = 0;
+        size_t next = 0;
+        while ((next = fullTableName.find('.', last)) != std::string::npos) {
+            parts.push_back(fullTableName.substr(last, next - last));
+            last = next + 1;
+        }
+        parts.push_back(fullTableName.substr(last));
+
+        Value current = Value::nil();
+        bool first = true;
+        for (const auto& part : parts) {
+            if (first) {
+                current = replVM->getGlobal(part);
+                first = false;
+            } else if (current.isTable()) {
+                current = current.asTableObj()->get(part);
+            } else {
+                current = Value::nil();
+                break;
+            }
+        }
+
+        if (current.isTable()) {
+            targetTable = current.asTableObj();
+            tablePrefix = fullTableName + ".";
+        }
+    } else {
+        memberSearch = search;
+    }
+
+    if (targetTable) {
+        // Complete members of the table
+        targetTable->data(); // Need to iterate members
+        for (auto const& [key, val] : targetTable->data()) {
+            if (key.isString()) {
+                std::string name = replVM->getStringValue(key);
+                if (name.substr(0, memberSearch.length()) == memberSearch) {
+                    linenoiseAddCompletion(lc, (prefix + tablePrefix + name).c_str());
+                }
+            }
+        }
+    } else {
+        // Complete globals
+        auto& globals = replVM->globals();
+        for (auto const& [key, val] : globals) {
+            if (key.substr(0, search.length()) == search) {
+                linenoiseAddCompletion(lc, (prefix + key).c_str());
+            }
+        }
+        
+        // Also complete keywords
+        static const std::vector<std::string> keywords = {
+            "and", "break", "do", "else", "elseif", "end",
+            "false", "for", "function", "goto", "if", "in",
+            "local", "nil", "not", "or", "repeat", "return",
+            "then", "true", "until", "while"
+        };
+        for (const auto& kw : keywords) {
+            if (kw.substr(0, search.length()) == search) {
+                linenoiseAddCompletion(lc, (prefix + kw).c_str());
+            }
+        }
+    }
+}
 
 // Read file into string
 std::string readFile(const std::string& path) {
@@ -213,6 +314,10 @@ int runFile(const std::string& path, VM& vm) {
 void repl(VM& vm) {
     std::string buffer;
     bool multiLine = false;
+    
+    replVM = &vm;
+    linenoiseSetCompletionCallback(completion);
+    linenoiseHistoryLoad("lua_history.txt");
 
     std::cout << COLOR_BOLD << "Lua 5.5.0 REPL" << COLOR_RESET << " - Type 'help' for commands" << std::endl;
 
@@ -226,14 +331,14 @@ void repl(VM& vm) {
             prompt = promptVal.isString() ? promptVal.toString() : COLOR_CYAN ">> " COLOR_RESET;
         }
         
-        std::cout << prompt;
-        std::cout.flush();
-
-        std::string line;
-        if (!std::getline(std::cin, line)) {
+        char* input = linenoise(prompt.c_str());
+        if (input == nullptr) {
             std::cout << std::endl;
             break;
         }
+
+        std::string line(input);
+        linenoiseFree(input);
 
         // Meta commands
         if (!multiLine) {
@@ -257,6 +362,11 @@ void repl(VM& vm) {
             if (!line.empty() && line[0] == '=') {
                 line = "return " + line.substr(1);
             }
+        }
+
+        if (!line.empty()) {
+            linenoiseHistoryAdd(line.c_str());
+            linenoiseHistorySave("lua_history.txt");
         }
 
         if (buffer.empty()) {

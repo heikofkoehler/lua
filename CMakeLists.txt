@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.10)
-project(LuaVM VERSION 1.0 LANGUAGES CXX)
+project(LuaVM VERSION 1.0 LANGUAGES C CXX)
 
 # Set C++17 standard
 set(CMAKE_CXX_STANDARD 17)
@@ -22,6 +22,22 @@ if(USE_JIT)
         GIT_TAG master
     )
     FetchContent_MakeAvailable(asmjit)
+endif()
+
+# Linenoise for REPL
+include(FetchContent)
+FetchContent_Declare(
+    linenoise
+    GIT_REPOSITORY https://github.com/antirez/linenoise.git
+    GIT_TAG master
+)
+FetchContent_MakeAvailable(linenoise)
+
+# We need to manually create the target because linenoise doesn't have a CMakeLists.txt
+if(NOT TARGET linenoise)
+    add_library(linenoise STATIC ${linenoise_SOURCE_DIR}/linenoise.c)
+    target_include_directories(linenoise PUBLIC ${linenoise_SOURCE_DIR})
+    set_target_properties(linenoise PROPERTIES LINKER_LANGUAGE C)
 endif()
 
 if(DEBUG)
@@ -90,6 +106,7 @@ endif()
 if(USE_JIT)
     target_link_libraries(lua PRIVATE asmjit::asmjit)
 endif()
+target_link_libraries(lua PRIVATE linenoise)
 
 # Include directories
 target_include_directories(lua PRIVATE ${CMAKE_SOURCE_DIR}/src)
