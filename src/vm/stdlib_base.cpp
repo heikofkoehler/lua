@@ -495,6 +495,23 @@ bool native_rawlen(VM* vm, int argCount) {
     return true;
 }
 
+bool native_vm_jit(VM* vm, int argCount) {
+    if (argCount >= 1) {
+        Value val = vm->peek(argCount - 1);
+        if (val.isBool()) {
+            vm->setJitEnabled(val.asBool());
+        } else if (val.isString()) {
+            std::string opt = vm->getStringValue(val);
+            if (opt == "off") vm->setJitEnabled(false);
+            else if (opt == "on") vm->setJitEnabled(true);
+        }
+    }
+    for(int i=0; i<argCount; i++) vm->pop();
+    vm->push(Value::boolean(vm->isJitEnabled()));
+    vm->currentCoroutine()->lastResultCount = 1;
+    return true;
+}
+
 bool native_warn(VM* vm, int argCount) {
     if (argCount == 0) return true;
 
@@ -1017,6 +1034,9 @@ void registerBaseLibrary(VM* vm) {
 
     size_t rawlenIdx = vm->registerNativeFunction("rawlen", native_rawlen);
     vm->setGlobal("rawlen", Value::nativeFunction(rawlenIdx));
+
+    size_t vmjitIdx = vm->registerNativeFunction("vm_jit", native_vm_jit);
+    vm->setGlobal("vm_jit", Value::nativeFunction(vmjitIdx));
 
     size_t warnIdx = vm->registerNativeFunction("warn", native_warn);
     vm->setGlobal("warn", Value::nativeFunction(warnIdx));

@@ -25,17 +25,17 @@ VM::VM() :
 #endif
            mainCoroutine_(nullptr), currentCoroutine_(nullptr), 
            hadError_(false), inPcall_(false), isHandlingError_(false), lastErrorMessage_(""), stdlibInitialized_(false),
+           jit_(std::make_unique<JITCompiler>(this)),
+           jitEnabled_(true),
            gcState_(GCState::PAUSE),
            gcObjects_(nullptr), toBeFinalized_(nullptr), bytesAllocated_(0), nextGC_(1024 * 1024), 
            memoryLimit_(100 * 1024 * 1024), // Default 100MB limit
            gcEnabled_(true),
            warnEnabled_(true) {
     currentVM = this;
-    jit_ = std::make_unique<JITCompiler>(this);
     for (int i = 0; i < Value::NUM_TYPES; i++) {
         typeMetatables_[i] = Value::nil();
     }
-    
     // Initialize main coroutine
     createCoroutine(nullptr);
     mainCoroutine_ = coroutines_.back();
@@ -913,7 +913,6 @@ void VM::runtimeError(const std::string& message, int level) {
 }
 
 void VM::traceExecution() {
-#ifdef DEBUG_TRACE_EXECUTION
     // Print stack contents
     std::cout << "          ";
     for (const Value& value : currentCoroutine_->stack) {
@@ -922,8 +921,9 @@ void VM::traceExecution() {
     std::cout << std::endl;
 
     const Chunk* chunk = currentCoroutine_->frames.empty() ? currentCoroutine_->chunk : currentFrame().chunk;
-    chunk->disassembleInstruction(currentFrame().ip);
-#endif
+    if (chunk) {
+        chunk->disassembleInstruction(currentFrame().ip);
+    }
 }
 
 Value VM::add(const Value& a, const Value& b) {

@@ -35,6 +35,7 @@ public:
 
     // JIT related
     int incrementHotness() { return ++hotness_; }
+    void resetHotness(int value = 0) { hotness_ = value; }
     void setJITCode(JITFunc code) { jitCode_ = code; }
     JITFunc getJITCode() const { return jitCode_; }
 

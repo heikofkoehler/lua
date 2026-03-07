@@ -132,6 +132,8 @@ public:
 
     // JIT related
     JITCompiler* jit() { return jit_.get(); }
+    void setJitEnabled(bool enable) { jitEnabled_ = enable; }
+    bool isJitEnabled() const { return jitEnabled_; }
 
     // Registry for internal use (stable storage)
     void setRegistry(const std::string& key, const Value& value) { registry_[key] = value; }
@@ -263,6 +265,7 @@ private:
 
     // JIT related
     std::unique_ptr<JITCompiler> jit_;
+    bool jitEnabled_;
 
     // Garbage collection
     GCState gcState_;             // Current incremental GC state

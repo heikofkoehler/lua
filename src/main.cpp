@@ -515,6 +515,7 @@ void printUsage(const char* program) {
     std::cerr << "    -o, --output     Output file for bytecode (default: out.luac)" << std::endl;
     std::cerr << "    -b, --bytecode   Execute input as pre-compiled bytecode" << std::endl;
     std::cerr << "    -L, --list       List (disassemble) bytecode" << std::endl;
+    std::cerr << "    --nojit          Disable JIT compilation" << std::endl;
     std::cerr << "    -h, --help       Print this help message" << std::endl;
     std::cerr << "  Run without arguments to start REPL" << std::endl;
 }
@@ -526,6 +527,7 @@ int main(int argc, char* argv[]) {
     bool isBytecode = false;
     bool interactive = false;
     bool ignoreEnv = false;
+    bool jitEnabled = true;
     std::vector<std::string> executeStrings;
     std::vector<std::string> loadLibs;
     std::string scriptPath = "";
@@ -556,6 +558,8 @@ int main(int argc, char* argv[]) {
                 interactive = true;
             } else if (arg == "-E") {
                 ignoreEnv = true;
+            } else if (arg == "--nojit") {
+                jitEnabled = false;
             } else if (arg == "-L" || arg == "--list") {
                 listBytecode = true;
             } else if (arg == "-c" || arg == "--compile") {
@@ -619,6 +623,7 @@ int main(int argc, char* argv[]) {
 
     VM vm;
     vm.setTraceExecution(verbose);
+    vm.setJitEnabled(jitEnabled);
 
     // If -o is specified without -c or -L or execution flags, imply -c
     if (!outputPath.empty() && !compileOnly && !listBytecode && !isBytecode && executeStrings.empty() && !interactive) {

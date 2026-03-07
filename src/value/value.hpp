@@ -149,7 +149,7 @@ public:
     static Value fromObj(GCObject* obj);
 
     // Raw access
-    uint64_t bits() const { return bits_; }
+    constexpr uint64_t bits() const { return bits_; }
 
     // Type checking
     bool isFloat() const { 

@@ -56,14 +56,18 @@ bool VM::run(size_t targetFrameCount) {
 #ifdef USE_JIT
         if (currentFrame().closure && currentFrame().ip == 0) {
             JITFunc jitCode = currentFrame().closure->function()->getJITCode();
-            if (jitCode) {
+            if (isJitEnabled() && jitCode) {
+                size_t entryIp = currentFrame().ip;
                 int64_t res = jitCode(this);
-                if (res != -1) {
-                    // printf("DEBUG: JIT fallback at IP %lld for %s\n", res, currentFrame().closure->function()->name().c_str());
-                    currentFrame().ip = static_cast<size_t>(res);
-                    // JIT code already updated stack top in CoroutineObject
+                if (currentCoroutine_->status == CoroutineObject::Status::DEAD || 
+                    currentCoroutine_->status == CoroutineObject::Status::SUSPENDED) {
+                    return true;
                 }
-                continue;
+                if (res != -1 && static_cast<size_t>(res) != entryIp) {
+                    currentFrame().ip = static_cast<size_t>(res);
+                    continue;
+                }
+                // If res == entryIp, it didn't do anything, fall through to interpreter
             }
         }
 #endif
@@ -570,10 +574,12 @@ bool VM::run(size_t targetFrameCount) {
                 // JIT Hotness tracking
                 if (currentFrame().closure) {
                     FunctionObject* func = currentFrame().closure->function();
-                    if (!func->getJITCode() && func->incrementHotness() >= 50) {
+                    if (isJitEnabled() && !func->getJITCode() && func->incrementHotness() >= 50) {
 #ifdef USE_JIT
-                        printf("DEBUG: Triggering JIT for %s\n", func->name().c_str());
-                        jit()->compile(func);
+                        if (!jit()->compile(func)) {
+                            // If compilation failed, reset hotness to prevent immediate retry
+                            func->resetHotness(-1000); 
+                        }
 #endif
                     }
                 }
@@ -644,10 +650,11 @@ bool VM::run(size_t targetFrameCount) {
                 Value callee = peek(argCount);
                 if (callee.isClosure()) {
                     FunctionObject* func = callee.asClosureObj()->function();
-                    if (!func->getJITCode() && func->incrementHotness() >= 10) {
+                    if (false && isJitEnabled() && !func->getJITCode() && func->incrementHotness() >= 10) {
 #ifdef USE_JIT
-                        // printf("DEBUG: Function %s is HOT (call), compiling...\n", func->name().c_str());
-                        jit()->compile(func);
+                        if (!jit()->compile(func)) {
+                            func->resetHotness(-1000); 
+                        }
 #endif
                     }
                 }
@@ -675,10 +682,11 @@ bool VM::run(size_t targetFrameCount) {
                 Value callee = peek(actualArgCount);
                 if (callee.isClosure()) {
                     FunctionObject* func = callee.asClosureObj()->function();
-                    if (!func->getJITCode() && func->incrementHotness() >= 10) {
+                    if (false && isJitEnabled() && !func->getJITCode() && func->incrementHotness() >= 10) {
 #ifdef USE_JIT
-                        // printf("DEBUG: Function %s is HOT (call_multi), compiling...\n", func->name().c_str());
-                        jit()->compile(func);
+                        if (!jit()->compile(func)) {
+                            func->resetHotness(-1000); 
+                        }
 #endif
                     }
                 }
@@ -855,6 +863,7 @@ bool VM::run(size_t targetFrameCount) {
 
                 // If not found as property, check standard __index metamethod
                 Value indexMethod = getMetamethod(tableValue, "__index");
+                /*
                 if (indexMethod.isNil()) {
                     // Fallback to type metatable if it's not a table (for string methods, file methods)
                     Value typeMt = getTypeMetatable(tableValue.type());
@@ -868,6 +877,7 @@ bool VM::run(size_t targetFrameCount) {
                         indexMethod = typeMt.asTableObj()->get("__index");
                     }
                 }
+                */
                 
                 if (indexMethod.isNil()) {
                     if (!tableValue.isTable()) {
