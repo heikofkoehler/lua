@@ -22,7 +22,26 @@ The central structure is `lua_State`, which wraps the `VM` and tracks current ex
 - `lua_tonumber(L, idx)`: Converts value at index to double.
 - `lua_tointeger(L, idx)`: Converts to 64-bit integer.
 - `lua_tostring(L, idx)`: Returns C string representation.
+- `lua_touserdata(L, idx)`: Returns pointer to userdata payload.
 - `lua_type(L, idx)`: Returns type tag (LUA_TNUMBER, LUA_TSTRING, etc.).
+
+### Table Manipulation
+- `lua_newtable(L)`: Creates a new empty table.
+- `lua_gettable(L, idx)`: Pushes `t[k]`, where `t` is at `idx` and `k` is at the top of the stack.
+- `lua_settable(L, idx)`: Does `t[k] = v`, where `t` is at `idx`, `v` is at the top, and `k` is below `v`.
+- `lua_getfield(L, idx, k)`: Pushes `t[k]`.
+- `lua_setfield(L, idx, k)`: Does `t[k] = v`, where `v` is at the top.
+- `lua_rawget(L, idx)` / `lua_rawset(L, idx)`: Raw versions of table access.
+
+### Metatables
+- `lua_getmetatable(L, idx)`: Pushes the metatable of the value at `idx`.
+- `lua_setmetatable(L, idx)`: Sets the table at the top of the stack as the metatable for the value at `idx`.
+
+### Userdata
+- `lua_newuserdata(L, size)`: Allocates a new block of memory and pushes it as userdata.
+
+### Auxiliary Functions
+- `luaL_openlibs(L)`: Initializes all standard Lua libraries.
 
 ### Function Calls
 - `lua_pcall(L, nargs, nres, msgh)`: Calls a function in protected mode.
