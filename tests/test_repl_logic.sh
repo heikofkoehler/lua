@@ -18,8 +18,9 @@ echo -e "=10 * 10
 exit" | $LUA_BIN -i | grep "100"
 
 echo "Testing 'globals' command..."
-echo -e "my_special_global = 12345
-globals
-exit" | $LUA_BIN -i | grep "my_special_global" | grep "12345"
+echo -e "my_special_global = 12345\nglobals\nexit" | $LUA_BIN -i | grep "my_special_global" | grep "12345"
+
+echo "Testing 'help' command..."
+echo -e "help\nexit" | $LUA_BIN -i | grep "REPL Meta Commands"
 
 echo "All REPL logic tests passed (if greps succeeded)"

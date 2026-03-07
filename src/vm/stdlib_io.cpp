@@ -451,6 +451,44 @@ bool native_io_popen(VM* vm, int argCount) {
     return true;
 }
 
+bool native_file_lines(VM* vm, int argCount) {
+    if (argCount < 1) {
+        vm->runtimeError("file:lines expected a file");
+        return false;
+    }
+    Value fileVal = vm->peek(argCount - 1);
+    if (!fileVal.isFile()) {
+        vm->runtimeError("file:lines expected a file");
+        return false;
+    }
+    
+    for(int i=0; i<argCount; i++) vm->pop();
+
+    const char* script = 
+        "local file = ...\n"
+        "return function()\n"
+        "   return file:read('l')\n"
+        "end\n";
+
+    FunctionObject* func = vm->compileSource(script, "file:lines");
+    if (!func) return false;
+    ClosureObject* closure = vm->createClosure(func);
+    vm->setupRootUpvalues(closure);
+    
+    vm->push(Value::closure(closure));
+    vm->push(fileVal);
+    
+    size_t baseFrames = vm->currentCoroutine()->frames.size();
+    if (vm->callValue(1, 2)) {
+        if (vm->currentCoroutine()->frames.size() > baseFrames) {
+            if (!vm->run(baseFrames)) return false;
+        }
+        vm->currentCoroutine()->lastResultCount = 1;
+        return true;
+    }
+    return false;
+}
+
 } // anonymous namespace
 
 void registerIOLibrary(VM* vm, TableObject* ioTable) {
@@ -475,6 +513,7 @@ void registerIOLibrary(VM* vm, TableObject* ioTable) {
     vm->addNativeToTable(fileMethods, "seek", native_io_seek);
     vm->addNativeToTable(fileMethods, "flush", native_io_flush);
     vm->addNativeToTable(fileMethods, "setvbuf", native_io_setvbuf);
+    vm->addNativeToTable(fileMethods, "lines", native_file_lines);
     
     fileMeta->set("__index", Value::table(fileMethods));
     vm->setTypeMetatable(Value::Type::FILE, Value::table(fileMeta));

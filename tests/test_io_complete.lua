@@ -31,5 +31,17 @@ local all = f3:read("*a")
 assert(all == "line 1\nline 2\nline 3\n")
 f3:close()
 
+-- Test tmpfile
+local tf = io.tmpfile()
+assert(tf)
+tf:write("tmp data")
+tf:seek("set", 0)
+assert(tf:read("*a") == "tmp data")
+tf:close()
+
+-- Test setvbuf
+assert(io.stdout:setvbuf("no") == true)
+assert(io.stdout:setvbuf("full", 1024) == true)
+
 os.remove("test_io_temp.txt")
 print("OK: io completeness passed")

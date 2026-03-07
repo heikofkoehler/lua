@@ -888,6 +888,62 @@ bool native_test_userdata(VM* vm, int argCount) {
     return true;
 }
 
+bool native_package_searchpath(VM* vm, int argCount) {
+    if (argCount < 2 || argCount > 4) {
+        vm->runtimeError("package.searchpath expects 2 to 4 arguments");
+        return false;
+    }
+    Value v_name = vm->peek(argCount - 1);
+    Value v_path = vm->peek(argCount - 2);
+    
+    std::string name = vm->getStringValue(v_name);
+    std::string path = vm->getStringValue(v_path);
+    std::string sep = (argCount >= 3) ? vm->getStringValue(vm->peek(argCount - 3)) : ".";
+    std::string rep = (argCount >= 4) ? vm->getStringValue(vm->peek(argCount - 4)) : "/"; // System separator
+
+    // Replace sep with rep in name
+    if (!sep.empty()) {
+        size_t pos = 0;
+        while ((pos = name.find(sep, pos)) != std::string::npos) {
+            name.replace(pos, sep.length(), rep);
+            pos += rep.length();
+        }
+    }
+
+    std::string errors = "";
+    size_t start = 0;
+    while (true) {
+        size_t end = path.find(';', start);
+        std::string template_str = path.substr(start, (end == std::string::npos) ? std::string::npos : end - start);
+        
+        // Replace ? with name
+        size_t q_pos = template_str.find('?');
+        std::string filename = template_str;
+        if (q_pos != std::string::npos) {
+            filename.replace(q_pos, 1, name);
+        }
+
+        // Check if file exists and is readable
+        std::ifstream f(filename);
+        if (f.good()) {
+            for (int i = 0; i < argCount; i++) vm->pop();
+            vm->push(Value::runtimeString(vm->internString(filename)));
+            return true;
+        }
+
+        errors += "\n\tno file '" + filename + "'";
+        
+        if (end == std::string::npos) break;
+        start = end + 1;
+    }
+
+    for (int i = 0; i < argCount; i++) vm->pop();
+    vm->push(Value::nil());
+    vm->push(Value::runtimeString(vm->internString(errors)));
+    vm->currentCoroutine()->lastResultCount = 2;
+    return true;
+}
+
 bool native_package_loadlib(VM* vm, int argCount) {
     if (argCount != 2) {
         vm->runtimeError("loadlib expects 2 arguments");
@@ -1066,6 +1122,16 @@ void registerBaseLibrary(VM* vm) {
     vm->setGlobal("package", Value::table(package));
     
     vm->addNativeToTable(package, "loadlib", native_package_loadlib);
+    vm->addNativeToTable(package, "searchpath", native_package_searchpath);
+
+    // package.config
+    // 1: directory separator
+    // 2: path separator
+    // 3: substitution point (?)
+    // 4: execution-substitution point (!)
+    // 5: ignore-marker (-)
+    const char* config = "/\n;\n?\n!\n-";
+    package->set("config", Value::runtimeString(vm->internString(config)));
 
     TableObject* loaded = vm->createTable();
     package->set("loaded", Value::table(loaded));

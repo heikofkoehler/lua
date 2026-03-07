@@ -867,7 +867,7 @@ void CodeGenerator::visitForStmt(ForStmtNode* node) {
     if (node->step()) {
         node->step()->accept(*this);
     } else {
-        emitConstant(Value::number(1.0));
+        emitConstant(Value::integer(1));
     }
     addLocal("(for step)", true);
 
@@ -974,7 +974,8 @@ void CodeGenerator::visitForInStmt(ForInStmtNode* node) {
     // Let's check if we need to pad.
     // (Actually, a better way is to always ensure 3 values are on stack)
     // For now, let's assume it only pushed 1 if not a call.
-    if (!dynamic_cast<CallExprNode*>(node->iterator())) {
+    if (!dynamic_cast<CallExprNode*>(node->iterator()) && 
+        !dynamic_cast<MethodCallExprNode*>(node->iterator())) {
         emitOpCode(OpCode::OP_NIL); // state
         emitOpCode(OpCode::OP_NIL); // control
     }

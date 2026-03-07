@@ -22,7 +22,7 @@ void Chunk::write(uint8_t byte, int line) {
 
 size_t Chunk::addConstant(const Value& value) {
     for (size_t i = 0; i < constants_.size(); i++) {
-        if (constants_[i] == value) {
+        if (constants_[i].type() == value.type() && constants_[i] == value) {
             return i;
         }
     }
@@ -206,6 +206,8 @@ size_t Chunk::disassembleInstruction(size_t offset) const {
             return simpleInstruction("OP_NOT", offset);
         case OpCode::OP_BNOT:
             return simpleInstruction("OP_BNOT", offset);
+        case OpCode::OP_LEN:
+            return simpleInstruction("OP_LEN", offset);
 
         case OpCode::OP_EQUAL:
             return simpleInstruction("OP_EQUAL", offset);

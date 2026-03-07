@@ -80,4 +80,23 @@ collectgarbage("collect")
 local count1 = collectgarbage("count")
 assert(count1 > 0)
 
+-- Warn
+warn("hello", " world")
+warn("@off")
+warn("this should not be seen if control messages work")
+warn("@on")
+
+-- xpcall
+local function err_func() error("oops") end
+local function handler(err) return "handled: " .. tostring(err) end
+local ok, res = xpcall(err_func, handler)
+assert(ok == false)
+assert(string.find(res, "handled: "))
+
+-- Package
+assert(type(package.config) == "string")
+local path, err = package.searchpath("test_base_complete", "?.lua;tests/?.lua")
+assert(path ~= nil)
+assert(string.find(path, "test_base_complete.lua"))
+
 print("Base Library Tests Passed!")

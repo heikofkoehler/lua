@@ -736,12 +736,25 @@ bool native_string_format(VM* vm, int argCount) {
 }
 
 // Helper for string.pack/unpack
-static size_t get_spec_size(char spec, int& size) {
+static size_t get_spec_size(const std::string& fmt, size_t& i, char spec, int& size) {
+    size = 0;
+    if (spec == 'i' || spec == 'I') {
+        if (i + 1 < fmt.length() && isdigit((unsigned char)fmt[i+1])) {
+            size = 0;
+            while (i + 1 < fmt.length() && isdigit((unsigned char)fmt[i+1])) {
+                size = size * 10 + (fmt[++i] - '0');
+            }
+        } else {
+            size = 8; // Default native size for this VM
+        }
+        return size;
+    }
+
     switch (spec) {
         case 'b': case 'B': size = 1; return 1;
         case 'h': case 'H': size = 2; return 2;
-        case 'l': case 'L': size = 4; return 4; // Use 4 for i32
-        case 'j': case 'J': case 'T': case 'i': case 'I': size = 8; return 8; 
+        case 'l': case 'L': size = 4; return 4;
+        case 'j': case 'J': case 'T': size = 8; return 8; 
         case 'f': size = 4; return 4;
         case 'd': case 'n': size = 8; return 8;
         default: size = 0; return 0;
@@ -755,6 +768,12 @@ static void apply_alignment(size_t& offset, size_t align, std::string* result = 
             for (size_t i = 0; i < padding; i++) result->push_back('\0');
         }
         offset += padding;
+    }
+}
+
+static void swap_endian(char* data, size_t size) {
+    for (size_t i = 0; i < size / 2; i++) {
+        std::swap(data[i], data[size - 1 - i]);
     }
 }
 
@@ -780,7 +799,7 @@ bool native_string_packsize(VM* vm, int argCount) {
         }
         
         int size;
-        size_t specSize = get_spec_size(spec, size);
+        size_t specSize = get_spec_size(fmt, i, spec, size);
         if (specSize > 0 && spec != 'x') {
             size_t align = std::min(specSize, currentAlignment);
             maxAlignment = std::max(maxAlignment, align);
@@ -790,15 +809,16 @@ bool native_string_packsize(VM* vm, int argCount) {
             total += 1;
         } else if (spec == 'X') {
             if (i + 1 < fmt.length()) {
-                char nextSpec = fmt[i+1];
+                size_t next_i = i + 1;
+                char nextSpec = fmt[next_i];
                 int dummy;
-                size_t xSize = get_spec_size(nextSpec, dummy);
+                size_t xSize = get_spec_size(fmt, next_i, nextSpec, dummy);
                 if (xSize > 0 && nextSpec != 'x') {
                     size_t align = std::min(xSize, currentAlignment);
                     maxAlignment = std::max(maxAlignment, align);
                     apply_alignment(total, align);
                 }
-                i++; // Skip the next specifier so it is NOT processed as data
+                i = next_i; // Advance i to skip the processed specifier
             }
         } else if (spec == 's' || spec == 'z') {
             vm->runtimeError("variable-length format in string.packsize");
@@ -821,11 +841,16 @@ bool native_string_pack(VM* vm, int argCount) {
     std::string result;
     size_t currentAlignment = 1;
     size_t maxAlignment = 1;
+    bool littleEndian = true; // Default
     int argIdx = 1;
 
     for (size_t i = 0; i < fmt.length(); i++) {
         char spec = fmt[i];
-        if (spec == ' ' || spec == '<' || spec == '>' || spec == '=') continue;
+        if (spec == ' ') continue;
+        if (spec == '<') { littleEndian = true; continue; }
+        if (spec == '>') { littleEndian = false; continue; }
+        if (spec == '=') { littleEndian = true; continue; } // Assume native is little for now
+        
         if (spec == '!') {
             if (i + 1 < fmt.length() && isdigit((unsigned char)fmt[i+1])) {
                 currentAlignment = fmt[i+1] - '0';
@@ -838,16 +863,17 @@ bool native_string_pack(VM* vm, int argCount) {
 
         if (spec == 'X') {
             if (i + 1 < fmt.length()) {
-                char nextSpec = fmt[i+1];
+                size_t next_i = i + 1;
+                char nextSpec = fmt[next_i];
                 int dummy;
-                size_t xSize = get_spec_size(nextSpec, dummy);
+                size_t xSize = get_spec_size(fmt, next_i, nextSpec, dummy);
                 if (xSize > 0 && nextSpec != 'x') {
                     size_t align = std::min(xSize, currentAlignment);
                     maxAlignment = std::max(maxAlignment, align);
                     size_t offset = result.length();
                     apply_alignment(offset, align, &result);
                 }
-                i++; // Skip the next specifier
+                i = next_i; // Skip the next specifier
             }
             continue;
         }
@@ -858,7 +884,7 @@ bool native_string_pack(VM* vm, int argCount) {
         }
 
         int size;
-        size_t specSize = get_spec_size(spec, size);
+        size_t specSize = get_spec_size(fmt, i, spec, size);
         if (specSize > 0 || spec == 's' || spec == 'z') {
             if (argIdx >= argCount) { vm->runtimeError("bad argument to 'pack' (no value)"); return false; }
             Value val = vm->peek(argCount - 1 - argIdx);
@@ -869,6 +895,7 @@ bool native_string_pack(VM* vm, int argCount) {
                 size_t offset = result.length();
                 apply_alignment(offset, align, &result);
                 
+                size_t start = result.length();
                 if (spec == 'b' || spec == 'B') {
                     result.push_back(static_cast<unsigned char>(val.asNumber()));
                 } else if (spec == 'h' || spec == 'H') {
@@ -877,7 +904,21 @@ bool native_string_pack(VM* vm, int argCount) {
                 } else if (spec == 'l' || spec == 'L') {
                     int32_t v = static_cast<int32_t>(val.asNumber());
                     result.append(reinterpret_cast<char*>(&v), 4);
-                } else if (spec == 'i' || spec == 'I' || spec == 'j' || spec == 'J' || spec == 'T') {
+                } else if (spec == 'i' || spec == 'I') {
+                    int64_t v = val.asInteger();
+                    if (size == 1) {
+                        uint8_t v8 = static_cast<uint8_t>(v);
+                        result.append(reinterpret_cast<char*>(&v8), 1);
+                    } else if (size == 2) {
+                        uint16_t v16 = static_cast<uint16_t>(v);
+                        result.append(reinterpret_cast<char*>(&v16), 2);
+                    } else if (size == 4) {
+                        uint32_t v32 = static_cast<uint32_t>(v);
+                        result.append(reinterpret_cast<char*>(&v32), 4);
+                    } else {
+                        result.append(reinterpret_cast<char*>(&v), 8);
+                    }
+                } else if (spec == 'j' || spec == 'J' || spec == 'T') {
                     int64_t v = val.asInteger();
                     result.append(reinterpret_cast<char*>(&v), 8);
                 } else if (spec == 'f') {
@@ -887,10 +928,16 @@ bool native_string_pack(VM* vm, int argCount) {
                     double v = val.asNumber();
                     result.append(reinterpret_cast<char*>(&v), 8);
                 }
+                
+                if (!littleEndian && specSize > 1) {
+                    swap_endian(&result[start], specSize);
+                }
             } else if (spec == 's') {
                 std::string s = vm->getStringValue(val);
                 uint64_t len = s.length();
+                size_t start = result.length();
                 result.append(reinterpret_cast<char*>(&len), 8);
+                if (!littleEndian) swap_endian(&result[start], 8);
                 result.append(s);
             } else if (spec == 'z') {
                 std::string s = vm->getStringValue(val);
@@ -925,11 +972,16 @@ bool native_string_unpack(VM* vm, int argCount) {
     size_t current = pos - 1;
     size_t currentAlignment = 1;
     size_t maxAlignment = 1;
+    bool littleEndian = true;
     int results = 0;
 
     for (size_t i = 0; i < fmt.length(); i++) {
         char spec = fmt[i];
-        if (spec == ' ' || spec == '<' || spec == '>' || spec == '=') continue;
+        if (spec == ' ') continue;
+        if (spec == '<') { littleEndian = true; continue; }
+        if (spec == '>') { littleEndian = false; continue; }
+        if (spec == '=') { littleEndian = true; continue; }
+        
         if (spec == '!') {
             if (i + 1 < fmt.length() && isdigit((unsigned char)fmt[i+1])) {
                 currentAlignment = fmt[i+1] - '0';
@@ -942,15 +994,16 @@ bool native_string_unpack(VM* vm, int argCount) {
 
         if (spec == 'X') {
             if (i + 1 < fmt.length()) {
-                char nextSpec = fmt[i+1];
+                size_t next_i = i + 1;
+                char nextSpec = fmt[next_i];
                 int dummy;
-                size_t xSize = get_spec_size(nextSpec, dummy);
+                size_t xSize = get_spec_size(fmt, next_i, nextSpec, dummy);
                 if (xSize > 0 && nextSpec != 'x') {
                     size_t align = std::min(xSize, currentAlignment);
                     maxAlignment = std::max(maxAlignment, align);
                     apply_alignment(current, align);
                 }
-                i++; // Skip the next specifier
+                i = next_i; // Skip the next specifier
             }
             continue;
         }
@@ -961,7 +1014,7 @@ bool native_string_unpack(VM* vm, int argCount) {
         }
 
         int size;
-        size_t specSize = get_spec_size(spec, size);
+        size_t specSize = get_spec_size(fmt, i, spec, size);
         if (specSize > 0) {
             size_t align = std::min(specSize, currentAlignment);
             maxAlignment = std::max(maxAlignment, align);
@@ -969,22 +1022,39 @@ bool native_string_unpack(VM* vm, int argCount) {
             
             if (current + specSize > data.length()) { vm->runtimeError("data string too short"); return false; }
             
+            char buf[8];
+            std::memcpy(buf, &data[current], specSize);
+            if (!littleEndian && specSize > 1) swap_endian(buf, specSize);
+
             if (spec == 'b' || spec == 'B') {
-                vm->push(Value::number(static_cast<unsigned char>(data[current])));
+                vm->push(Value::number(static_cast<unsigned char>(buf[0])));
             } else if (spec == 'h' || spec == 'H') {
-                int16_t v; std::memcpy(&v, &data[current], 2);
+                int16_t v; std::memcpy(&v, buf, 2);
                 vm->push(Value::number(v));
             } else if (spec == 'l' || spec == 'L') {
-                int32_t v; std::memcpy(&v, &data[current], 4);
+                int32_t v; std::memcpy(&v, buf, 4);
                 vm->push(Value::number(v));
-            } else if (spec == 'i' || spec == 'I' || spec == 'j' || spec == 'J' || spec == 'T') {
-                int64_t v; std::memcpy(&v, &data[current], 8);
+            } else if (spec == 'i' || spec == 'I') {
+                if (size == 1) {
+                    vm->push(Value::integer(static_cast<int8_t>(buf[0])));
+                } else if (size == 2) {
+                    int16_t v; std::memcpy(&v, buf, 2);
+                    vm->push(Value::integer(v));
+                } else if (size == 4) {
+                    int32_t v; std::memcpy(&v, buf, 4);
+                    vm->push(Value::integer(v));
+                } else {
+                    int64_t v; std::memcpy(&v, buf, 8);
+                    vm->push(Value::integer(v));
+                }
+            } else if (spec == 'j' || spec == 'J' || spec == 'T') {
+                int64_t v; std::memcpy(&v, buf, 8);
                 vm->push(Value::integer(v));
             } else if (spec == 'f') {
-                float v; std::memcpy(&v, &data[current], 4);
+                float v; std::memcpy(&v, buf, 4);
                 vm->push(Value::number(v));
             } else if (spec == 'n' || spec == 'd') {
-                double v; std::memcpy(&v, &data[current], 8);
+                double v; std::memcpy(&v, buf, 8);
                 vm->push(Value::number(v));
             }
             current += specSize;
@@ -993,6 +1063,7 @@ bool native_string_unpack(VM* vm, int argCount) {
             if (current + 8 > data.length()) { vm->runtimeError("data string too short"); return false; }
             uint64_t len;
             std::memcpy(&len, &data[current], 8);
+            if (!littleEndian) swap_endian(reinterpret_cast<char*>(&len), 8);
             current += 8;
             if (current + len > data.length()) { vm->runtimeError("data string too short"); return false; }
             vm->push(Value::runtimeString(vm->internString(data.substr(current, len))));
