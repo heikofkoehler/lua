@@ -31,4 +31,15 @@ print("OK: stop/restart")
 collectgarbage("collect")
 print("OK: collect")
 
+-- 6. Test count
+local count = collectgarbage("count")
+assert(type(count) == "number")
+assert(count > 0)
+print("OK: count =", count)
+
+-- 7. Test step
+local finished = collectgarbage("step")
+assert(type(finished) == "boolean")
+print("OK: step =", finished)
+
 print("collectgarbage tests passed!")

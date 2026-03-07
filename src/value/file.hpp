@@ -48,6 +48,12 @@ public:
     // Read one line
     std::string readLine();
 
+    // Peek next character
+    int peek();
+
+    // Read next character
+    int getChar();
+
     // Close file
     void close();
 

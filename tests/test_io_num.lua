@@ -1,0 +1,16 @@
+local f = io.open("test_num.txt", "w")
+f:write("123 456.78 -99")
+f:close()
+
+local f2 = io.open("test_num.txt", "r")
+local n1 = f2:read("*n")
+local n2 = f2:read("*n")
+local n3 = f2:read("*n")
+f2:close()
+os.remove("test_num.txt")
+
+print("n1:", n1, "n2:", n2, "n3:", n3)
+assert(n1 == 123)
+assert(n2 == 456.78)
+assert(n3 == -99)
+print("IO numeric read passed!")

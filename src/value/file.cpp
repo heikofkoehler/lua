@@ -118,6 +118,22 @@ std::string FileObject::readLine() {
     return line;
 }
 
+int FileObject::peek() {
+    if (!isOpen()) return EOF;
+    if (cfile_) {
+        int c = fgetc(cfile_);
+        if (c != EOF) ungetc(c, cfile_);
+        return c;
+    }
+    return stream_->peek();
+}
+
+int FileObject::getChar() {
+    if (!isOpen()) return EOF;
+    if (cfile_) return fgetc(cfile_);
+    return stream_->get();
+}
+
 void FileObject::close() {
     if (isOpen_) {
         if (cfile_) {

@@ -89,8 +89,25 @@ local res, err = package.searchpath("test_base_complete", path)
 assert(res ~= nil)
 assert(string.find(res, "test_base_complete.lua"))
 
+print("=== Testing string.gsub with nested captures ===")
+assert_eq(string.gsub("hello", "((he)llo)", "%2-%1"), "he-hello")
+
+print("=== Testing table.insert at start ===")
+local ti = {2, 3}
+table.insert(ti, 1, 1)
+assert_eq(ti[1], 1)
+assert_eq(ti[2], 2)
+assert_eq(ti[3], 3)
+
 print("=== Testing OS Clock/Getenv ===")
 assert(type(os.clock()) == "number")
 assert(os.getenv("PATH") ~= nil)
+
+print("=== Testing Pcall Multi-return ===")
+local ok, a, b, c = pcall(function() return 1, 2, 3 end)
+assert_eq(ok, true)
+assert_eq(a, 1)
+assert_eq(b, 2)
+assert_eq(c, 3)
 
 print("\nDEEP STDLIB TESTS PASSED!")

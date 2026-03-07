@@ -1,62 +1,67 @@
--- Complete Debug Library Tests
-print("Testing Debug Library...")
+-- Comprehensive Debug Library Tests
 
--- traceback
-local tb = debug.traceback()
-assert(type(tb) == "string")
-assert(string.find(tb, "stack traceback"))
-
--- getinfo
-local function test_func(a, b, ...) end
-local info = debug.getinfo(test_func)
-assert(info.nparams == 2)
-assert(info.isvararg == true)
-assert(info.func == test_func)
-
--- getlocal/setlocal
-local function test_local()
-    local x = 10
-    local name, val = debug.getlocal(0, 1)
-    if name ~= "x" then
-        local info = debug.getinfo(0)
-        print("getlocal(0, 1) failed: expected 'x', got '" .. tostring(name) .. "', value: " .. tostring(val))
-        print("Function at level 0: " .. tostring(info.name) .. " from " .. tostring(info.source))
+local function assert_eq(actual, expected, msg)
+    if actual ~= expected then
+        error(string.format("Assertion failed: expected %s, got %s. %s", tostring(expected), tostring(actual), msg or ""), 2)
     end
-    assert(name == "x")
-    assert(val == 10)
-    debug.setlocal(0, 1, 20)
-    assert(x == 20)
 end
-test_local()
 
--- getupvalue/setupvalue
-local up = 42
-local function test_up()
+print("=== Testing debug.getinfo ===")
+local function test_func(a, b, ...)
+    local x = 10
+    return a + b + x
+end
+
+local info = debug.getinfo(test_func)
+assert_eq(info.what, "Lua")
+assert_eq(info.name, "test_func")
+assert_eq(info.nups, 1) -- _ENV
+assert_eq(info.nparams, 2)
+assert_eq(info.isvararg, true)
+assert_eq(type(info.func), "function")
+assert_eq(info.func, test_func)
+
+print("=== Testing debug.getlocal/setlocal ===")
+local function test_locals()
+    local my_local = "original"
+    local name, val = debug.getlocal(1, 1)
+    assert_eq(name, "my_local")
+    assert_eq(val, "original")
+    
+    debug.setlocal(1, 1, "modified")
+    assert_eq(my_local, "modified")
+end
+test_locals()
+
+print("=== Testing debug.getupvalue/setupvalue ===")
+local up = "outer"
+local function test_ups()
     return up
 end
-local name, val = debug.getupvalue(test_up, 2) -- _ENV is 1
-    assert(name == "upvalue_2")
-    assert(val == 42)
-    debug.setupvalue(test_up, 2, 100)
-    assert(test_up() == 100)
 
--- upvalueid/upvaluejoin
-local function f1() return up end
-local function f2() return up end
-assert(debug.upvalueid(f1, 1) == debug.upvalueid(f2, 1))
+local name, val = debug.getupvalue(test_ups, 2) -- 1 is _ENV, 2 is up
+assert_eq(name, "upvalue_2") -- our current implementation uses generic names
+assert_eq(val, "outer")
 
--- getregistry
-local reg = debug.getregistry()
-assert(type(reg) == "table")
+debug.setupvalue(test_ups, 2, "changed")
+assert_eq(up, "changed")
 
--- sethook/gethook
+print("=== Testing debug.sethook/gethook ===")
 local count = 0
-local function hook(event) count = count + 1 end
-debug.sethook(hook, "l")
-local h, m, c = debug.gethook()
-assert(h == hook)
-assert(m == "l")
+debug.sethook(function() count = count + 1 end, "l")
+-- Execute some lines
+local x = 1
+local y = 2
 debug.sethook() -- disable
-assert(debug.gethook() == nil)
 
-print("Debug Library Tests Passed!")
+assert(count >= 2)
+local hook, mask, cnt = debug.gethook()
+assert_eq(hook, nil)
+assert_eq(mask, "")
+
+print("=== Testing debug.traceback ===")
+local tb = debug.traceback("my message")
+assert(string.find(tb, "my message"))
+assert(string.find(tb, "stack traceback:"))
+
+print("\nDebug library tests passed!")

@@ -99,7 +99,7 @@ bool native_debug_getlocal(VM* vm, int argCount) {
     int index = static_cast<int>(vm->peek(0).asNumber());
     int level = static_cast<int>(vm->peek(1).asNumber());
 
-    CallFrame* frame = vm->getFrame(level);
+    CallFrame* frame = vm->getFrame(level - 1);
     if (!frame || !frame->closure) {
         for(int i=0; i<argCount; i++) vm->pop();
         vm->push(Value::nil());
@@ -124,8 +124,7 @@ bool native_debug_getlocal(VM* vm, int argCount) {
     }
 
     if (!found) {
-        // Simple fallback if PC-based lookup fails: just use the slot directly if it's within range
-        // This is useful for parameters which might have startPC=0
+        // Simple fallback if PC-based lookup fails
         for (const auto& l : locals) {
             if (l.slot == index - 1) {
                 name = l.name;
@@ -157,7 +156,7 @@ bool native_debug_setlocal(VM* vm, int argCount) {
     int index = static_cast<int>(vm->peek(1).asNumber());
     int level = static_cast<int>(vm->peek(2).asNumber());
 
-    CallFrame* frame = vm->getFrame(level);
+    CallFrame* frame = vm->getFrame(level - 1);
     if (!frame || !frame->closure) {
         for(int i=0; i<argCount; i++) vm->pop();
         vm->push(Value::nil());
@@ -172,7 +171,7 @@ bool native_debug_setlocal(VM* vm, int argCount) {
     bool found = false;
 
     for (const auto& l : locals) {
-        if (l.slot == index - 1) { // Simplified: just use slot index
+        if (l.slot == index - 1) {
             name = l.name;
             slot = l.slot;
             found = true;

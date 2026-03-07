@@ -99,13 +99,58 @@ static bool read_item(VM* vm, FileObject* file, std::string fmt, Value& res) {
         res = Value::runtimeString(vm->internString(result));
         return true;
     } else if (fmt == "n" || fmt == "*n") {
-        double d;
         if (file) {
-            // Very basic numeric read for now
-            std::string s = file->readAll(); // This is wrong, should peek/read only number
-            // Re-implementing correctly requires a smarter FileObject
-            return false; 
+            // Skip whitespace
+            int c = file->peek();
+            while (c != EOF && std::isspace(c)) {
+                file->getChar();
+                c = file->peek();
+            }
+            
+            if (c == EOF) return false;
+
+            std::string s;
+            // Handle optional sign
+            if (c == '+' || c == '-') {
+                s += (char)file->getChar();
+                c = file->peek();
+            }
+
+            // Read digits and optional decimal point
+            bool hasDecimal = false;
+            while (c != EOF && (std::isdigit(c) || (!hasDecimal && c == '.'))) {
+                if (c == '.') hasDecimal = true;
+                s += (char)file->getChar();
+                c = file->peek();
+            }
+
+            // Handle scientific notation
+            if (c == 'e' || c == 'E') {
+                s += (char)file->getChar();
+                c = file->peek();
+                if (c == '+' || c == '-') {
+                    s += (char)file->getChar();
+                    c = file->peek();
+                }
+                while (c != EOF && std::isdigit(c)) {
+                    s += (char)file->getChar();
+                    c = file->peek();
+                }
+            }
+
+            if (s.empty() || s == "+" || s == "-" || s == ".") return false;
+
+            try {
+                size_t processed;
+                double d = std::stod(s, &processed);
+                if (processed == 0) return false;
+                res = Value::number(d);
+                return true;
+            } catch (...) {
+                return false;
+            }
         } else {
+            double d;
             if (!(std::cin >> d)) return false;
             res = Value::number(d);
             return true;

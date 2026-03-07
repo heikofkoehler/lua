@@ -9,6 +9,8 @@ assert(string.upper("hello") == "HELLO")
 assert(string.lower("WORLD") == "world")
 assert(string.reverse("abc") == "cba")
 assert(string.byte("ABC", 2) == 66)
+local b1, b2, b3 = string.byte("ABC", 1, 3)
+assert(b1 == 65 and b2 == 66 and b3 == 67)
 assert(string.char(65, 66) == "AB")
 
 -- Pattern matching

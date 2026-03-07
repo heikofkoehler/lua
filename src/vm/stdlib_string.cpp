@@ -160,16 +160,61 @@ const char* match_capture(MatchState* ms, const char* s, int l) {
     return nullptr;
 }
 
+const char* match_balanced(MatchState* ms, const char* s, const char* p) {
+    if (s >= ms->src_end || *s != *p) return nullptr;
+    char b = *p;
+    char e = *(p + 1);
+    int cont = 1;
+    while (++s < ms->src_end) {
+        if (*s == e) {
+            if (--cont == 0) return s + 1;
+        } else if (*s == b) cont++;
+    }
+    return nullptr;
+}
+
+const char* match_frontier(MatchState* ms, const char* s, const char* p) {
+    const char* ep = class_end(ms, p);
+    char prev = (s == ms->src_init) ? '\0' : *(s - 1);
+    char curr = (s == ms->src_end) ? '\0' : *s;
+    if (!single_match(prev, p, ep) && single_match(curr, p, ep))
+        return s;
+    return nullptr;
+}
+
 const char* match(MatchState* ms, const char* s, const char* p) {
     if (p == ms->p_end) return s;
     
     switch (*p) {
         case '(':
-            if (*(p + 1) == ')') return match(ms, s, p + 2); // position capture
+            if (*(p + 1) == ')') { // position capture
+                int level = ms->level;
+                if (level >= 32) ms->vm->runtimeError("too many captures");
+                ms->capture[level].init = s;
+                ms->capture[level].len = -1;
+                ms->level = level + 1;
+                const char* res = match(ms, s, p + 2);
+                if (!res) ms->level--;
+                return res;
+            }
             return start_capture(ms, s, p + 1);
         case ')':
             return end_capture(ms, s, p + 1);
         case '%':
+            if (p[1] == 'b') { // balanced string
+                if (p + 3 >= ms->p_end) ms->vm->runtimeError("malformed pattern (missing arguments to '%b')");
+                const char* res = match_balanced(ms, s, p + 2);
+                if (res) return match(ms, res, p + 4);
+                return nullptr;
+            }
+            if (p[1] == 'f') { // frontier pattern
+                p += 2;
+                if (*p != '[') ms->vm->runtimeError("missing '[' after '%f' in pattern");
+                const char* ep = class_end(ms, p);
+                const char* res = match_frontier(ms, s, p);
+                if (res) return match(ms, res, ep);
+                return nullptr;
+            }
             if (isdigit((unsigned char)p[1])) {
                 const char* res = match_capture(ms, s, p[1]);
                 if (res) return match(ms, res, p + 2);

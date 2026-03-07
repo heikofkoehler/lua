@@ -55,6 +55,11 @@ bool native_table_insert(VM* vm, int argCount) {
             n++;
         }
 
+        if (pos < 1 || pos > n) {
+            vm->runtimeError("bad argument #2 to 'insert' (position out of bounds)");
+            return false;
+        }
+
         for (int i = n; i >= pos; i--) {
             table->set(Value::number(i + 1), table->get(Value::number(i)));
         }
@@ -89,6 +94,11 @@ bool native_table_remove(VM* vm, int argCount) {
     n--;
 
     int pos = posVal.isNil() ? n : static_cast<int>(posVal.asNumber());
+
+    if (pos > n + 1 || (pos < 1 && n > 0)) {
+        vm->runtimeError("bad argument #2 to 'remove' (position out of bounds)");
+        return false;
+    }
 
     Value removed = Value::nil();
     if (pos >= 1 && pos <= n) {
@@ -126,6 +136,11 @@ bool native_table_concat(VM* vm, int argCount) {
     while (true) {
         Value val = table->get(Value::number(i));
         if (val.isNil()) break;
+
+        if (!val.isString() && !val.isNumber()) {
+            vm->runtimeError("invalid value ( " + val.typeToString() + ") at index " + std::to_string(i) + " in table for 'concat'");
+            return false;
+        }
 
         if (i > 1) result += sep;
         result += vm->getStringValue(val);
