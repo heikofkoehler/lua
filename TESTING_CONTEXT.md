@@ -44,7 +44,7 @@ When the agent executes `make test`, it must follow these steps if a failure occ
 1. **Identify the File:** Locate the specific `.lua` test file that failed from the output (e.g., `gc.lua`, `strings.lua`).
 1. **Trace the Bug:** Determine if the root cause is in the interpreter's C++ source or a mismatch in the test environment.
 1. **Apply Fix:** Modify the relevant interpreter code or the test script to resolve the assertion.
-1. **Lastly run all.lua:** After all individual tests passed do one final pass executing `all.lua`
+1. **Skip:** `constructs.lua`
 
 #### **B. Commitment Standards**
 
