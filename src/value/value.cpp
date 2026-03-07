@@ -39,8 +39,7 @@ std::string Value::typeToString() const {
         case Type::INTEGER: return "number";
         case Type::BOOL: return "boolean";
         case Type::NIL: return "nil";
-        case Type::STRING:
-        case Type::RUNTIME_STRING: return "string";
+        case Type::STRING: return "string";
         case Type::TABLE: return "table";
         case Type::FUNCTION:
         case Type::CLOSURE:
@@ -79,8 +78,13 @@ void Value::print(std::ostream& os) const {
             break;
         }
         case Type::FUNCTION: os << "<function:" << asFunctionIndex() << ">"; break;
-        case Type::STRING: os << "<string:" << asStringIndex() << ">"; break;
-        case Type::RUNTIME_STRING: os.write(asStringObj()->chars(), asStringObj()->length()); break;
+        case Type::STRING: 
+            if (isRuntimeString()) {
+                os.write(asStringObj()->chars(), asStringObj()->length()); 
+            } else {
+                os << "<string:" << asStringIndex() << ">"; 
+            }
+            break;
         case Type::TABLE: os << "table: " << asTableObj(); break;
         case Type::CLOSURE: os << "function: " << asClosureObj(); break;
         case Type::FILE: os << "file: " << asFileObj(); break;
@@ -89,6 +93,7 @@ void Value::print(std::ostream& os) const {
         case Type::C_FUNCTION: os << "<C function>"; break;
         case Type::THREAD: os << "thread: " << asThreadObj(); break;
         case Type::USERDATA: os << "userdata: " << asUserdataObj(); break;
+        case Type::UPVALUE: os << "upvalue: " << asObj(); break;
     }
 }
 
@@ -105,15 +110,17 @@ bool Value::operator==(const Value& other) const {
         return false;
     }
 
-    if (isRuntimeString()) {
-        return asStringObj()->equals(other.asStringObj());
+    if (isString()) {
+        if (isRuntimeString() && other.isRuntimeString()) {
+            return asStringObj()->equals(other.asStringObj());
+        }
+        return bits_ == other.bits_; // If both compile time
     }
 
     switch (type()) {
         case Type::NIL: return true;
         case Type::BOOL: return asBool() == other.asBool();
         case Type::FUNCTION: return asFunctionIndex() == other.asFunctionIndex();
-        case Type::STRING: return asStringIndex() == other.asStringIndex();
         case Type::NATIVE_FUNCTION: return asNativeFunctionIndex() == other.asNativeFunctionIndex();
         case Type::C_FUNCTION: return asCFunction() == other.asCFunction();
         default: return asObj() == other.asObj();
@@ -141,10 +148,12 @@ size_t Value::hash() const {
 
     switch (type()) {
         case Type::BOOL: return std::hash<bool>()(asBool());
-        case Type::STRING: return std::hash<size_t>()(asStringIndex());
-        case Type::RUNTIME_STRING: {
-            StringObject* obj = asStringObj();
-            return std::hash<std::string_view>()(std::string_view(obj->chars(), obj->length()));
+        case Type::STRING: {
+            if (isRuntimeString()) {
+                StringObject* obj = asStringObj();
+                return std::hash<std::string_view>()(std::string_view(obj->chars(), obj->length()));
+            }
+            return std::hash<size_t>()(asStringIndex());
         }
         case Type::NATIVE_FUNCTION: return std::hash<size_t>()(asNativeFunctionIndex());
         case Type::C_FUNCTION: return std::hash<void*>()(asCFunction());
@@ -155,7 +164,7 @@ size_t Value::hash() const {
 }
 
 void Value::serialize(std::ostream& os, const Chunk* chunk) const {
-    uint8_t t = static_cast<uint8_t>(type());
+    uint16_t t = static_cast<uint16_t>(type());
     os.write(reinterpret_cast<const char*>(&t), sizeof(t));
     
     switch (type()) {
@@ -176,6 +185,9 @@ void Value::serialize(std::ostream& os, const Chunk* chunk) const {
             break;
         }
         case Type::STRING: {
+            if (isRuntimeString()) {
+                throw std::runtime_error("Cannot serialize runtime string");
+            }
             StringObject* str = chunk->getString(asStringIndex());
             uint32_t len = static_cast<uint32_t>(str->length());
             os.write(reinterpret_cast<const char*>(&len), sizeof(len));
@@ -193,8 +205,8 @@ void Value::serialize(std::ostream& os, const Chunk* chunk) const {
 }
 
 Value Value::deserialize(std::istream& is, Chunk* chunk) {
-    uint8_t t;
-    is.read(reinterpret_cast<char*>(&t), sizeof(t));
+    uint16_t t;
+    if (!is.read(reinterpret_cast<char*>(&t), sizeof(t))) return Value::nil();
     Type type = static_cast<Type>(t);
     
     switch (type) {
@@ -228,6 +240,6 @@ Value Value::deserialize(std::istream& is, Chunk* chunk) {
             return Value::function(idx);
         }
         default:
-            throw std::runtime_error("Cannot deserialize unknown value type");
+            throw std::runtime_error("Cannot deserialize unknown value type: " + std::to_string(t));
     }
 }

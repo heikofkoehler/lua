@@ -4,6 +4,7 @@
 #include "common/common.hpp"
 #include <cstring>
 #include <cmath>
+#include <cstdint>
 
 // Forward declarations
 class FunctionObject;
@@ -17,206 +18,211 @@ class SocketObject;
 class CoroutineObject;
 class UserdataObject;
 
+/*
+ * NaN-Boxing Value Representation (64-bit)
+ * ---------------------------------------
+ * Values are stored as 64-bit doubles.
+ * If the value is not a NaN, it's a standard Lua number (double).
+ * If it is a NaN, the lower bits store the type and payload.
+ *
+ * We use a Quiet NaN with the sign bit set (0xFFF0...) as our base.
+ *
+ * Tags:
+ * 0xFFF1: Nil
+ * 0xFFF2: Boolean
+ * 0xFFF3: Integer (32-bit in lower 32 bits)
+ * 0xFFF4: String (Index in lower 32 bits)
+ * 0xFFF5: Table (Pointer in lower 48 bits)
+ * 0xFFF6: Closure (Pointer)
+ * 0xFFF7: Function (Pointer)
+ * 0xFFF8: Native Function (Index)
+ * 0xFFF9: Userdata (Pointer)
+ * 0xFFFA: Thread/Coroutine (Pointer)
+ * 0xFFFB: Upvalue (Pointer)
+ * 0xFFFC: C Function (Pointer)
+ */
+
 class Value {
 public:
-    enum class Type : uint8_t {
-        NIL,
-        BOOL,
-        NUMBER, // Float
-        INTEGER,
-        FUNCTION, // Compile-time function index
-        STRING,   // Compile-time string index
-        TABLE,    // Pointer to TableObject
-        CLOSURE,  // Pointer to ClosureObject
-        FILE,     // Pointer to FileObject
-        SOCKET,   // Pointer to SocketObject
-        RUNTIME_STRING, // Pointer to StringObject
-        NATIVE_FUNCTION, // Native function index
-        C_FUNCTION,      // lua_CFunction pointer
-        THREAD,   // Pointer to CoroutineObject
-        USERDATA  // Pointer to UserdataObject
+    enum class Type : uint16_t {
+        NIL             = 0xFFF1,
+        BOOL            = 0xFFF2,
+        INTEGER         = 0xFFF3,
+        STRING          = 0xFFF4,
+        TABLE           = 0xFFF5,
+        CLOSURE         = 0xFFF6,
+        FUNCTION        = 0xFFF7,
+        NATIVE_FUNCTION = 0xFFF8,
+        USERDATA        = 0xFFF9,
+        THREAD          = 0xFFFA,
+        UPVALUE         = 0xFFFB,
+        C_FUNCTION      = 0xFFFC,
+        FILE            = 0xFFFD,
+        SOCKET          = 0xFFFE,
+        
+        // Pseudo-types for type checking
+        NUMBER          = 0x0000, 
     };
 
-    static constexpr int NUM_TYPES = 15;
+    static constexpr int NUM_TYPES = 17;
 
 private:
-    Type type_;
-    union {
-        bool boolean_;
-        double number_;
-        int64_t integer_;
-        size_t index_;
-        GCObject* obj_;
-        void* cfunc_; // for lua_CFunction
-    };
+    uint64_t bits_;
+
+    static constexpr uint64_t QNAN = 0x7FF0000000000000ULL;
+    static constexpr uint64_t SIGN_BIT = 0x8000000000000000ULL;
+    static constexpr uint64_t TAG_MASK = 0xFFFF000000000000ULL;
+
+    constexpr explicit Value(uint64_t bits) : bits_(bits) {}
+
+    static constexpr uint64_t encodeTag(Type type) {
+        return QNAN | SIGN_BIT | (static_cast<uint64_t>(type) << 48);
+    }
 
 public:
-    Value() : type_(Type::NIL) { integer_ = 0; }
+    constexpr Value() : bits_(encodeTag(Type::NIL)) {}
 
-    static Value nil() {
-        return Value();
+    static constexpr Value nil() {
+        return Value(encodeTag(Type::NIL));
     }
 
-    static Value cFunction(void* f) {
-        Value v;
-        v.type_ = Type::C_FUNCTION;
-        v.cfunc_ = f;
-        return v;
-    }
-
-    static Value boolean(bool value) {
-        Value v;
-        v.type_ = Type::BOOL;
-        v.boolean_ = value;
-        return v;
+    static constexpr Value boolean(bool value) {
+        return Value(encodeTag(Type::BOOL) | (value ? 1 : 0));
     }
 
     static Value number(double value) {
-        Value v;
-        v.type_ = Type::NUMBER;
-        v.number_ = value;
-        return v;
+        uint64_t bits;
+        std::memcpy(&bits, &value, sizeof(double));
+        return Value(bits);
     }
 
-    static Value integer(int64_t value) {
-        Value v;
-        v.type_ = Type::INTEGER;
-        v.integer_ = value;
-        return v;
+    static constexpr Value integer(int64_t value) {
+        // We store integers as 32-bit for simplicity in this NaN-box scheme
+        // or we could use the full 48 bits if needed. Let's use 32-bit.
+        return Value(encodeTag(Type::INTEGER) | (static_cast<uint64_t>(static_cast<uint32_t>(value))));
     }
 
-    static Value function(size_t funcIndex) {
-        Value v;
-        v.type_ = Type::FUNCTION;
-        v.index_ = funcIndex;
-        return v;
+    static constexpr Value function(size_t funcIndex) {
+        return Value(encodeTag(Type::FUNCTION) | static_cast<uint64_t>(funcIndex));
     }
 
-    static Value string(size_t stringIndex) {
-        Value v;
-        v.type_ = Type::STRING;
-        v.index_ = stringIndex;
-        return v;
+    static constexpr Value string(size_t stringIndex) {
+        return Value(encodeTag(Type::STRING) | static_cast<uint64_t>(stringIndex));
     }
 
     static Value runtimeString(StringObject* str) {
-        Value v;
-        v.type_ = Type::RUNTIME_STRING;
-        v.obj_ = reinterpret_cast<GCObject*>(str);
-        return v;
+        return Value(encodeTag(Type::STRING) | reinterpret_cast<uint64_t>(str));
     }
 
     static Value table(TableObject* table) {
-        Value v;
-        v.type_ = Type::TABLE;
-        v.obj_ = reinterpret_cast<GCObject*>(table);
-        return v;
+        return Value(encodeTag(Type::TABLE) | reinterpret_cast<uint64_t>(table));
     }
 
     static Value closure(ClosureObject* closure) {
-        Value v;
-        v.type_ = Type::CLOSURE;
-        v.obj_ = reinterpret_cast<GCObject*>(closure);
-        return v;
+        return Value(encodeTag(Type::CLOSURE) | reinterpret_cast<uint64_t>(closure));
     }
 
     static Value file(FileObject* file) {
-        Value v;
-        v.type_ = Type::FILE;
-        v.obj_ = reinterpret_cast<GCObject*>(file);
-        return v;
+        return Value(encodeTag(Type::FILE) | reinterpret_cast<uint64_t>(file));
     }
 
     static Value socket(SocketObject* socket) {
-        Value v;
-        v.type_ = Type::SOCKET;
-        v.obj_ = reinterpret_cast<GCObject*>(socket);
-        return v;
+        return Value(encodeTag(Type::SOCKET) | reinterpret_cast<uint64_t>(socket));
     }
 
-    static Value nativeFunction(size_t funcIndex) {
-        Value v;
-        v.type_ = Type::NATIVE_FUNCTION;
-        v.index_ = funcIndex;
-        return v;
+    static Value userdata(UserdataObject* udata) {
+        return Value(encodeTag(Type::USERDATA) | reinterpret_cast<uint64_t>(udata));
     }
 
-    static Value thread(CoroutineObject* thread) {
-        Value v;
-        v.type_ = Type::THREAD;
-        v.obj_ = reinterpret_cast<GCObject*>(thread);
-        return v;
+    static Value thread(CoroutineObject* coroutine) {
+        return Value(encodeTag(Type::THREAD) | reinterpret_cast<uint64_t>(coroutine));
     }
 
-    static Value userdata(UserdataObject* userdata) {
-        Value v;
-        v.type_ = Type::USERDATA;
-        v.obj_ = reinterpret_cast<GCObject*>(userdata);
-        return v;
+    static Value nativeFunction(size_t index) {
+        return Value(encodeTag(Type::NATIVE_FUNCTION) | static_cast<uint64_t>(index));
+    }
+
+    static Value cFunction(void* f) {
+        return Value(encodeTag(Type::C_FUNCTION) | reinterpret_cast<uint64_t>(f));
     }
 
     static Value fromObj(GCObject* obj);
 
+    // Raw access
+    uint64_t bits() const { return bits_; }
+
     // Type checking
-    bool isNil() const { return type_ == Type::NIL; }
-    bool isBool() const { return type_ == Type::BOOL; }
-    bool isInteger() const { return type_ == Type::INTEGER; }
-    bool isFloat() const { return type_ == Type::NUMBER; }
-    bool isNumber() const { return type_ == Type::NUMBER || type_ == Type::INTEGER; }
-    
-    bool isFunctionObject() const { return type_ == Type::FUNCTION; }
-    bool isString() const { return type_ == Type::STRING || type_ == Type::RUNTIME_STRING; }
-    
-    bool isRuntimeString() const { return type_ == Type::RUNTIME_STRING; }
-    bool isTable() const { return type_ == Type::TABLE; }
-    bool isClosure() const { return type_ == Type::CLOSURE; }
-    bool isFile() const { return type_ == Type::FILE; }
-    bool isSocket() const { return type_ == Type::SOCKET; }
-    bool isNativeFunction() const { return type_ == Type::NATIVE_FUNCTION; }
-    bool isCFunction() const { return type_ == Type::C_FUNCTION; }
-    bool isThread() const { return type_ == Type::THREAD; }
-    bool isUserdata() const { return type_ == Type::USERDATA; }
+    bool isFloat() const { 
+        // Any value where the top 16 bits are NOT 0xFFF1 through 0xFFFF is a float.
+        // Wait, what about encodeTag(Type::NIL) -> 0xFFF1...
+        // The base tag is 0xFFF0...
+        // Let's check if the top 16 bits are >= 0xFFF1. If so, it's a boxed value.
+        // If not, it's a number (including NaN, Infinity, -Infinity, etc.)
+        return (bits_ >> 48) < 0xFFF1;
+    }
+    bool isNumber() const { return isFloat() || isInteger(); }
+    bool isNil() const { return bits_ == encodeTag(Type::NIL); }
+    bool isBool() const { return (bits_ & TAG_MASK) == encodeTag(Type::BOOL); }
+    bool isInteger() const { return (bits_ & TAG_MASK) == encodeTag(Type::INTEGER); }
+    bool isString() const { return (bits_ & TAG_MASK) == encodeTag(Type::STRING); }
+    bool isTable() const { return (bits_ & TAG_MASK) == encodeTag(Type::TABLE); }
+    bool isClosure() const { return (bits_ & TAG_MASK) == encodeTag(Type::CLOSURE); }
+    bool isUserdata() const { return (bits_ & TAG_MASK) == encodeTag(Type::USERDATA); }
+    bool isFile() const { return (bits_ & TAG_MASK) == encodeTag(Type::FILE); }
+    bool isSocket() const { return (bits_ & TAG_MASK) == encodeTag(Type::SOCKET); }
+    bool isThread() const { return (bits_ & TAG_MASK) == encodeTag(Type::THREAD); }
+    bool isNativeFunction() const { return (bits_ & TAG_MASK) == encodeTag(Type::NATIVE_FUNCTION); }
+    bool isCFunction() const { return (bits_ & TAG_MASK) == encodeTag(Type::C_FUNCTION); }
+    bool isFunctionObject() const { return (bits_ & TAG_MASK) == encodeTag(Type::FUNCTION); }
+    bool isRuntimeString() const { return isString() && (bits_ & 0xFFFFFFFFFFFFULL) > 0x10000; }
 
     bool isFunction() const {
         return isFunctionObject() || isClosure() || isNativeFunction() || isCFunction();
     }
 
     bool isObj() const {
-        return type_ == Type::TABLE || type_ == Type::CLOSURE || type_ == Type::FILE || 
-               type_ == Type::SOCKET || type_ == Type::RUNTIME_STRING || type_ == Type::THREAD ||
-               type_ == Type::USERDATA;
+        // Most tagged types in our VM are GC objects if they aren't numbers, bools, nils or indices.
+        return isTable() || isClosure() || isUserdata() || isThread() || isFile() || isSocket() || isRuntimeString();
     }
 
-    Type type() const { return type_; }
+    Type type() const {
+        if (isInteger()) return Type::INTEGER;
+        if (isFloat()) return Type::NUMBER;
+        return static_cast<Type>((bits_ & 0x000F000000000000ULL) >> 48 | 0xFFF0);
+    }
 
     // Value extraction
-    bool asBool() const { return boolean_; }
+    bool asBool() const { return (bits_ & 1) != 0; }
+    
+    double asNumber() const {
+        if (isInteger()) {
+            return static_cast<double>(static_cast<int32_t>(bits_ & 0xFFFFFFFFULL));
+        }
+        union { uint64_t b; double d; } u;
+        u.b = bits_;
+        return u.d;
+    }
 
     int64_t asInteger() const {
-        if (isInteger()) return integer_;
-        return static_cast<int64_t>(number_);
+        if (isInteger()) return static_cast<int64_t>(static_cast<int32_t>(bits_ & 0xFFFFFFFFULL));
+        return static_cast<int64_t>(asNumber());
     }
 
-    double asNumber() const {
-        if (isInteger()) return static_cast<double>(integer_);
-        return number_;
-    }
+    size_t asFunctionIndex() const { return static_cast<size_t>(bits_ & 0xFFFFFFFFFFFFULL); }
+    size_t asStringIndex() const { return static_cast<size_t>(bits_ & 0xFFFFFFFFFFFFULL); }
+    size_t asNativeFunctionIndex() const { return static_cast<size_t>(bits_ & 0xFFFFFFFFFFFFULL); }
+    void* asCFunction() const { return reinterpret_cast<void*>(bits_ & 0xFFFFFFFFFFFFULL); }
 
-    size_t asFunctionIndex() const { return index_; }
-    size_t asStringIndex() const { return index_; }
-    size_t asNativeFunctionIndex() const { return index_; }
-    void* asCFunction() const { return cfunc_; }
-    
-    GCObject* asObj() const { return obj_; }
-    StringObject* asStringObj() const { return reinterpret_cast<StringObject*>(obj_); }
-    TableObject* asTableObj() const { return reinterpret_cast<TableObject*>(obj_); }
-    ClosureObject* asClosureObj() const { return reinterpret_cast<ClosureObject*>(obj_); }
-    FileObject* asFileObj() const { return reinterpret_cast<FileObject*>(obj_); }
-    SocketObject* asSocketObj() const { return reinterpret_cast<SocketObject*>(obj_); }
-    CoroutineObject* asThreadObj() const { return reinterpret_cast<CoroutineObject*>(obj_); }
-    UserdataObject* asUserdataObj() const { return reinterpret_cast<UserdataObject*>(obj_); }
+    GCObject* asObj() const { return reinterpret_cast<GCObject*>(bits_ & 0xFFFFFFFFFFFFULL); }
+    TableObject* asTableObj() const { return reinterpret_cast<TableObject*>(asObj()); }
+    ClosureObject* asClosureObj() const { return reinterpret_cast<ClosureObject*>(asObj()); }
+    UserdataObject* asUserdataObj() const { return reinterpret_cast<UserdataObject*>(asObj()); }
+    CoroutineObject* asThreadObj() const { return reinterpret_cast<CoroutineObject*>(asObj()); }
+    StringObject* asStringObj() const { return reinterpret_cast<StringObject*>(asObj()); }
+    FileObject* asFileObj() const { return reinterpret_cast<FileObject*>(asObj()); }
+    SocketObject* asSocketObj() const { return reinterpret_cast<SocketObject*>(asObj()); }
 
-    // Operations
+    // Standard methods
     bool isFalsey() const;
     bool isTruthy() const { return !isFalsey(); }
     bool operator==(const Value& other) const;
@@ -224,13 +230,10 @@ public:
     bool isStringEqual(const std::string& str) const;
     size_t hash() const;
 
-    // String conversion
     std::string toString() const;
     std::string typeToString() const;
-
     void print(std::ostream& os) const;
 
-    // Serialization
     void serialize(std::ostream& os, const Chunk* chunk) const;
     static Value deserialize(std::istream& is, Chunk* chunk);
 };

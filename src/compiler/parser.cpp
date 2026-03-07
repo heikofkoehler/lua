@@ -956,8 +956,8 @@ std::unique_ptr<ExprNode> Parser::primary() {
             try {
                 // Try parsing as integer (handles hex if prefixed with 0x)
                 long long value = std::stoll(lexeme, nullptr, 0);
-                // Ensure it fits in 48 bits for NaN-boxing
-                if (value >= -140737488355328LL && value <= 140737488355327LL) {
+                // Ensure it fits in 32 bits for NaN-boxing
+                if (value >= std::numeric_limits<int32_t>::min() && value <= std::numeric_limits<int32_t>::max()) {
                     return std::make_unique<LiteralNode>(Value::integer(static_cast<int64_t>(value)), line);
                 } else {
                     return std::make_unique<LiteralNode>(Value::number(static_cast<double>(value)), line);

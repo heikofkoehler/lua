@@ -374,6 +374,6 @@ void registerMathLibrary(VM* vm, TableObject* mathTable) {
     mathTable->set("huge", Value::number(HUGE_VAL));
 
     // Add math.maxinteger and math.mininteger
-    mathTable->set("maxinteger", Value::integer(std::numeric_limits<int64_t>::max()));
-    mathTable->set("mininteger", Value::integer(std::numeric_limits<int64_t>::min()));
+    mathTable->set("maxinteger", Value::integer(std::numeric_limits<int32_t>::max()));
+    mathTable->set("mininteger", Value::integer(std::numeric_limits<int32_t>::min()));
 }

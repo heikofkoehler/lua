@@ -1084,7 +1084,6 @@ void registerStringLibrary(VM* vm, TableObject* stringTable) {
     stringMt->set("__index", stringTableVal);
     vm->setRegistry("string_table", stringTableVal);
     vm->setTypeMetatable(Value::Type::STRING, Value::table(stringMt));
-    vm->setTypeMetatable(Value::Type::RUNTIME_STRING, Value::table(stringMt));
 
     vm->addNativeToTable(stringTable, "len", native_string_len);
     vm->addNativeToTable(stringTable, "sub", native_string_sub);

@@ -1320,14 +1320,14 @@ Value VM::getRegistry(const std::string& key) const {
 }
 
 void VM::setTypeMetatable(Value::Type type, const Value& mt) {
-    int index = static_cast<int>(type);
+    int index = static_cast<int>(type) & 0x0F;
     if (index >= 0 && index < Value::NUM_TYPES) {
         typeMetatables_[index] = mt;
     }
 }
 
 Value VM::getTypeMetatable(Value::Type type) const {
-    int index = static_cast<int>(type);
+    int index = static_cast<int>(type) & 0x0F;
     if (index >= 0 && index < Value::NUM_TYPES) {
         return typeMetatables_[index];
     }

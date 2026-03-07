@@ -856,6 +856,20 @@ bool VM::run(size_t targetFrameCount) {
                 // If not found as property, check standard __index metamethod
                 Value indexMethod = getMetamethod(tableValue, "__index");
                 if (indexMethod.isNil()) {
+                    // Fallback to type metatable if it's not a table (for string methods, file methods)
+                    Value typeMt = getTypeMetatable(tableValue.type());
+                    if (typeMt.isTable()) {
+                        Value method = typeMt.asTableObj()->get(key);
+                        if (!method.isNil()) {
+                            push(method);
+                            break;
+                        }
+                        
+                        indexMethod = typeMt.asTableObj()->get("__index");
+                    }
+                }
+                
+                if (indexMethod.isNil()) {
                     if (!tableValue.isTable()) {
                         runtimeError("attempt to index a " + tableValue.typeToString() + " value");
                     }
