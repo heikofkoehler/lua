@@ -212,6 +212,16 @@ bool native_tonumber(VM* vm, int argCount) {
     Value val = vm->peek(argCount - 1);
     std::string s = vm->getStringValue(val);
 
+    // Trim leading and trailing whitespace
+    auto start = s.find_first_not_of(" \t\n\r\f\v");
+    if (start == std::string::npos) {
+        for (int i = 0; i < argCount; i++) vm->pop();
+        vm->push(Value::nil());
+        return true;
+    }
+    auto end = s.find_last_not_of(" \t\n\r\f\v");
+    s = s.substr(start, end - start + 1);
+
     if (argCount == 1) {
         try {
             size_t pos;
