@@ -49,6 +49,7 @@ int lua_isboolean(lua_State *L, int idx);
 int lua_isnil(lua_State *L, int idx);
 int lua_isfunction(lua_State *L, int idx);
 int lua_istable(lua_State *L, int idx);
+int lua_isuserdata(lua_State *L, int idx);
 int lua_type(lua_State *L, int idx);
 const char *lua_typename(lua_State *L, int tp);
 
@@ -57,13 +58,35 @@ double lua_tonumber(lua_State *L, int idx);
 long long lua_tointeger(lua_State *L, int idx);
 int lua_toboolean(lua_State *L, int idx);
 const char *lua_tostring(lua_State *L, int idx);
+void *lua_touserdata(lua_State *L, int idx);
 
 // Global
 void lua_getglobal(lua_State *L, const char *name);
 void lua_setglobal(lua_State *L, const char *name);
 
+// Tables
+void lua_createtable(lua_State *L, int narr, int nrec);
+#define lua_newtable(L) lua_createtable(L, 0, 0)
+int lua_gettable(lua_State *L, int idx);
+int lua_getfield(lua_State *L, int idx, const char *k);
+void lua_settable(lua_State *L, int idx);
+void lua_setfield(lua_State *L, int idx, const char *k);
+int lua_rawget(lua_State *L, int idx);
+void lua_rawset(lua_State *L, int idx);
+
+// Metatables
+int lua_getmetatable(lua_State *L, int objindex);
+int lua_setmetatable(lua_State *L, int objindex);
+
+// Userdata
+void *lua_newuserdata(lua_State *L, size_t size);
+
 // Calls
 int lua_pcall(lua_State *L, int nargs, int nresults, int errfunc);
+
+// Auxiliary library (combined for now)
+#define luaL_newstate() lua_newstate()
+void luaL_openlibs(lua_State *L);
 
 #ifdef __cplusplus
 }

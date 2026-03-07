@@ -2,6 +2,8 @@
 #include "api/lua_state.h"
 #include "vm/vm.hpp"
 #include "value/value.hpp"
+#include "value/table.hpp"
+#include "value/userdata.hpp"
 #include <cstring>
 #include <algorithm>
 
@@ -23,6 +25,11 @@ void lua_close(lua_State *L) {
 }
 
 // Check functions helper
+static int to_abs_idx(lua_State *L, int idx) {
+    if (idx > 0) return idx;
+    return lua_gettop(L) + idx + 1;
+}
+
 static Value* get_val(lua_State *L, int idx) {
     auto& stack = L->vm->currentCoroutine()->stack;
     size_t abs_idx;
@@ -37,7 +44,7 @@ static Value* get_val(lua_State *L, int idx) {
         return nullptr;
     }
 
-    if (abs_idx < stack.size()) {
+    if (abs_idx < stack.size() && abs_idx >= L->stackBase) {
         return &stack[abs_idx];
     }
     return nullptr;
@@ -160,6 +167,10 @@ int lua_istable(lua_State *L, int idx) {
     return lua_type(L, idx) == LUA_TTABLE;
 }
 
+int lua_isuserdata(lua_State *L, int idx) {
+    return lua_type(L, idx) == LUA_TUSERDATA;
+}
+
 // Get functions
 double lua_tonumber(lua_State *L, int idx) {
     Value* v = get_val(L, idx);
@@ -184,6 +195,14 @@ const char *lua_tostring(lua_State *L, int idx) {
     return nullptr;
 }
 
+void *lua_touserdata(lua_State *L, int idx) {
+    Value* v = get_val(L, idx);
+    if (v && v->isUserdata()) {
+        return v->asUserdataObj()->data();
+    }
+    return nullptr;
+}
+
 // Global
 void lua_getglobal(lua_State *L, const char *name) {
     L->vm->push(L->vm->getGlobal(name));
@@ -191,6 +210,112 @@ void lua_getglobal(lua_State *L, const char *name) {
 
 void lua_setglobal(lua_State *L, const char *name) {
     L->vm->setGlobal(name, L->vm->pop());
+}
+
+// Tables
+void lua_createtable(lua_State *L, int narr, int nrec) {
+    (void)narr; (void)nrec;
+    L->vm->push(Value::table(L->vm->createTable()));
+}
+
+int lua_gettable(lua_State *L, int idx) {
+    int abs_idx = to_abs_idx(L, idx);
+    Value key = L->vm->pop();
+    Value* t_ptr = get_val(L, abs_idx);
+    if (!t_ptr || !t_ptr->isTable()) {
+        L->vm->push(Value::nil());
+        return LUA_TNIL;
+    }
+    Value val = t_ptr->asTableObj()->get(key);
+    L->vm->push(val);
+    return lua_type(L, -1);
+}
+
+int lua_getfield(lua_State *L, int idx, const char *k) {
+    int abs_idx = to_abs_idx(L, idx);
+    Value* t_ptr = get_val(L, abs_idx);
+    if (!t_ptr || !t_ptr->isTable()) {
+        L->vm->push(Value::nil());
+        return LUA_TNIL;
+    }
+    Value val = t_ptr->asTableObj()->get(k);
+    L->vm->push(val);
+    return lua_type(L, -1);
+}
+
+void lua_settable(lua_State *L, int idx) {
+    int abs_idx = to_abs_idx(L, idx);
+    Value val = L->vm->pop();
+    Value key = L->vm->pop();
+    Value* t_ptr = get_val(L, abs_idx);
+    if (t_ptr && t_ptr->isTable()) {
+        t_ptr->asTableObj()->set(key, val);
+    }
+}
+
+void lua_setfield(lua_State *L, int idx, const char *k) {
+    int abs_idx = to_abs_idx(L, idx);
+    Value val = L->vm->pop();
+    Value* t_ptr = get_val(L, abs_idx);
+    if (t_ptr && t_ptr->isTable()) {
+        t_ptr->asTableObj()->set(k, val);
+    }
+}
+
+int lua_rawget(lua_State *L, int idx) {
+    return lua_gettable(L, idx); // Our TableObject::get IS raw
+}
+
+void lua_rawset(lua_State *L, int idx) {
+    lua_settable(L, idx); // Our TableObject::set IS raw
+}
+
+// Metatables
+int lua_getmetatable(lua_State *L, int objindex) {
+    Value* obj = get_val(L, objindex);
+    if (!obj) return 0;
+    
+    Value mt = Value::nil();
+    if (obj->isTable()) {
+        mt = obj->asTableObj()->getMetatable();
+    } else if (obj->isUserdata()) {
+        mt = obj->asUserdataObj()->metatable();
+    } else {
+        mt = L->vm->getTypeMetatable(obj->type());
+    }
+
+    if (mt.isNil()) return 0;
+    L->vm->push(mt);
+    return 1;
+}
+
+int lua_setmetatable(lua_State *L, int objindex) {
+    int abs_idx = to_abs_idx(L, objindex);
+    Value mt = L->vm->pop();
+    Value* obj = get_val(L, abs_idx);
+    if (!obj) return 0;
+
+    if (!mt.isTable() && !mt.isNil()) return 0;
+
+    if (obj->isTable()) {
+        obj->asTableObj()->setMetatable(mt);
+    } else if (obj->isUserdata()) {
+        obj->asUserdataObj()->setMetatable(mt);
+    } else {
+        L->vm->setTypeMetatable(obj->type(), mt);
+    }
+    return 1;
+}
+
+// Userdata
+void *lua_newuserdata(lua_State *L, size_t size) {
+    void* data = malloc(size);
+    if (!data) return nullptr;
+    memset(data, 0, size);
+    
+    UserdataObject* ud = L->vm->createUserdata(data);
+    L->vm->push(Value::userdata(ud));
+    return data;
 }
 
 // Calls
@@ -205,4 +330,8 @@ int lua_pcall(lua_State *L, int nargs, int nresults, int errfunc) {
     
     bool success = L->vm->callValue(nargs, vmRetCount);
     return success ? 0 : 1;
+}
+
+void luaL_openlibs(lua_State *L) {
+    L->vm->initStandardLibrary();
 }
