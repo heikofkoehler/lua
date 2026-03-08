@@ -54,6 +54,18 @@ assert(math.ult(1, 2) == true)
 assert(math.ult(2, 1) == false)
 assert(math.ult(-1, 1) == false) -- -1 is large when unsigned
 
+-- Transcendental functions
+assert(math.abs(math.sin(math.pi/2) - 1.0) < 0.0001)
+assert(math.abs(math.cos(math.pi) + 1.0) < 0.0001)
+assert(math.abs(math.tan(math.pi/4) - 1.0) < 0.0001)
+assert(math.abs(math.deg(math.asin(1)) - 90.0) < 0.0001)
+assert(math.abs(math.deg(math.acos(-1)) - 180.0) < 0.0001)
+assert(math.abs(math.rad(45) - math.pi/4) < 0.0001)
+assert(math.abs(math.atan(1, 1) - math.pi/4) < 0.0001)
+assert(math.abs(math.exp(1) - 2.71828) < 0.001)
+assert(math.abs(math.log(math.exp(1))) == 1.0)
+assert(math.log(100, 10) == 2.0)
+
 -- Random
 local s1, s2 = math.randomseed(42, 100)
 assert(type(s1) == "number")

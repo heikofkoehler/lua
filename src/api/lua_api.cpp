@@ -81,6 +81,44 @@ void lua_pop(lua_State *L, int n) {
     lua_settop(L, -(n) - 1);
 }
 
+void lua_remove(lua_State *L, int idx) {
+    auto& stack = L->vm->currentCoroutine()->stack;
+    int abs_idx = to_abs_idx(L, idx);
+    size_t stack_idx = L->stackBase + static_cast<size_t>(abs_idx - 1);
+    if (stack_idx < stack.size()) {
+        stack.erase(stack.begin() + stack_idx);
+    }
+}
+
+void lua_insert(lua_State *L, int idx) {
+    auto& stack = L->vm->currentCoroutine()->stack;
+    int abs_idx = to_abs_idx(L, idx);
+    size_t stack_idx = L->stackBase + static_cast<size_t>(abs_idx - 1);
+    if (stack_idx < stack.size()) {
+        Value v = stack.back();
+        stack.pop_back();
+        stack.insert(stack.begin() + stack_idx, v);
+    }
+}
+
+void lua_replace(lua_State *L, int idx) {
+    auto& stack = L->vm->currentCoroutine()->stack;
+    int abs_idx = to_abs_idx(L, idx);
+    size_t stack_idx = L->stackBase + static_cast<size_t>(abs_idx - 1);
+    if (stack_idx < stack.size()) {
+        stack[stack_idx] = stack.back();
+        stack.pop_back();
+    }
+}
+
+void lua_copy(lua_State *L, int fromidx, int toidx) {
+    Value* from = get_val(L, fromidx);
+    Value* to = get_val(L, toidx);
+    if (from && to) {
+        *to = *from;
+    }
+}
+
 // Push functions
 void lua_pushnil(lua_State *L) {
     L->vm->push(Value::nil());
@@ -179,12 +217,12 @@ double lua_tonumber(lua_State *L, int idx) {
 
 long long lua_tointeger(lua_State *L, int idx) {
     Value* v = get_val(L, idx);
-    return (v && v->isInteger()) ? v->asInteger() : ((v && v->isNumber()) ? (long long)v->asNumber() : 0);
+    return (v && v->isNumber()) ? static_cast<long long>(v->asInteger()) : 0;
 }
 
 int lua_toboolean(lua_State *L, int idx) {
     Value* v = get_val(L, idx);
-    return v ? !v->isFalsey() : 0;
+    return (v && !v->isFalsey()) ? 1 : 0;
 }
 
 const char *lua_tostring(lua_State *L, int idx) {
@@ -268,6 +306,21 @@ int lua_rawget(lua_State *L, int idx) {
 
 void lua_rawset(lua_State *L, int idx) {
     lua_settable(L, idx); // Our TableObject::set IS raw
+}
+
+int lua_next(lua_State *L, int idx) {
+    int abs_idx = to_abs_idx(L, idx);
+    Value* t_ptr = get_val(L, abs_idx);
+    Value key = L->vm->pop();
+    if (t_ptr && t_ptr->isTable()) {
+        auto next = t_ptr->asTableObj()->next(key);
+        if (!next.first.isNil()) {
+            L->vm->push(next.first);
+            L->vm->push(next.second);
+            return 1;
+        }
+    }
+    return 0;
 }
 
 // Metatables

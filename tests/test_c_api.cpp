@@ -100,6 +100,53 @@ int main() {
     lua_pushnumber(L, 16);
     lua_pcall(L, 1, 1, 0);
     assert(lua_tonumber(L, -1) == 4.0);
+    lua_settop(L, 0); // Clean stack
+    
+    // Stack manipulation tests
+    lua_pushnumber(L, 1);
+    lua_pushnumber(L, 2);
+    lua_pushnumber(L, 3);
+    // Stack: [1, 2, 3]
+    
+    lua_remove(L, -2);
+    // Stack: [1, 3]
+    assert(lua_gettop(L) == 2);
+    assert(lua_tonumber(L, 1) == 1);
+    assert(lua_tonumber(L, 2) == 3);
+    
+    lua_pushnumber(L, 2);
+    lua_insert(L, 2);
+    // Stack: [1, 2, 3]
+    assert(lua_tonumber(L, 2) == 2);
+    assert(lua_tonumber(L, 3) == 3);
+    
+    lua_pushnumber(L, 4);
+    lua_replace(L, 2);
+    // Stack: [1, 4, 3]
+    assert(lua_tonumber(L, 2) == 4);
+    assert(lua_gettop(L) == 3);
+    
+    lua_settop(L, 0);
+    
+    // Test lua_next
+    lua_newtable(L);
+    lua_pushstring(L, "a");
+    lua_pushnumber(L, 10);
+    lua_settable(L, -3);
+    lua_pushstring(L, "b");
+    lua_pushnumber(L, 20);
+    lua_settable(L, -3);
+    
+    lua_pushnil(L);
+    int count = 0;
+    while (lua_next(L, -2)) {
+        // key at -2, value at -1
+        assert(lua_isstring(L, -2));
+        assert(lua_isnumber(L, -1));
+        lua_pop(L, 1); // pop value, keep key for next iteration
+        count++;
+    }
+    assert(count == 2);
     
     lua_close(L);
     std::cout << "C API tests passed!" << std::endl;

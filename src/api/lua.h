@@ -33,6 +33,10 @@ int lua_gettop(lua_State *L);
 void lua_settop(lua_State *L, int idx);
 void lua_pushvalue(lua_State *L, int idx);
 void lua_pop(lua_State *L, int n);
+void lua_remove(lua_State *L, int idx);
+void lua_insert(lua_State *L, int idx);
+void lua_replace(lua_State *L, int idx);
+void lua_copy(lua_State *L, int fromidx, int toidx);
 
 // Push functions
 void lua_pushnil(lua_State *L);
@@ -73,6 +77,7 @@ void lua_settable(lua_State *L, int idx);
 void lua_setfield(lua_State *L, int idx, const char *k);
 int lua_rawget(lua_State *L, int idx);
 void lua_rawset(lua_State *L, int idx);
+int lua_next(lua_State *L, int idx);
 
 // Metatables
 int lua_getmetatable(lua_State *L, int objindex);
