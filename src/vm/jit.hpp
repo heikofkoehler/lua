@@ -19,7 +19,7 @@ public:
 
 private:
     VM* vm_;
-    asmjit::JitRuntime rt_;
+    static asmjit::JitRuntime rt_;
 };
 
 #else

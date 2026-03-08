@@ -1362,7 +1362,7 @@ void VM::callHook(const char* event, int line) {
 }
 
 // JIT callback helpers
-void VM::jitGetTable(VM* vm) {
+void VM::jitGetTable(VM* vm, uint32_t nextIp) {
     Value key = vm->pop();
     Value tableValue = vm->pop();
 
@@ -1389,21 +1389,24 @@ void VM::jitGetTable(VM* vm) {
             vm->runtimeError("attempt to index a " + tableValue.typeToString() + " value");
         }
         vm->push(Value::nil());
-    } else if (indexMethod.isFunction()) {
-        vm->push(indexMethod);
-        vm->push(tableValue);
-        vm->push(key);
-        vm->callValue(2, 2); 
-    } else if (indexMethod.isTable()) {
-        TableObject* indexTable = indexMethod.asTableObj();
-        Value result = key.isString() ? indexTable->get(vm->getStringValue(key)) : indexTable->get(key);
-        vm->push(result);
     } else {
-        vm->push(Value::nil());
+        vm->getFrame(0)->ip = nextIp;
+        if (indexMethod.isFunction()) {
+            vm->push(indexMethod);
+            vm->push(tableValue);
+            vm->push(key);
+            vm->callValue(2, 2); 
+        } else if (indexMethod.isTable()) {
+            TableObject* indexTable = indexMethod.asTableObj();
+            Value result = key.isString() ? indexTable->get(vm->getStringValue(key)) : indexTable->get(key);
+            vm->push(result);
+        } else {
+            vm->push(Value::nil());
+        }
     }
 }
 
-void VM::jitSetTable(VM* vm) {
+void VM::jitSetTable(VM* vm, uint32_t nextIp) {
     Value value = vm->peek(0);
     Value key = vm->peek(1);
     Value tableValue = vm->peek(2);
@@ -1425,24 +1428,27 @@ void VM::jitSetTable(VM* vm) {
             vm->runtimeError("attempt to index a " + tableValue.typeToString() + " value");
         }
         vm->pop(); vm->pop(); vm->pop();
-    } else if (newIndex.isFunction()) {
-        vm->currentCoroutine_->stack.insert(vm->currentCoroutine_->stack.end() - 3, newIndex);
-        vm->callValue(3, 1);
-    } else if (newIndex.isTable()) {
-        TableObject* niTable = newIndex.asTableObj();
-        if (key.isString()) {
-            niTable->set(vm->getStringValue(key), value);
-        } else {
-            niTable->set(key, value);
-        }
-        vm->pop(); vm->pop(); vm->pop();
     } else {
-        if (tableValue.isTable()) {
-            tableValue.asTableObj()->set(key, value);
+        vm->getFrame(0)->ip = nextIp;
+        if (newIndex.isFunction()) {
+            vm->currentCoroutine_->stack.insert(vm->currentCoroutine_->stack.end() - 3, newIndex);
+            vm->callValue(3, 1);
+        } else if (newIndex.isTable()) {
+            TableObject* niTable = newIndex.asTableObj();
+            if (key.isString()) {
+                niTable->set(vm->getStringValue(key), value);
+            } else {
+                niTable->set(key, value);
+            }
+            vm->pop(); vm->pop(); vm->pop();
         } else {
-            vm->runtimeError("attempt to index a " + tableValue.typeToString() + " value");
+            if (tableValue.isTable()) {
+                tableValue.asTableObj()->set(key, value);
+            } else {
+                vm->runtimeError("attempt to index a " + tableValue.typeToString() + " value");
+            }
+            vm->pop(); vm->pop(); vm->pop();
         }
-        vm->pop(); vm->pop(); vm->pop();
     }
 }
 
@@ -1474,13 +1480,16 @@ void VM::jitSetUpvalue(VM* vm, uint32_t index) {
     }
 }
 
-void VM::jitConcat(VM* vm) {
+void VM::jitConcat(VM* vm, uint32_t nextIp) {
     Value b = vm->pop();
     Value a = vm->pop();
     if ((a.isString() || a.isNumber()) && (b.isString() || b.isNumber())) {
         vm->push(vm->concat(a, b));
-    } else if (!vm->callBinaryMetamethod(a, b, "__concat")) {
-        vm->runtimeError("attempt to concatenate " + a.typeToString() + " and " + b.typeToString());
+    } else {
+        vm->getFrame(0)->ip = nextIp;
+        if (!vm->callBinaryMetamethod(a, b, "__concat")) {
+            vm->runtimeError("attempt to concatenate " + a.typeToString() + " and " + b.typeToString());
+        }
     }
 }
 
@@ -1488,3 +1497,338 @@ void VM::jitCloseUpvalues(VM* vm, uint32_t stackIndex) {
     vm->closeUpvalues(stackIndex);
 }
 
+void VM::jitClosure(VM* vm, uint32_t constantIndex, uint32_t bytecodeOffset) {
+    Value funcValue = vm->getFrame(0)->chunk->constants()[constantIndex];
+    size_t funcIndex = funcValue.asFunctionIndex();
+    FunctionObject* function = vm->getFrame(0)->chunk->getFunction(funcIndex);
+
+    ClosureObject* closure = vm->createClosure(function);
+
+    const std::vector<uint8_t>& code = vm->getFrame(0)->chunk->code();
+    size_t offset = bytecodeOffset;
+
+    // Capture upvalues
+    for (size_t i = 0; i < closure->upvalueCount(); i++) {
+        uint8_t isLocal = code[offset++];
+        uint8_t index = code[offset++];
+
+        if (isLocal) {
+            size_t stackIndex = vm->getFrame(0)->stackBase + index;
+            UpvalueObject* upvalue = vm->captureUpvalue(stackIndex);
+            closure->setUpvalue(i, upvalue);
+        } else {
+            UpvalueObject* upvalue = vm->getFrame(0)->closure->getUpvalueObj(index);
+            closure->setUpvalue(i, upvalue);
+        }
+    }
+
+    vm->push(Value::closure(closure));
+}
+
+void VM::jitCall(VM* vm, uint32_t argCount, uint32_t retCount, uint32_t nextIp) {
+    vm->getFrame(0)->ip = nextIp;
+    vm->callValue(argCount, retCount);
+}
+
+void VM::jitReturnValue(VM* vm, uint32_t count) {
+    size_t stackBase = vm->getFrame(0)->stackBase;
+    vm->closeUpvalues(stackBase);
+    
+    std::vector<Value> returnValues;
+    returnValues.reserve(count);
+    for (size_t i = 0; i < count; i++) {
+        returnValues.push_back(vm->pop());
+    }
+    std::reverse(returnValues.begin(), returnValues.end());
+
+    uint8_t expectedRetCount = vm->getFrame(0)->retCount;
+    const Chunk* returnChunk = vm->getFrame(0)->callerChunk;
+
+    while (vm->currentCoroutine_->stack.size() > stackBase) {
+        vm->pop();
+    }
+    vm->pop(); // pop closure
+
+    vm->currentCoroutine_->frames.pop_back();
+
+    if (vm->currentCoroutine_->frames.empty()) {
+        vm->currentCoroutine_->status = CoroutineObject::Status::DEAD;
+    } else {
+        vm->currentCoroutine_->chunk = returnChunk;
+    }
+
+    vm->currentCoroutine_->lastResultCount = returnValues.size();
+
+    if (expectedRetCount > 0) {
+        size_t expected = static_cast<size_t>(expectedRetCount - 1);
+        if (returnValues.size() > expected) {
+            returnValues.resize(expected);
+        } else {
+            while (returnValues.size() < expected) {
+                returnValues.push_back(Value::nil());
+            }
+        }
+    }
+
+    for (const auto& value : returnValues) {
+        vm->push(value);
+    }
+}
+
+void VM::jitGetGlobal(VM* vm, uint32_t nameIndex) {
+    Value name = vm->getFrame(0)->chunk->constants()[nameIndex];
+    vm->push(vm->getGlobal(vm->getStringValue(name)));
+}
+
+void VM::jitSetGlobal(VM* vm, uint32_t nameIndex) {
+    Value name = vm->getFrame(0)->chunk->constants()[nameIndex];
+    vm->setGlobal(vm->getStringValue(name), vm->peek(0));
+}
+
+void VM::jitGetTabUp(VM* vm, uint32_t upIndex, uint32_t keyIndex, uint32_t nextIp) {
+    UpvalueObject* upvalue = vm->getFrame(0)->closure->getUpvalueObj(upIndex);
+    Value upTable = upvalue->get(vm->currentCoroutine_->stack);
+    Value key = vm->getFrame(0)->chunk->constants()[keyIndex];
+    
+    if (upTable.isTable()) {
+        TableObject* table = upTable.asTableObj();
+        Value value = table->get(key);
+        if (!value.isNil()) {
+            vm->push(value);
+            return;
+        }
+    }
+    
+    vm->push(upTable);
+    vm->push(key);
+    vm->jitGetTable(vm, nextIp);
+}
+
+void VM::jitSetTabUp(VM* vm, uint32_t upIndex, uint32_t keyIndex, uint32_t nextIp) {
+    UpvalueObject* upvalue = vm->getFrame(0)->closure->getUpvalueObj(upIndex);
+    Value upTable = upvalue->get(vm->currentCoroutine_->stack);
+    Value key = vm->getFrame(0)->chunk->constants()[keyIndex];
+    Value val = vm->peek(0);
+    
+    if (upTable.isTable()) {
+        TableObject* table = upTable.asTableObj();
+        if (table->has(key)) {
+            table->set(key, val);
+            return;
+        }
+    }
+    
+    vm->currentCoroutine_->stack.insert(vm->currentCoroutine_->stack.end() - 1, key);
+    vm->currentCoroutine_->stack.insert(vm->currentCoroutine_->stack.end() - 2, upTable);
+    vm->jitSetTable(vm, nextIp);
+}
+
+void VM::jitLen(VM* vm, uint32_t nextIp) {
+    Value a = vm->peek(0);
+    if (a.isString()) {
+        vm->pop();
+        vm->push(Value::number(static_cast<double>(a.asStringObj()->length())));
+    } else if (a.isTable()) {
+        vm->pop();
+        vm->push(Value::number(static_cast<double>(a.asTableObj()->length())));
+    } else {
+        Value mm = vm->getMetamethod(a, "__len");
+        if (mm.isNil()) {
+            vm->runtimeError("attempt to get length of a " + a.typeToString() + " value");
+            return;
+        }
+        vm->getFrame(0)->ip = nextIp;
+        vm->pop();
+        vm->push(mm);
+        vm->push(a);
+        vm->callValue(1, 2);
+    }
+}
+
+void VM::jitAdd(VM* vm, uint32_t nextIp) {
+    Value b = vm->pop();
+    Value a = vm->pop();
+    if (a.isNumber() && b.isNumber()) {
+        vm->push(vm->add(a, b));
+    } else {
+        vm->getFrame(0)->ip = nextIp;
+        if (!vm->callBinaryMetamethod(a, b, "__add")) {
+            vm->runtimeError("attempt to perform arithmetic on " + a.typeToString() + " and " + b.typeToString());
+        }
+    }
+}
+
+void VM::jitSub(VM* vm, uint32_t nextIp) {
+    Value b = vm->pop();
+    Value a = vm->pop();
+    if (a.isNumber() && b.isNumber()) {
+        vm->push(vm->subtract(a, b));
+    } else {
+        vm->getFrame(0)->ip = nextIp;
+        if (!vm->callBinaryMetamethod(a, b, "__sub")) {
+            vm->runtimeError("attempt to perform arithmetic on " + a.typeToString() + " and " + b.typeToString());
+        }
+    }
+}
+
+void VM::jitMul(VM* vm, uint32_t nextIp) {
+    Value b = vm->pop();
+    Value a = vm->pop();
+    if (a.isNumber() && b.isNumber()) {
+        vm->push(vm->multiply(a, b));
+    } else {
+        vm->getFrame(0)->ip = nextIp;
+        if (!vm->callBinaryMetamethod(a, b, "__mul")) {
+            vm->runtimeError("attempt to perform arithmetic on " + a.typeToString() + " and " + b.typeToString());
+        }
+    }
+}
+
+void VM::jitDiv(VM* vm, uint32_t nextIp) {
+    Value b = vm->pop();
+    Value a = vm->pop();
+    if (a.isNumber() && b.isNumber()) {
+        vm->push(vm->divide(a, b));
+    } else {
+        vm->getFrame(0)->ip = nextIp;
+        if (!vm->callBinaryMetamethod(a, b, "__div")) {
+            vm->runtimeError("attempt to perform arithmetic on " + a.typeToString() + " and " + b.typeToString());
+        }
+    }
+}
+
+void VM::jitMod(VM* vm, uint32_t nextIp) {
+    Value b = vm->pop();
+    Value a = vm->pop();
+    if (a.isNumber() && b.isNumber()) {
+        vm->push(vm->modulo(a, b));
+    } else {
+        vm->getFrame(0)->ip = nextIp;
+        if (!vm->callBinaryMetamethod(a, b, "__mod")) {
+            vm->runtimeError("attempt to perform arithmetic on " + a.typeToString() + " and " + b.typeToString());
+        }
+    }
+}
+
+void VM::jitIDiv(VM* vm, uint32_t nextIp) {
+    Value b = vm->pop();
+    Value a = vm->pop();
+    if (a.isNumber() && b.isNumber()) {
+        vm->push(vm->integerDivide(a, b));
+    } else {
+        vm->getFrame(0)->ip = nextIp;
+        if (!vm->callBinaryMetamethod(a, b, "__idiv")) {
+            vm->runtimeError("attempt to perform arithmetic on " + a.typeToString() + " and " + b.typeToString());
+        }
+    }
+}
+
+void VM::jitPow(VM* vm, uint32_t nextIp) {
+    Value b = vm->pop();
+    Value a = vm->pop();
+    if (a.isNumber() && b.isNumber()) {
+        vm->push(vm->power(a, b));
+    } else {
+        vm->getFrame(0)->ip = nextIp;
+        if (!vm->callBinaryMetamethod(a, b, "__pow")) {
+            vm->runtimeError("attempt to perform arithmetic on " + a.typeToString() + " and " + b.typeToString());
+        }
+    }
+}
+
+void VM::jitNeg(VM* vm, uint32_t nextIp) {
+    Value a = vm->pop();
+    if (a.isNumber()) {
+        vm->push(vm->negate(a));
+    } else {
+        Value mm = vm->getMetamethod(a, "__unm");
+        if (mm.isNil()) {
+            vm->runtimeError("attempt to perform arithmetic on a " + a.typeToString() + " value");
+            return;
+        }
+        vm->getFrame(0)->ip = nextIp;
+        vm->push(mm);
+        vm->push(a);
+        vm->callValue(1, 2);
+    }
+}
+
+void VM::jitBand(VM* vm, uint32_t nextIp) {
+    Value b = vm->pop();
+    Value a = vm->pop();
+    vm->getFrame(0)->ip = nextIp;
+    vm->push(vm->bitwiseAnd(a, b));
+}
+
+void VM::jitBor(VM* vm, uint32_t nextIp) {
+    Value b = vm->pop();
+    Value a = vm->pop();
+    vm->getFrame(0)->ip = nextIp;
+    vm->push(vm->bitwiseOr(a, b));
+}
+
+void VM::jitBxor(VM* vm, uint32_t nextIp) {
+    Value b = vm->pop();
+    Value a = vm->pop();
+    vm->getFrame(0)->ip = nextIp;
+    vm->push(vm->bitwiseXor(a, b));
+}
+
+void VM::jitBnot(VM* vm, uint32_t nextIp) {
+    Value a = vm->pop();
+    vm->getFrame(0)->ip = nextIp;
+    vm->push(vm->bitwiseNot(a));
+}
+
+void VM::jitShl(VM* vm, uint32_t nextIp) {
+    Value b = vm->pop();
+    Value a = vm->pop();
+    vm->getFrame(0)->ip = nextIp;
+    vm->push(vm->shiftLeft(a, b));
+}
+
+void VM::jitShr(VM* vm, uint32_t nextIp) {
+    Value b = vm->pop();
+    Value a = vm->pop();
+    vm->getFrame(0)->ip = nextIp;
+    vm->push(vm->shiftRight(a, b));
+}
+
+void VM::jitEq(VM* vm, uint32_t nextIp) {
+    Value b = vm->pop();
+    Value a = vm->pop();
+    if (a == b) {
+        vm->push(Value::boolean(true));
+    } else {
+        vm->getFrame(0)->ip = nextIp;
+        if (!vm->callBinaryMetamethod(a, b, "__eq")) {
+            vm->push(Value::boolean(false));
+        }
+    }
+}
+
+void VM::jitLt(VM* vm, uint32_t nextIp) {
+    Value b = vm->pop();
+    Value a = vm->pop();
+    if (a.isNumber() && b.isNumber()) {
+        vm->push(vm->less(a, b));
+    } else {
+        vm->getFrame(0)->ip = nextIp;
+        if (!vm->callBinaryMetamethod(a, b, "__lt")) {
+            vm->runtimeError("attempt to compare " + a.typeToString() + " and " + b.typeToString());
+        }
+    }
+}
+
+void VM::jitLe(VM* vm, uint32_t nextIp) {
+    Value b = vm->pop();
+    Value a = vm->pop();
+    if (a.isNumber() && b.isNumber()) {
+        vm->push(vm->lessEqual(a, b));
+    } else {
+        vm->getFrame(0)->ip = nextIp;
+        if (!vm->callBinaryMetamethod(a, b, "__le")) {
+            vm->runtimeError("attempt to compare " + a.typeToString() + " and " + b.typeToString());
+        }
+    }
+}

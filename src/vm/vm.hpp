@@ -136,13 +136,43 @@ public:
     bool isJitEnabled() const { return jitEnabled_; }
 
     // JIT callback helpers
-    static void jitGetTable(VM* vm);
-    static void jitSetTable(VM* vm);
+    static void jitGetTable(VM* vm, uint32_t nextIp);
+    static void jitSetTable(VM* vm, uint32_t nextIp);
     static void jitNewTable(VM* vm);
     static void jitGetUpvalue(VM* vm, uint32_t index);
     static void jitSetUpvalue(VM* vm, uint32_t index);
-    static void jitConcat(VM* vm);
+    static void jitConcat(VM* vm, uint32_t nextIp);
     static void jitCloseUpvalues(VM* vm, uint32_t stackIndex);
+    static void jitClosure(VM* vm, uint32_t constantIndex, uint32_t bytecodeOffset);
+    static void jitCall(VM* vm, uint32_t argCount, uint32_t retCount, uint32_t nextIp);
+    static void jitReturnValue(VM* vm, uint32_t count);
+
+    static void jitGetGlobal(VM* vm, uint32_t nameIndex);
+    static void jitSetGlobal(VM* vm, uint32_t nameIndex);
+    static void jitGetTabUp(VM* vm, uint32_t upIndex, uint32_t keyIndex, uint32_t nextIp);
+    static void jitSetTabUp(VM* vm, uint32_t upIndex, uint32_t keyIndex, uint32_t nextIp);
+    static void jitLen(VM* vm, uint32_t nextIp);
+    
+    static void jitAdd(VM* vm, uint32_t nextIp);
+    static void jitSub(VM* vm, uint32_t nextIp);
+    static void jitMul(VM* vm, uint32_t nextIp);
+    static void jitDiv(VM* vm, uint32_t nextIp);
+    static void jitMod(VM* vm, uint32_t nextIp);
+    static void jitIDiv(VM* vm, uint32_t nextIp);
+    static void jitPow(VM* vm, uint32_t nextIp);
+    static void jitNeg(VM* vm, uint32_t nextIp);
+    
+    static void jitBand(VM* vm, uint32_t nextIp);
+    static void jitBor(VM* vm, uint32_t nextIp);
+    static void jitBxor(VM* vm, uint32_t nextIp);
+    static void jitBnot(VM* vm, uint32_t nextIp);
+    static void jitShl(VM* vm, uint32_t nextIp);
+    static void jitShr(VM* vm, uint32_t nextIp);
+
+    static void jitEq(VM* vm, uint32_t nextIp);
+    static void jitLt(VM* vm, uint32_t nextIp);
+    static void jitLe(VM* vm, uint32_t nextIp);
+
 
     // Registry for internal use (stable storage)
     void setRegistry(const std::string& key, const Value& value) { registry_[key] = value; }
