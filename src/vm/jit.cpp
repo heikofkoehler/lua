@@ -147,6 +147,89 @@ JITFunc JITCompiler::compile(FunctionObject* function) {
                 a.add(top_reg, top_reg, 8);
                 break;
             }
+            case OpCode::OP_NEW_TABLE: {
+                a.str(top_reg, a64::ptr(co_reg, offsetStack + 8));
+                a.mov(a64::x0, vm_reg);
+                a.mov(scratch, (uint64_t)VM::jitNewTable);
+                a.blr(scratch);
+                a.ldr(top_reg, a64::ptr(co_reg, offsetStack + 8));
+                break;
+            }
+            case OpCode::OP_GET_TABLE: {
+                a.str(top_reg, a64::ptr(co_reg, offsetStack + 8));
+                a.mov(a64::x0, vm_reg);
+                a.mov(scratch, (uint64_t)VM::jitGetTable);
+                a.blr(scratch);
+                a.ldr(top_reg, a64::ptr(co_reg, offsetStack + 8));
+                
+                // If a new frame was added (metamethod), fall back to interpreter
+                a.ldr(scratch, a64::ptr(co_reg, offsetFrames + 8));
+                a.sub(scratch, scratch, frame_reg);
+                a.cmp(scratch, (uint64_t)sizeof(CallFrame));
+                a.b_hi(labels[i]); // Re-run this instruction in interpreter
+                break;
+            }
+            case OpCode::OP_SET_TABLE: {
+                a.str(top_reg, a64::ptr(co_reg, offsetStack + 8));
+                a.mov(a64::x0, vm_reg);
+                a.mov(scratch, (uint64_t)VM::jitSetTable);
+                a.blr(scratch);
+                a.ldr(top_reg, a64::ptr(co_reg, offsetStack + 8));
+                
+                a.ldr(scratch, a64::ptr(co_reg, offsetFrames + 8));
+                a.sub(scratch, scratch, frame_reg);
+                a.cmp(scratch, (uint64_t)sizeof(CallFrame));
+                a.b_hi(labels[i]); 
+                break;
+            }
+            case OpCode::OP_GET_UPVALUE: {
+                uint8_t slot = bytecode[++i];
+                a.str(top_reg, a64::ptr(co_reg, offsetStack + 8));
+                a.mov(a64::x0, vm_reg);
+                a.mov(a64::x1, (uint32_t)slot);
+                a.mov(scratch, (uint64_t)VM::jitGetUpvalue);
+                a.blr(scratch);
+                a.ldr(top_reg, a64::ptr(co_reg, offsetStack + 8));
+                break;
+            }
+            case OpCode::OP_SET_UPVALUE: {
+                uint8_t slot = bytecode[++i];
+                a.str(top_reg, a64::ptr(co_reg, offsetStack + 8));
+                a.mov(a64::x0, vm_reg);
+                a.mov(a64::x1, (uint32_t)slot);
+                a.mov(scratch, (uint64_t)VM::jitSetUpvalue);
+                a.blr(scratch);
+                a.ldr(top_reg, a64::ptr(co_reg, offsetStack + 8));
+                break;
+            }
+            case OpCode::OP_CLOSE_UPVALUE: {
+                // We need the absolute stack index
+                a.sub(scratch, top_reg, stack_reg);
+                a.lsr(scratch, scratch, 3); // scratch = index
+                a.sub(scratch, scratch, 1);
+
+                a.str(top_reg, a64::ptr(co_reg, offsetStack + 8));
+                a.mov(a64::x0, vm_reg);
+                a.mov(a64::x1, scratch);
+                a.mov(scratch, (uint64_t)VM::jitCloseUpvalues);
+                a.blr(scratch);
+                a.ldr(top_reg, a64::ptr(co_reg, offsetStack + 8));
+                a.sub(top_reg, top_reg, 8); // pop
+                break;
+            }
+            case OpCode::OP_CONCAT: {
+                a.str(top_reg, a64::ptr(co_reg, offsetStack + 8));
+                a.mov(a64::x0, vm_reg);
+                a.mov(scratch, (uint64_t)VM::jitConcat);
+                a.blr(scratch);
+                a.ldr(top_reg, a64::ptr(co_reg, offsetStack + 8));
+                
+                a.ldr(scratch, a64::ptr(co_reg, offsetFrames + 8));
+                a.sub(scratch, scratch, frame_reg);
+                a.cmp(scratch, (uint64_t)sizeof(CallFrame));
+                a.b_hi(labels[i]); 
+                break;
+            }
             case OpCode::OP_ADD:
             case OpCode::OP_SUB:
             case OpCode::OP_MUL:

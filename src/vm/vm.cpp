@@ -1361,3 +1361,130 @@ void VM::callHook(const char* event, int line) {
     currentCoroutine_->inHook = false;
 }
 
+// JIT callback helpers
+void VM::jitGetTable(VM* vm) {
+    Value key = vm->pop();
+    Value tableValue = vm->pop();
+
+    if (tableValue.isTable()) {
+        TableObject* table = tableValue.asTableObj();
+        Value value = table->get(key);
+        if (!value.isNil()) {
+            vm->push(value);
+            return;
+        }
+    }
+
+    if (key.isString()) {
+        Value mm = vm->getMetamethod(tableValue, vm->getStringValue(key));
+        if (!mm.isNil()) {
+            vm->push(mm);
+            return;
+        }
+    }
+
+    Value indexMethod = vm->getMetamethod(tableValue, "__index");
+    if (indexMethod.isNil()) {
+        if (!tableValue.isTable()) {
+            vm->runtimeError("attempt to index a " + tableValue.typeToString() + " value");
+        }
+        vm->push(Value::nil());
+    } else if (indexMethod.isFunction()) {
+        vm->push(indexMethod);
+        vm->push(tableValue);
+        vm->push(key);
+        vm->callValue(2, 2); 
+    } else if (indexMethod.isTable()) {
+        TableObject* indexTable = indexMethod.asTableObj();
+        Value result = key.isString() ? indexTable->get(vm->getStringValue(key)) : indexTable->get(key);
+        vm->push(result);
+    } else {
+        vm->push(Value::nil());
+    }
+}
+
+void VM::jitSetTable(VM* vm) {
+    Value value = vm->peek(0);
+    Value key = vm->peek(1);
+    Value tableValue = vm->peek(2);
+
+    if (tableValue.isTable()) {
+        TableObject* table = tableValue.asTableObj();
+        if (table->has(key)) {
+            table->set(key, value);
+            vm->pop(); vm->pop(); vm->pop();
+            return;
+        }
+    }
+
+    Value newIndex = vm->getMetamethod(tableValue, "__newindex");
+    if (newIndex.isNil()) {
+        if (tableValue.isTable()) {
+            tableValue.asTableObj()->set(key, value);
+        } else {
+            vm->runtimeError("attempt to index a " + tableValue.typeToString() + " value");
+        }
+        vm->pop(); vm->pop(); vm->pop();
+    } else if (newIndex.isFunction()) {
+        vm->currentCoroutine_->stack.insert(vm->currentCoroutine_->stack.end() - 3, newIndex);
+        vm->callValue(3, 1);
+    } else if (newIndex.isTable()) {
+        TableObject* niTable = newIndex.asTableObj();
+        if (key.isString()) {
+            niTable->set(vm->getStringValue(key), value);
+        } else {
+            niTable->set(key, value);
+        }
+        vm->pop(); vm->pop(); vm->pop();
+    } else {
+        if (tableValue.isTable()) {
+            tableValue.asTableObj()->set(key, value);
+        } else {
+            vm->runtimeError("attempt to index a " + tableValue.typeToString() + " value");
+        }
+        vm->pop(); vm->pop(); vm->pop();
+    }
+}
+
+void VM::jitNewTable(VM* vm) {
+    TableObject* table = vm->createTable();
+    vm->push(Value::table(table));
+}
+
+void VM::jitGetUpvalue(VM* vm, uint32_t index) {
+    if (!vm->currentCoroutine_->frames.empty()) {
+        UpvalueObject* upvalue = vm->getFrame(0)->closure->getUpvalueObj(index);
+        if (upvalue) {
+            vm->push(upvalue->get(vm->currentCoroutine_->stack));
+        } else {
+            vm->push(Value::nil());
+        }
+    } else {
+        vm->push(Value::nil());
+    }
+}
+
+void VM::jitSetUpvalue(VM* vm, uint32_t index) {
+    Value val = vm->peek(0);
+    if (!vm->currentCoroutine_->frames.empty()) {
+        UpvalueObject* upvalue = vm->getFrame(0)->closure->getUpvalueObj(index);
+        if (upvalue) {
+            upvalue->set(vm->currentCoroutine_->stack, val);
+        }
+    }
+}
+
+void VM::jitConcat(VM* vm) {
+    Value b = vm->pop();
+    Value a = vm->pop();
+    if ((a.isString() || a.isNumber()) && (b.isString() || b.isNumber())) {
+        vm->push(vm->concat(a, b));
+    } else if (!vm->callBinaryMetamethod(a, b, "__concat")) {
+        vm->runtimeError("attempt to concatenate " + a.typeToString() + " and " + b.typeToString());
+    }
+}
+
+void VM::jitCloseUpvalues(VM* vm, uint32_t stackIndex) {
+    vm->closeUpvalues(stackIndex);
+}
+

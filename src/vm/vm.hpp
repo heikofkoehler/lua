@@ -135,6 +135,15 @@ public:
     void setJitEnabled(bool enable) { jitEnabled_ = enable; }
     bool isJitEnabled() const { return jitEnabled_; }
 
+    // JIT callback helpers
+    static void jitGetTable(VM* vm);
+    static void jitSetTable(VM* vm);
+    static void jitNewTable(VM* vm);
+    static void jitGetUpvalue(VM* vm, uint32_t index);
+    static void jitSetUpvalue(VM* vm, uint32_t index);
+    static void jitConcat(VM* vm);
+    static void jitCloseUpvalues(VM* vm, uint32_t stackIndex);
+
     // Registry for internal use (stable storage)
     void setRegistry(const std::string& key, const Value& value) { registry_[key] = value; }
     Value getRegistry(const std::string& key) const;
