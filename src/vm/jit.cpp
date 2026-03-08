@@ -147,6 +147,156 @@ JITFunc JITCompiler::compile(FunctionObject* function) {
                 a.add(top_reg, top_reg, 8);
                 break;
             }
+            case OpCode::OP_ADD:
+            case OpCode::OP_SUB:
+            case OpCode::OP_MUL:
+            case OpCode::OP_DIV: {
+                Label fallback = a.new_label();
+                Label success = a.new_label();
+
+                a.ldr(scratch, a64::ptr(top_reg, -8)); // val2
+                a.ldr(scratch2, a64::ptr(top_reg, -16)); // val1
+                
+                a.lsr(a64::x8, scratch, 48);
+                a.cmp(a64::x8, 0xFFF1);
+                a.b_hs(fallback);
+
+                a.lsr(a64::x8, scratch2, 48);
+                a.cmp(a64::x8, 0xFFF1);
+                a.b_hs(fallback);
+
+                a.fmov(a64::d1, scratch); // d1 = val2
+                a.fmov(a64::d0, scratch2); // d0 = val1
+                
+                if (op == OpCode::OP_ADD) {
+                    a.fadd(a64::d0, a64::d0, a64::d1);
+                } else if (op == OpCode::OP_SUB) {
+                    a.fsub(a64::d0, a64::d0, a64::d1);
+                } else if (op == OpCode::OP_MUL) {
+                    a.fmul(a64::d0, a64::d0, a64::d1);
+                } else if (op == OpCode::OP_DIV) {
+                    a.fdiv(a64::d0, a64::d0, a64::d1);
+                }
+                
+                a.fmov(scratch, a64::d0);
+                a.str(scratch, a64::ptr(top_reg, -16));
+                a.sub(top_reg, top_reg, 8);
+                a.b(success);
+
+                a.bind(fallback);
+                a.str(top_reg, a64::ptr(co_reg, offsetStack + 8));
+                a.mov(a64::x0, (uint64_t)i);
+                a.ret(a64::x30);
+
+                a.bind(success);
+                break;
+            }
+            case OpCode::OP_NEG: {
+                Label fallback = a.new_label();
+                Label success = a.new_label();
+
+                a.ldr(scratch, a64::ptr(top_reg, -8)); // val1
+                
+                a.lsr(a64::x8, scratch, 48);
+                a.cmp(a64::x8, 0xFFF1);
+                a.b_hs(fallback);
+
+                a.fmov(a64::d0, scratch);
+                a.fneg(a64::d0, a64::d0);
+                a.fmov(scratch, a64::d0);
+                
+                a.str(scratch, a64::ptr(top_reg, -8));
+                a.b(success);
+
+                a.bind(fallback);
+                a.str(top_reg, a64::ptr(co_reg, offsetStack + 8));
+                a.mov(a64::x0, (uint64_t)i);
+                a.ret(a64::x30);
+
+                a.bind(success);
+                break;
+            }
+            case OpCode::OP_NOT: {
+                Label is_falsey = a.new_label();
+                Label success = a.new_label();
+
+                a.ldr(scratch, a64::ptr(top_reg, -8));
+
+                a.mov(scratch2, Value::nil().bits());
+                a.cmp(scratch, scratch2);
+                a.b_eq(is_falsey);
+
+                a.mov(scratch2, Value::boolean(false).bits());
+                a.cmp(scratch, scratch2);
+                a.b_eq(is_falsey);
+
+                a.mov(scratch, Value::boolean(false).bits());
+                a.str(scratch, a64::ptr(top_reg, -8));
+                a.b(success);
+
+                a.bind(is_falsey);
+                a.mov(scratch, Value::boolean(true).bits());
+                a.str(scratch, a64::ptr(top_reg, -8));
+                
+                a.bind(success);
+                break;
+            }
+            case OpCode::OP_EQUAL:
+            case OpCode::OP_LESS:
+            case OpCode::OP_LESS_EQUAL:
+            case OpCode::OP_GREATER:
+            case OpCode::OP_GREATER_EQUAL: {
+                Label fallback = a.new_label();
+                Label is_true = a.new_label();
+                Label success = a.new_label();
+
+                a.ldr(scratch, a64::ptr(top_reg, -8)); // val2
+                a.ldr(scratch2, a64::ptr(top_reg, -16)); // val1
+                
+                a.lsr(a64::x8, scratch, 48);
+                a.cmp(a64::x8, 0xFFF1);
+                a.b_hs(fallback);
+
+                a.lsr(a64::x8, scratch2, 48);
+                a.cmp(a64::x8, 0xFFF1);
+                a.b_hs(fallback);
+
+                a.fmov(a64::d1, scratch); // d1 = val2
+                a.fmov(a64::d0, scratch2); // d0 = val1
+                
+                a.fcmp(a64::d0, a64::d1);
+                
+                if (op == OpCode::OP_EQUAL) {
+                    a.b_eq(is_true);
+                } else if (op == OpCode::OP_LESS) {
+                    a.b_mi(is_true);
+                } else if (op == OpCode::OP_LESS_EQUAL) {
+                    a.b_ls(is_true);
+                } else if (op == OpCode::OP_GREATER) {
+                    a.b_gt(is_true);
+                } else if (op == OpCode::OP_GREATER_EQUAL) {
+                    a.b_ge(is_true);
+                }
+                
+                a.mov(scratch, Value::boolean(false).bits());
+                a.str(scratch, a64::ptr(top_reg, -16));
+                a.sub(top_reg, top_reg, 8);
+                a.b(success);
+
+                a.bind(is_true);
+                a.mov(scratch, Value::boolean(true).bits());
+                a.str(scratch, a64::ptr(top_reg, -16));
+                a.sub(top_reg, top_reg, 8);
+                a.b(success);
+
+                a.bind(fallback);
+                a.str(top_reg, a64::ptr(co_reg, offsetStack + 8));
+                a.mov(a64::x0, (uint64_t)i);
+                a.ret(a64::x30);
+
+                a.bind(success);
+                break;
+            }
             default: {
                 // Unsupported opcode, fall back to interpreter
                 a.str(top_reg, a64::ptr(co_reg, offsetStack + 8));
