@@ -57,6 +57,8 @@ public:
     // Reset VM state
     void reset();
 
+    void internConstants(const FunctionObject& function);
+
     // Stack operations (for debugging/testing)
     const std::vector<Value>& stack() const { return currentCoroutine_->stack; }
 
@@ -325,6 +327,7 @@ private:
     std::string sourceName_ = "chunk"; // Current source name
     std::vector<FunctionObject*> functions_;  // Function pool (owned)
     std::vector<StringObject*> strings_;  // Compile-time string pool (owned)
+    std::vector<Value> rootedConstants_;  // Interned constants rooted for GC
     std::unordered_map<std::string, StringObject*> runtimeStrings_; // Runtime string interning
     std::vector<NativeFunction> nativeFunctions_;  // Native function table
 

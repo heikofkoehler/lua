@@ -20,11 +20,8 @@ JITCompiler::~JITCompiler() {}
 JITFunc JITCompiler::compile(FunctionObject* function) {
     if (function->getJITCode()) return function->getJITCode();
 
-    // Debug offsets
-    size_t offsetCurrentCoroutine = (size_t)&(((VM*)0)->currentCoroutine_);
-    size_t offsetStack = (size_t)&(((CoroutineObject*)0)->stack);
-    size_t offsetFrames = (size_t)&(((CoroutineObject*)0)->frames);
-    size_t offsetStackBase = (size_t)&(((CallFrame*)0)->stackBase);
+    // Intern string constants in the chunk before compiling
+    vm_->internConstants(*function);
 
     (void)vm_; // Suppress unused warning
 

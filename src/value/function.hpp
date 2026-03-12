@@ -27,6 +27,8 @@ public:
           upvalueCount_(upvalueCount), hasVarargs_(hasVarargs),
           hotness_(0), jitCode_(nullptr) {}
 
+    ~FunctionObject() {}
+
     const std::string& name() const { return name_; }
     int arity() const { return arity_; }
     Chunk* chunk() const { return chunk_.get(); }

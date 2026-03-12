@@ -42,6 +42,11 @@ void VM::markRoots() {
     for (const auto& pair : registry_) markValue(pair.second);
     for (int i = 0; i < Value::NUM_TYPES; i++) markValue(typeMetatables_[i]);
 
+    // Mark interned constants
+    for (const auto& val : rootedConstants_) {
+        markValue(val);
+    }
+
     if (mainCoroutine_) markObject(mainCoroutine_);
     if (currentCoroutine_) markObject(currentCoroutine_);
 }

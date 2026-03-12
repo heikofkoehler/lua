@@ -50,6 +50,7 @@ VM::~VM() {
     globals_.clear();
     registry_.clear();
     runtimeStrings_.clear();
+    rootedConstants_.clear();
     for (int i = 0; i < Value::NUM_TYPES; i++) {
         typeMetatables_[i] = Value::nil();
     }
@@ -78,6 +79,7 @@ void VM::reset() {
     globals_.clear();
     registry_.clear();
     runtimeStrings_.clear();
+    rootedConstants_.clear();
     for (int i = 0; i < Value::NUM_TYPES; i++) {
         typeMetatables_[i] = Value::nil();
     }
@@ -154,7 +156,6 @@ StringObject* VM::internString(const std::string& str) {
 
 StringObject* VM::getString(size_t index) {
     if (index >= strings_.size()) {
-        printf("DEBUG getString FAIL: index=%zu size=%zu\n", index, strings_.size());
         runtimeError("Invalid string index");
         return nullptr;
     }
@@ -170,9 +171,6 @@ UserdataObject* VM::createUserdata(void* data) {
 }
 
 ClosureObject* VM::createClosure(FunctionObject* function) {
-    // Closure size is variable: sizeof(ClosureObject) + upvalueCount * sizeof(UpvalueObject*)
-    // But our allocateObject only checks sizeof(T). 
-    // For simplicity, let's manually handle it if it's variable.
     size_t closureSize = sizeof(ClosureObject) + function->upvalueCount() * sizeof(UpvalueObject*);
     checkGC(closureSize);
     
@@ -248,8 +246,6 @@ void VM::setupRootUpvalues(ClosureObject* closure, const Value& env) {
         }
     }
     
-    // Set all upvalues to envUpvalue initially to avoid nulls
-    // though the compiler should only use index 0 for _ENV
     for (size_t i = 0; i < closure->upvalueCount(); i++) {
         if (closure->getUpvalueObj(i) == nullptr) {
             closure->setUpvalue(i, envUpvalue);
@@ -258,7 +254,6 @@ void VM::setupRootUpvalues(ClosureObject* closure, const Value& env) {
 }
 
 UpvalueObject* VM::captureUpvalue(size_t stackIndex) {
-    // Check if upvalue already exists for this stack slot
     for (UpvalueObject* openUpvalue : currentCoroutine_->openUpvalues) {
         if (!openUpvalue->isClosed() && openUpvalue->stackIndex() == stackIndex) {
             return openUpvalue;
@@ -267,7 +262,6 @@ UpvalueObject* VM::captureUpvalue(size_t stackIndex) {
 
     UpvalueObject* upvalue = allocateObject<UpvalueObject>(currentCoroutine_, stackIndex);
 
-    // Insert into currentCoroutine_->openUpvalues (keep sorted by stack index for efficient closing)
     auto it = currentCoroutine_->openUpvalues.begin();
     while (it != currentCoroutine_->openUpvalues.end() && (*it)->stackIndex() < stackIndex) {
         ++it;
@@ -280,10 +274,8 @@ UpvalueObject* VM::captureUpvalue(size_t stackIndex) {
 void VM::closeUpvalues(size_t lastStackIndex, CoroutineObject* co, const Value& error) {
     if (co == nullptr) co = currentCoroutine_;
 
-    // 1. Handle to-be-closed variables first (in reverse order)
     closeTBCVariables(lastStackIndex, co, error);
 
-    // 2. Handle standard upvalues
     auto it = co->openUpvalues.begin();
     while (it != co->openUpvalues.end()) {
         UpvalueObject* upvalue = *it;
@@ -350,7 +342,6 @@ void VM::closeCoroutine(CoroutineObject* co) {
         return;
     }
 
-    // Close all open upvalues and TBC variables in this coroutine
     closeUpvalues(0, co);
     co->status = CoroutineObject::Status::DEAD;
 }
@@ -385,73 +376,62 @@ void VM::initStandardLibrary() {
     if (stdlibInitialized_) return;
     stdlibInitialized_ = true;
 
-    // Register _G (global environment) early so libraries can populate it
     TableObject* gTable = createTable();
     Value gVal = Value::table(gTable);
     globals_["_G"] = gVal;
     gTable->set("_G", gVal);
 
-    // Register base library
     extern void registerBaseLibrary(VM* vm);
     registerBaseLibrary(this);
 
-    // Create 'math' table
     TableObject* mathTable = createTable();
     extern void registerMathLibrary(VM* vm, TableObject* mathTable);
     registerMathLibrary(this, mathTable);
     setGlobal("math", Value::table(mathTable));
     registerModule("math", mathTable);
 
-    // Create 'string' table
     TableObject* stringTable = createTable();
     extern void registerStringLibrary(VM* vm, TableObject* stringTable);
     registerStringLibrary(this, stringTable);
     setGlobal("string", Value::table(stringTable));
     registerModule("string", stringTable);
 
-    // Create 'table' table
     TableObject* tableTable = createTable();
     extern void registerTableLibrary(VM* vm, TableObject* tableTable);
     registerTableLibrary(this, tableTable);
     setGlobal("table", Value::table(tableTable));
     registerModule("table", tableTable);
 
-    // Create 'utf8' table
     TableObject* utf8Table = createTable();
     extern void registerUTF8Library(VM* vm, TableObject* utf8Table);
     registerUTF8Library(this, utf8Table);
     setGlobal("utf8", Value::table(utf8Table));
     registerModule("utf8", utf8Table);
 
-    // Create 'os' table
     TableObject* osTable = createTable();
     extern void registerOSLibrary(VM* vm, TableObject* osTable);
     registerOSLibrary(this, osTable);
     setGlobal("os", Value::table(osTable));
     registerModule("os", osTable);
 
-    // Create 'io' table
     TableObject* ioTable = createTable();
     extern void registerIOLibrary(VM* vm, TableObject* ioTable);
     registerIOLibrary(this, ioTable);
     setGlobal("io", Value::table(ioTable));
     registerModule("io", ioTable);
 
-    // Create 'socket' table
     TableObject* socketTable = createTable();
     extern void registerSocketLibrary(VM* vm, TableObject* socketTable);
     registerSocketLibrary(this, socketTable);
     setGlobal("socket", Value::table(socketTable));
     registerModule("socket", socketTable);
 
-    // Create 'coroutine' table
     TableObject* coroutineTable = createTable();
     extern void registerCoroutineLibrary(VM* vm, TableObject* coroutineTable);
     registerCoroutineLibrary(this, coroutineTable);
     setGlobal("coroutine", Value::table(coroutineTable));
     registerModule("coroutine", coroutineTable);
 
-    // Create 'debug' table
     TableObject* debugTable = createTable();
     extern void registerDebugLibrary(VM* vm, TableObject* debugTable);
     registerDebugLibrary(this, debugTable);
@@ -460,10 +440,8 @@ void VM::initStandardLibrary() {
 }
 
 void VM::runInitializationFrames() {
-    // (This might be called if stdlib registration pushed Lua functions to coroutine)
     if (currentCoroutine_->frames.size() > 0) {
         if (run(currentCoroutine_->frames.size() - 1)) {
-            // Success, pop results left by the initialization script
             for (size_t i = 0; i < currentCoroutine_->lastResultCount; i++) {
                 pop();
             }
@@ -492,7 +470,6 @@ void VM::registerModule(const std::string& name, TableObject* module) {
 void VM::setGlobal(const std::string& name, const Value& value) {
     globals_[name] = value;
     
-    // Also update _G table if it exists
     auto it = globals_.find("_G");
     if (it != globals_.end() && it->second.isTable()) {
         it->second.asTableObj()->set(name, value);
@@ -513,13 +490,26 @@ const CallFrame& VM::currentFrame() const {
     return currentCoroutine_->frames.back();
 }
 
+void VM::internConstants(const FunctionObject& function) {
+    for (size_t i = 0; i < function.chunk()->constants().size(); i++) {
+        Value& val = const_cast<std::vector<Value>&>(function.chunk()->constants())[i];
+        if (val.isString() && !val.isRuntimeString()) {
+            StringObject* str = function.chunk()->getString(val.asStringIndex());
+            val = Value::runtimeString(internString(str->chars(), str->length()));
+            rootedConstants_.push_back(val);
+        } else if (val.isFunction()) {
+            FunctionObject* nested = function.chunk()->getFunction(val.asFunctionIndex());
+            if (nested) internConstants(*nested);
+        }
+    }
+}
+
 bool VM::run(const FunctionObject& function) {
     return run(function, {});
 }
 
 bool VM::run(const FunctionObject& function, const std::vector<Value>& args) {
     try {
-        // Save current state for recursive calls
         const Chunk* oldChunk = currentCoroutine_->chunk;
         const Chunk* oldRoot = currentCoroutine_->rootChunk;
         size_t oldFrameCount = currentCoroutine_->frames.size();
@@ -533,34 +523,34 @@ bool VM::run(const FunctionObject& function, const std::vector<Value>& args) {
         }
         hadError_ = false;
 
-        // Initialize standard library on first run (needs chunk for string pool)
         if (!stdlibInitialized_) {
             initStandardLibrary();
         }
+
+        internConstants(function);
 
 #ifdef PRINT_CODE
         function.disassemble();
 #endif
 
-        // Create root closure
         ClosureObject* closure = createClosure(const_cast<FunctionObject*>(&function));
         
-        // Clear frames for a clean start if this is the first call AND stack is empty
         if (currentCoroutine_->frames.empty() && currentCoroutine_->stack.empty()) {
             currentCoroutine_->stack.clear();
         }
         
-        // Initialize root upvalues (the first one is _ENV)
         setupRootUpvalues(closure);
 
         push(Value::closure(closure));
         
-        // Push arguments
+        if (currentCoroutine_->status == CoroutineObject::Status::DEAD) {
+            currentCoroutine_->status = CoroutineObject::Status::RUNNING;
+        }
+
         for (const auto& arg : args) {
             push(arg);
         }
 
-        // Use callValue to push the frame correctly
         if (!callValue(static_cast<int>(args.size()), 0)) {
             return false;
         }
@@ -572,12 +562,9 @@ bool VM::run(const FunctionObject& function, const std::vector<Value>& args) {
         bool result = run(oldFrameCount);
 
         if (currentCoroutine_->status == CoroutineObject::Status::SUSPENDED) {
-            // Coroutine yielded - do NOT restore state or pop frames!
-            // The state will be restored when resume() finishes and returns to resumer.
             return result;
         }
 
-        // Restore previous state
         currentCoroutine_->chunk = oldChunk;
         currentCoroutine_->rootChunk = oldRoot;
         
@@ -595,22 +582,19 @@ bool VM::run() {
 
 bool VM::pcall(int argCount) {
     size_t prevFrames = currentCoroutine_->frames.size();
-    size_t stackSizeBefore = currentCoroutine_->stack.size() - argCount; // Leave pcall on stack
+    size_t stackSizeBefore = currentCoroutine_->stack.size() - argCount;
 
     bool prevPcall = inPcall_;
     inPcall_ = true;
     
     bool success = false;
     try {
-        // callValue pops (argCount - 1) and the function, and sets up a new frame if closure
-        success = callValue(argCount - 1, 0); // 0 means return all results
+        success = callValue(argCount - 1, 0);
 
-        // If it was a closure, a new frame was pushed. We need to run it until it pops.
         if (success && currentCoroutine_->frames.size() > prevFrames) {
             success = run(prevFrames);
         }
         
-        // Even if run returns true, it might have encountered an error but stayed in loop (though unlikely now)
         if (hadError_) success = false;
     } catch (const RuntimeError&) {
         success = false;
@@ -627,16 +611,11 @@ bool VM::pcall(int argCount) {
     hadError_ = false;
 
     if (!success) {
-        isHandlingError_ = true; // Prevent GC/memory errors while unwinding and allocating error string
-        // Runtime error occurred during execution
-        // Stack and frames need to be unwound
-        
-        // Close TBC variables
+        isHandlingError_ = true;
         Value errorObj = Value::runtimeString(internString(lastErrorMessage_));
         try {
             closeUpvalues(stackSizeBefore, nullptr, errorObj);
         } catch (const RuntimeError& e) {
-            // New error in cleanup replaces old one
         }
 
         while (currentCoroutine_->frames.size() > prevFrames) {
@@ -649,12 +628,10 @@ bool VM::pcall(int argCount) {
         
         push(Value::boolean(false));
         push(Value::runtimeString(internString(lastErrorMessage_)));
-        hadError_ = false; // Recovered
+        hadError_ = false;
         isHandlingError_ = false;
         currentCoroutine_->lastResultCount = 2;
     } else {
-        // Success. The results are on the stack.
-        // We need to push `true` before the results.
         size_t resultCount = currentCoroutine_->lastResultCount;
         
         std::vector<Value> results;
@@ -663,7 +640,6 @@ bool VM::pcall(int argCount) {
         }
         std::reverse(results.begin(), results.end());
         
-        // Pop function and arguments
         while (currentCoroutine_->stack.size() > stackSizeBefore) {
             pop();
         }
@@ -686,14 +662,12 @@ bool VM::xpcall(int argCount) {
 
     size_t prevFrames = currentCoroutine_->frames.size();
     
-    // Save error handler
     Value msgh = peek(argCount - 2);
-    size_t stackSizeBefore = currentCoroutine_->stack.size() - argCount; // Leave xpcall on stack
+    size_t stackSizeBefore = currentCoroutine_->stack.size() - argCount;
 
     bool prevPcall = inPcall_;
     inPcall_ = true;
 
-    // Shift arguments to call f: [f, arg1, arg2, ...]
     std::vector<Value> args;
     for (int i = 0; i < argCount - 2; i++) {
         args.push_back(pop());
@@ -703,7 +677,6 @@ bool VM::xpcall(int argCount) {
         push(*it);
     }
 
-    // Now stack is: [..., f, arg1, arg2, ...]
     bool success = false;
     try {
         success = callValue(argCount - 2, 0);
@@ -719,9 +692,7 @@ bool VM::xpcall(int argCount) {
     inPcall_ = prevPcall;
 
     if (!success || hadError_) {
-        isHandlingError_ = true; // Prevent GC/memory errors while unwinding and allocating error string
-        // Runtime error occurred during execution
-        // Stack and frames need to be unwound
+        isHandlingError_ = true;
         while (currentCoroutine_->frames.size() > prevFrames) {
             currentCoroutine_->frames.pop_back();
         }
@@ -730,30 +701,24 @@ bool VM::xpcall(int argCount) {
             pop();
         }
 
-        // Push false, then call msgh(lastErrorMessage_)
         push(Value::boolean(false));
 
-        // Push msgh and call it
         push(msgh);
         push(Value::runtimeString(internString(lastErrorMessage_)));
 
         if (!callValue(1, 2)) {
-            // msgh failed!
             isHandlingError_ = false;
             return false;
         }
         
-        // Wait, msgh might be Lua function.
         if (currentCoroutine_->frames.size() > prevFrames) {
             run(prevFrames);
         }
         
-        // Result of msgh is now on top. 
-        hadError_ = false; // Recovered
+        hadError_ = false;
         isHandlingError_ = false;
         currentCoroutine_->lastResultCount = 2;
     } else {
-        // Success. The results are on the stack.
         size_t resultCount = currentCoroutine_->lastResultCount;
         
         std::vector<Value> results;
@@ -762,7 +727,6 @@ bool VM::xpcall(int argCount) {
         }
         std::reverse(results.begin(), results.end());
         
-        // Pop function and arguments
         while (currentCoroutine_->stack.size() > stackSizeBefore) {
             pop();
         }
@@ -824,7 +788,6 @@ Value VM::pop() {
     }
     Value value = currentCoroutine_->stack.back();
     currentCoroutine_->stack.pop_back();
-    // std::cout << "DEBUG pop from " << currentCoroutine_ << " size now " << currentCoroutine_->stack.size() << std::endl;
     return value;
 }
 
@@ -844,8 +807,6 @@ Value VM::readConstant() {
     uint8_t index = readByte();
     Value constant = currentFrame().chunk->constants()[index];
     
-    // Runtime strings are stored in the constant pool as indices into the strings_ pool
-    // and need to be interned properly during execution if they are used as keys or by identity
     if (constant.isString() && !constant.isRuntimeString()) {
         StringObject* str = currentFrame().chunk->getString(constant.asStringIndex());
         StringObject* runtimeStr = internString(str->chars(), str->length());
@@ -857,10 +818,7 @@ Value VM::readConstant() {
 
 void VM::runtimeError(const std::string& message, int level) {
     if (isHandlingError_) {
-        // Nested error during error handling (e.g. error in __close)
-        // In Lua 5.4, the new error often replaces the old one.
-        // We'll allow it to be formatted.
-        isHandlingError_ = false; // Temporarily reset to allow formatting
+        isHandlingError_ = false;
         try {
             runtimeError("(error in __close) " + message, level);
         } catch (const RuntimeError& e) {
@@ -872,7 +830,6 @@ void VM::runtimeError(const std::string& message, int level) {
     lastErrorMessage_ = message;
     hadError_ = true;
 
-    // Get line number and source from current instruction
     int line = -1;
     std::string source = sourceName_;
 
@@ -913,7 +870,6 @@ void VM::runtimeError(const std::string& message, int level) {
 }
 
 void VM::traceExecution() {
-    // Print stack contents
     std::cout << "          ";
     for (const Value& value : currentCoroutine_->stack) {
         std::cout << "[ " << value << " ]";
@@ -1131,7 +1087,7 @@ bool VM::callBinaryMetamethod(const Value& a, const Value& b, const std::string&
     push(mm);
     push(a);
     push(b);
-    return callValue(2, 2); // 1 result expected
+    return callValue(2, 2);
 }
 
 bool VM::callValue(int argCount, int retCount, bool isTailCall) {
@@ -1151,7 +1107,7 @@ bool VM::callValue(int argCount, int retCount, bool isTailCall) {
             lua_State L;
             L.vm = this;
             L.is_owned = false;
-            L.stackBase = funcPosition + 1; // first argument
+            L.stackBase = funcPosition + 1;
             L.argCount = argCount;
             
             lua_State* oldL = currentL_;
@@ -1240,12 +1196,10 @@ bool VM::callValue(int argCount, int retCount, bool isTailCall) {
             for (int i = 0; i < argCount - arity; i++) {
                 frame.varargs.push_back(currentCoroutine_->stack[frame.stackBase + arity + i]);
             }
-            // Pop the varargs from the stack so they don't occupy local variable slots
             for (int i = 0; i < argCount - arity; i++) {
                 currentCoroutine_->stack.pop_back();
             }
         } else if (argCount > arity && !function->hasVarargs()) {
-            // Discard extra arguments
             for (int i = 0; i < argCount - arity; i++) {
                 currentCoroutine_->stack.pop_back();
             }
@@ -1256,16 +1210,10 @@ bool VM::callValue(int argCount, int retCount, bool isTailCall) {
         return true;
     }
     
-    // Check for __call metamethod
     Value mm = getMetamethod(callee, "__call");
     if (!mm.isNil()) {
-        // We need to insert the metamethod right before the callee (which becomes the first argument)
-        // Stack currently: [..., callee, arg1, arg2, ..., argN]
-        // We need: [..., mm, callee, arg1, arg2, ..., argN]
         size_t calleePos = currentCoroutine_->stack.size() - argCount - 1;
         currentCoroutine_->stack.insert(currentCoroutine_->stack.begin() + calleePos, mm);
-        
-        // Now call the metamethod with argCount + 1 arguments
         return callValue(argCount + 1, retCount, isTailCall);
     }
     
@@ -1284,21 +1232,17 @@ bool VM::resumeCoroutine(CoroutineObject* co) {
     co->status = CoroutineObject::Status::RUNNING;
     co->caller = oldCo;
 
-    // Run until the coroutine returns or yields.
-    // We should run until all frames are popped (target 0) or it yields.
     bool result = run(0);
 
     currentCoroutine_ = oldCo;
 
     if (result) {
         if (co->status == CoroutineObject::Status::SUSPENDED) {
-            // Push yielded values to caller
             for (const auto& val : co->yieldedValues) {
                 push(val);
             }
             currentCoroutine_->lastResultCount = co->yieldedValues.size();
         } else if (co->status == CoroutineObject::Status::DEAD) {
-            // Push return values to caller (everything on stack)
             size_t count = co->stack.size();
             for (const auto& val : co->stack) {
                 push(val);
@@ -1361,7 +1305,6 @@ void VM::callHook(const char* event, int line) {
     currentCoroutine_->inHook = false;
 }
 
-// JIT callback helpers
 void VM::jitGetTable(VM* vm, uint32_t nextIp) {
     Value key = vm->pop();
     Value tableValue = vm->pop();
@@ -1507,7 +1450,6 @@ void VM::jitClosure(VM* vm, uint32_t constantIndex, uint32_t bytecodeOffset) {
     const std::vector<uint8_t>& code = vm->getFrame(0)->chunk->code();
     size_t offset = bytecodeOffset;
 
-    // Capture upvalues
     for (size_t i = 0; i < closure->upvalueCount(); i++) {
         uint8_t isLocal = code[offset++];
         uint8_t index = code[offset++];
@@ -1547,7 +1489,7 @@ void VM::jitReturnValue(VM* vm, uint32_t count) {
     while (vm->currentCoroutine_->stack.size() > stackBase) {
         vm->pop();
     }
-    vm->pop(); // pop closure
+    vm->pop(); 
 
     vm->currentCoroutine_->frames.pop_back();
 

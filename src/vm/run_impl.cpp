@@ -650,7 +650,7 @@ bool VM::run(size_t targetFrameCount) {
                 Value callee = peek(argCount);
                 if (callee.isClosure()) {
                     FunctionObject* func = callee.asClosureObj()->function();
-                    if (false && isJitEnabled() && !func->getJITCode() && func->incrementHotness() >= 10) {
+                    if (isJitEnabled() && !func->getJITCode() && func->incrementHotness() >= 10) {
 #ifdef USE_JIT
                         if (!jit()->compile(func)) {
                             func->resetHotness(-1000); 
@@ -682,7 +682,7 @@ bool VM::run(size_t targetFrameCount) {
                 Value callee = peek(actualArgCount);
                 if (callee.isClosure()) {
                     FunctionObject* func = callee.asClosureObj()->function();
-                    if (false && isJitEnabled() && !func->getJITCode() && func->incrementHotness() >= 10) {
+                    if (isJitEnabled() && !func->getJITCode() && func->incrementHotness() >= 10) {
 #ifdef USE_JIT
                         if (!jit()->compile(func)) {
                             func->resetHotness(-1000); 
