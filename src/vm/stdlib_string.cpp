@@ -944,16 +944,26 @@ bool native_string_pack(VM* vm, int argCount) {
                 apply_alignment(offset, align, &result);
                 
                 size_t start = result.length();
-                if (spec == 'b' || spec == 'B') {
-                    result.push_back(static_cast<unsigned char>(val.asNumber()));
-                } else if (spec == 'h' || spec == 'H') {
+                if (spec == 'b') {
+                    int8_t v = static_cast<int8_t>(val.asNumber());
+                    result.append(reinterpret_cast<char*>(&v), 1);
+                } else if (spec == 'B') {
+                    uint8_t v = static_cast<uint8_t>(val.asNumber());
+                    result.append(reinterpret_cast<char*>(&v), 1);
+                } else if (spec == 'h') {
                     int16_t v = static_cast<int16_t>(val.asNumber());
                     result.append(reinterpret_cast<char*>(&v), 2);
-                } else if (spec == 'l' || spec == 'L') {
+                } else if (spec == 'H') {
+                    uint16_t v = static_cast<uint16_t>(val.asNumber());
+                    result.append(reinterpret_cast<char*>(&v), 2);
+                } else if (spec == 'l') {
                     int32_t v = static_cast<int32_t>(val.asNumber());
                     result.append(reinterpret_cast<char*>(&v), 4);
+                } else if (spec == 'L') {
+                    uint32_t v = static_cast<uint32_t>(val.asNumber());
+                    result.append(reinterpret_cast<char*>(&v), 4);
                 } else if (spec == 'i' || spec == 'I') {
-                    int64_t v = val.asInteger();
+                    uint64_t v = (spec == 'I') ? static_cast<uint64_t>(val.asNumber()) : static_cast<uint64_t>(val.asInteger());
                     if (size == 1) {
                         uint8_t v8 = static_cast<uint8_t>(v);
                         result.append(reinterpret_cast<char*>(&v8), 1);
@@ -966,8 +976,11 @@ bool native_string_pack(VM* vm, int argCount) {
                     } else {
                         result.append(reinterpret_cast<char*>(&v), 8);
                     }
-                } else if (spec == 'j' || spec == 'J' || spec == 'T') {
+                } else if (spec == 'j') {
                     int64_t v = val.asInteger();
+                    result.append(reinterpret_cast<char*>(&v), 8);
+                } else if (spec == 'J' || spec == 'T') {
+                    uint64_t v = static_cast<uint64_t>(val.asNumber());
                     result.append(reinterpret_cast<char*>(&v), 8);
                 } else if (spec == 'f') {
                     float v = static_cast<float>(val.asNumber());
@@ -1074,15 +1087,23 @@ bool native_string_unpack(VM* vm, int argCount) {
             std::memcpy(buf, &data[current], specSize);
             if (!littleEndian && specSize > 1) swap_endian(buf, specSize);
 
-            if (spec == 'b' || spec == 'B') {
+            if (spec == 'b') {
+                vm->push(Value::number(static_cast<signed char>(buf[0])));
+            } else if (spec == 'B') {
                 vm->push(Value::number(static_cast<unsigned char>(buf[0])));
-            } else if (spec == 'h' || spec == 'H') {
+            } else if (spec == 'h') {
                 int16_t v; std::memcpy(&v, buf, 2);
                 vm->push(Value::number(v));
-            } else if (spec == 'l' || spec == 'L') {
+            } else if (spec == 'H') {
+                uint16_t v; std::memcpy(&v, buf, 2);
+                vm->push(Value::number(v));
+            } else if (spec == 'l') {
                 int32_t v; std::memcpy(&v, buf, 4);
                 vm->push(Value::number(v));
-            } else if (spec == 'i' || spec == 'I') {
+            } else if (spec == 'L') {
+                uint32_t v; std::memcpy(&v, buf, 4);
+                vm->push(Value::number(v));
+            } else if (spec == 'i') {
                 if (size == 1) {
                     vm->push(Value::integer(static_cast<int8_t>(buf[0])));
                 } else if (size == 2) {
@@ -1095,9 +1116,25 @@ bool native_string_unpack(VM* vm, int argCount) {
                     int64_t v; std::memcpy(&v, buf, 8);
                     vm->push(Value::integer(v));
                 }
-            } else if (spec == 'j' || spec == 'J' || spec == 'T') {
+            } else if (spec == 'I') {
+                if (size == 1) {
+                    vm->push(Value::integer(static_cast<uint8_t>(buf[0])));
+                } else if (size == 2) {
+                    uint16_t v; std::memcpy(&v, buf, 2);
+                    vm->push(Value::integer(v));
+                } else if (size == 4) {
+                    uint32_t v; std::memcpy(&v, buf, 4);
+                    vm->push(Value::number(v));
+                } else {
+                    uint64_t v; std::memcpy(&v, buf, 8);
+                    vm->push(Value::number(static_cast<double>(v)));
+                }
+            } else if (spec == 'j') {
                 int64_t v; std::memcpy(&v, buf, 8);
                 vm->push(Value::integer(v));
+            } else if (spec == 'J' || spec == 'T') {
+                uint64_t v; std::memcpy(&v, buf, 8);
+                vm->push(Value::number(static_cast<double>(v)));
             } else if (spec == 'f') {
                 float v; std::memcpy(&v, buf, 4);
                 vm->push(Value::number(v));

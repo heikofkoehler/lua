@@ -449,7 +449,9 @@ void CodeGenerator::visitMultipleLocalDeclStmt(MultipleLocalDeclStmtNode* node) 
     // 3. Pad with nil if fewer values than variables (but not covered by multires)
     if (initCount < varCount) {
         auto* lastInit = initCount > 0 ? initializers[initCount - 1].get() : nullptr;
-        bool lastIsCall = lastInit && (dynamic_cast<CallExprNode*>(lastInit) != nullptr || dynamic_cast<MethodCallExprNode*>(lastInit) != nullptr);
+        bool lastIsCall = lastInit && (dynamic_cast<CallExprNode*>(lastInit) != nullptr || 
+                                   dynamic_cast<MethodCallExprNode*>(lastInit) != nullptr ||
+                                   dynamic_cast<VarargExprNode*>(lastInit) != nullptr);
 
         if (!lastIsCall) {
             for (size_t i = initCount; i < varCount; i++) {
@@ -500,7 +502,9 @@ void CodeGenerator::visitMultipleAssignmentStmt(MultipleAssignmentStmtNode* node
     // 3. Pad with nil if fewer values than variables
     if (valCount < varCount) {
         auto* lastVal = valCount > 0 ? values[valCount - 1].get() : nullptr;
-        bool lastIsCall = lastVal && (dynamic_cast<CallExprNode*>(lastVal) != nullptr || dynamic_cast<MethodCallExprNode*>(lastVal) != nullptr);
+        bool lastIsCall = lastVal && (dynamic_cast<CallExprNode*>(lastVal) != nullptr || 
+                                  dynamic_cast<MethodCallExprNode*>(lastVal) != nullptr ||
+                                  dynamic_cast<VarargExprNode*>(lastVal) != nullptr);
 
         if (!lastIsCall) {
             for (size_t i = valCount; i < varCount; i++) {
