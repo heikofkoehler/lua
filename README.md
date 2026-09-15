@@ -1,89 +1,107 @@
 # Lua VM Implementation
 
-A Lua implementation in C++ featuring a stack-based bytecode virtual machine with functions, variables, and control flow.
+A complete Lua 5.4 implementation in C++ featuring a stack-based bytecode virtual machine, an ARM64 JIT compiler (using AsmJit), and built-in TCP socket networking. 
+
+The implementation is complete and robust enough to run **real-world Lua applications**, including a full-featured HTTP/1.1 REST web server with dynamic routing, pure-Lua JSON serialization, on-the-fly Markdown compilation, and an interactive web dashboard.
+
+---
+
+## Real-World Web Server Demo
+
+The repository includes a comprehensive real-world web application showcase in [`demo/web_server.lua`](demo/web_server.lua).
+
+### Features
+* **HTTP/1.1 Protocol Engine**: Full request parser supporting HTTP methods (`GET`, `POST`, `PUT`, `DELETE`, `OPTIONS`), URI parsing, query parameter decoding (`?query=value`), HTTP headers, and JSON request bodies.
+* **Express/Sinatra-Style Router**: Route registry supporting URL pattern matching, parameter capture (`/api/notes/:id`), CORS preflight handling, 404/500 error responses, and sub-millisecond request latency logging.
+* **Pure-Lua Third-Party Libraries**:
+  * [`rxi/json.lua`](demo/json.lua): Pure-Lua JSON encoding and decoding.
+  * [`speedata/luamarkdown`](demo/markdown.lua): Pure-Lua Markdown parser that compiles Markdown documents into HTML on the fly.
+* **REST API Endpoints**:
+  * `GET /api/info` & `GET /api/system`: Real-time VM statistics (`collectgarbage("count")`, `_VERSION`, uptime, total request counts).
+  * `GET /api/notes`: Lists stored notes with both raw Markdown and compiled HTML.
+  * `POST /api/notes`: Creates a new note from a JSON payload (`title`, `content`).
+  * `GET /api/notes/:id` & `DELETE /api/notes/:id`: Retrieves or deletes a note by ID.
+  * `POST /api/render`: Compiles arbitrary Markdown text into HTML dynamically.
+  * `GET /api/echo`: Echoes request method, headers, and query parameters.
+* **Interactive Web Dashboard (`GET /`)**: A modern, responsive single-page application (SPA) with CSS and vanilla JS featuring real-time VM memory and uptime cards, a Markdown document editor with instant HTML preview, and document management.
+
+### Running the Web Server
+
+```bash
+# Build the Lua binary
+cmake -B build -DCMAKE_BUILD_TYPE=Release
+cmake --build build -j
+
+# Start the web server
+./build/lua demo/web_server.lua
+```
+
+Once running, visit `http://127.0.0.1:8080/` in your browser, or test the API via `curl`:
+
+```bash
+# Check server & VM metrics
+curl -s http://127.0.0.1:8080/api/info
+
+# Create a Markdown note
+curl -s -X POST http://127.0.0.1:8080/api/notes \
+  -H "Content-Type: application/json" \
+  -d '{"title": "Note 1", "content": "# Hello World\nRunning on **C++ Lua VM**!"}'
+
+# Compile Markdown on the fly
+curl -s -X POST http://127.0.0.1:8080/api/render \
+  -H "Content-Type: application/json" \
+  -d '{"markdown": "## Dynamic Rendering\n* Fast\n* Pure Lua"}'
+```
+
+---
 
 ## Features
 
-### Implemented
-- **Stack-based Virtual Machine**: Bytecode interpreter with efficient execution
-- **NaN-boxing Values**: 64-bit value representation supporting nil, boolean, number, function, string, table, and **userdata** types
-- **Strings**:
-  - **String Literals**: Double and single quoted strings
-  - **String Escape Sequences**: Full support for `\n`, `\t`, `\r`, `\\`, `\"`, `\'`, `\xXX` (hex), and `\ddd` (decimal)
-  - **String Interning**: Automatic deduplication for memory efficiency
-  - **Multi-line Support**: Strings can span multiple lines
-- **Tables (Hash Maps)**:
-  - **Associative Arrays**: Key-value storage with any value type as key (except nil)
-  - **Table Constructors**: Create tables with initial values using `{}` syntax
-  - **Weak Tables**: Support for `__mode = "k"`, `"v"`, and ephemerons (Lua 5.2+ semantics)
-  - **Lua Semantics**: Nil keys rejected, setting to nil removes key
-- **Variables**:
-  - **Local Variables**: Block-scoped with proper shadowing
-  - **Global Variables**: Module-level scope
-  - **Assignment**: Full assignment support for both local and global variables
-  - **Multiple Assignment**: Assign multiple values to multiple variables in one statement
-- **Functions**:
-  - **Function Declarations**: Named functions with parameters
-  - **Return Statements**: Multiple return value support
-  - **Closures**: Functions can capture variables from enclosing scopes (upvalues)
-  - **Variadic Functions**: Functions can accept variable arguments with `...`
-- **Arithmetic & Bitwise Operations**:
-  - **Arithmetic**: +, -, *, /, % (modulo), ^ (power), // (integer division)
-  - **Bitwise**: &, |, ~ (XOR), <<, >>, ~ (NOT) (Lua 5.3+)
-  - **Length**: # (length operator) for strings and tables
-- **Comparison Operations**: ==, ~=, <, <=, >, >=
-- **Control Flow**:
-  - **If-Then-Elseif-Else-End**: Conditional branching
-  - **While-Do-End** / **Repeat-Until** / **Numeric For** / **Generic For**
-  - **Goto and Labels**: Support for `goto label` and `::label::` (Lua 5.2+)
-  - **Do-End Blocks**: Explicit block scoping with `do ... end`
-  - **Break Statement**: Exit loops early
-- **Module System**:
-  - **require(modname)**: Load and cache modules
-  - **package.path**: Customizable search path for modules
-- **Coroutines**:
-  - **First-class Threads**: Coroutines as values
-  - **Yield/Resume**: transfer control and pass values
-- **Garbage Collection**:
-  - **Mark-and-Sweep**: Automatic memory management
-  - **Ephemeron Support**: Correct handling of weak keys/values
-- **Standard Library**:
-  - **String Library**: len, sub, upper, lower, reverse, byte, char, **find, match, gmatch, gsub** (Full pattern matching support)
-  - **Table Library**: insert, remove, concat, pack, unpack, pairs, ipairs, next
-  - **Math Library**: sqrt, abs, floor, ceil, sin, cos, tan, exp, log, min, max, pi
-  - **Debug Library**: sethook, setmetatable (set metatables for any type)
-- **Bytecode Serialization**:
-  - **Compilation**: Compile Lua source to binary `.luac` files
-  - **Portability**: All function metadata and constants preserved
+### Core Engine & VM
+- **Stack-based Virtual Machine**: High-performance bytecode interpreter with optimized execution loop.
+- **JIT Compilation (ARM64)**: Hotspot-detecting JIT compiler powered by AsmJit that compiles hot Lua functions directly to native machine code.
+- **NaN-boxing Values**: 64-bit value representation supporting nil, boolean, integer, float, function, string, table, userdata, thread, and socket types.
+- **Garbage Collection**: Mark-and-sweep automatic memory management with support for incremental GC, emergency collection, and weak tables (ephemerons, `__mode = "k"`, `"v"`).
+- **Coroutines & First-Class Threads**: Full support for `coroutine.create`, `resume`, `yield`, `status`, `running`, and `coroutine.close` (Lua 5.4).
+- **Metatables & Metamethods**: Complete metamethod coverage:
+  - **Arithmetic**: `__add`, `__sub`, `__mul`, `__div`, `__idiv`, `__mod`, `__pow`, `__unm`
+  - **Bitwise**: `__band`, `__bor`, `__bxor`, `__bnot`, `__shl`, `__shr`
+  - **Comparison**: `__eq`, `__lt`, `__le`
+  - **Object & Lifecycle**: `__index`, `__newindex`, `__call`, `__concat`, `__len`, `__tostring`, `__gc`, `__close`
 
-### Architecture
-```
-    Lua Source Code
-          ↓
-    Lexer (tokenization)
-          ↓
-    Token Stream
-          ↓
-    Parser (recursive descent)
-          ↓
-    Abstract Syntax Tree (AST)
-          ↓
-    Code Generator
-          ↓
-    Bytecode Chunk  ←─── Deserialize (Binary .luac)
-          ↓
-    Serialize (Binary .luac)
-          ↓
-    VM Execution (stack-based)
-          ↓
-    Output
-```
+### Language Syntax & Lua 5.4 Features
+- **Local & Global Variables**: Lexical block scoping with shadowing, multi-assignment (`a, b = x, y`), and `_ENV` upvalue resolution.
+- **Attribute Variables**: `<const>` variables and `<close>` to-be-closed variables with deterministic `__close` metamethod escalation.
+- **Control Flow**:
+  - `if ... then ... elseif ... else ... end`
+  - `while ... do ... end`, `repeat ... until ...`
+  - Numeric for (`for i = 1, 10, 2 do`) and Generic for (`for k, v in pairs(t) do`)
+  - `goto label` and `::label::` (Lua 5.2+)
+  - Explicit scoping `do ... end` and early loop `break`
+- **Functions & Closures**:
+  - Closures capturing upvalues across arbitrary lexical scopes
+  - Variadic functions with `...` expressions
+  - Multiple return values with proper truncation and expansion
+- **Module System**:
+  - Standard `require(modname)` with `package.loaded`, `package.preload`, and configurable `package.path` searchers.
+
+### Standard Libraries
+- **`socket`**: Built-in Berkeley TCP socket primitives (`create`, `bind`, `listen`, `accept`, `send`, `receive`, `close`).
+- **`string`**: `len`, `sub`, `upper`, `lower`, `reverse`, `byte`, `char`, `rep`, `format`, `pack`, `unpack`, `packsize`, and full pattern-matching engines (`find`, `match`, `gmatch`, `gsub`).
+- **`table`**: `insert`, `remove`, `move`, `sort`, `concat`, `pack`, `unpack`.
+- **`math`**: `abs`, `floor`, `ceil`, `sqrt`, `sin`, `cos`, `tan`, `asin`, `acos`, `atan`, `exp`, `log`, `deg`, `rad`, `min`, `max`, `random`, `randomseed`, `tointeger`, `type`, `ult`, integer limits (`maxinteger`, `mininteger`), and `pi`.
+- **`os`**: `clock`, `time`, `date`, `difftime`, `getenv`, `execute`, `remove`, `rename`, `exit`.
+- **`io`**: Standard streams (`stdin`, `stdout`, `stderr`), `open`, `close`, `read`, `write`, `lines`, `flush`, `popen`.
+- **`utf8`**: `char`, `charpattern`, `codes`, `codepoint`, `len`, `offset`.
+- **`debug`**: `getinfo`, `getlocal`, `setlocal`, `getupvalue`, `setupvalue`, `upvalueid`, `upvaluejoin`, `traceback`, `sethook`.
+
+---
 
 ## Building
 
 ### Prerequisites
 - CMake 3.10+
-- C++17 compatible compiler (GCC, Clang, or MSVC)
+- C++17 compatible compiler (Clang, GCC, or Apple Clang)
 
 ### Build Steps
 
@@ -91,86 +109,55 @@ A Lua implementation in C++ featuring a stack-based bytecode virtual machine wit
 mkdir build
 cd build
 cmake ..
-make
+cmake --build . -j
 ```
+
+---
+
+## Running Tests
+
+The test suite includes 207 automated tests covering compiler edge cases, metamethods, standard library functions, closures, coroutines, and memory management.
+
+```bash
+# Run full Lua test suite
+bash tests/run_all_tests.sh "$PWD/build/lua"
+
+# Run C API integration tests
+./build/test_c_api
+
+# Run CLI and disassembler tests
+bash tests/test_cli_flags.sh
+bash tests/test_disasm_metadata.sh
+bash tests/test_repl_logic.sh
+```
+
+---
 
 ## Usage
 
 ### Run a Lua File
 ```bash
-./lua tests/test.lua
+./build/lua script.lua
 ```
-
-### Bytecode Disassembly
-```bash
-./lua -L tests/simple.lua
-```
-The disassembler provides:
-- **Function Metadata**: Name, parameter count, vararg status, and upvalue count.
-- **Local Variables**: Shows variable names, their stack slots, and their valid PC ranges.
-- **Constant Pool**: Lists all numbers, strings, and sub-function prototypes.
-- **Recursive View**: Automatically disassembles nested functions and closures.
-- **Line Numbers**: Maps bytecode offsets back to source code lines.
 
 ### Interactive REPL
 ```bash
-./lua
+./build/lua
 ```
-The REPL features:
-- **Auto-completion**: Tab-completion for globals, keywords, and nested table fields (e.g., `math.s<TAB>`).
-- **History**: Persistent command history across sessions (saved to `lua_history.txt`).
-- **Multi-line Support**: Automatically detects incomplete statements (like `if true then`) and provides a continuation prompt `>>`.
-- **Implicit Evaluation**: Typing `2 + 2` automatically evaluates and prints `4`. 
-- **Meta-commands**: Support for `=expr`, `globals`, and `help`.
+Features:
+- **Tab Auto-completion**: Auto-complete globals, keywords, and table fields (`math.s<TAB>`).
+- **Persistent History**: Command history preserved across sessions.
+- **Multi-line Continuation**: Automatic detection of open blocks with `>>` continuation prompt.
+- **Expression Evaluation**: Direct expressions like `2 + 2` evaluate and print automatically.
+- **Meta-commands**: `=expr`, `globals`, and `help`.
 
-## Example Programs
-
-### Bitwise Operators (Lua 5.3+)
-```lua
-print(5 & 3)   -- 1 (101 & 011 = 001)
-print(5 | 3)   -- 7 (101 | 011 = 111)
-print(5 ~ 3)   -- 6 (101 ~ 011 = 110)
-print(1 << 3)  -- 8
-print(~5)      -- -6 (Bitwise NOT)
-print(10 // 3) -- 3 (Integer division)
+### Bytecode Disassembly
+```bash
+./build/lua -L script.lua
 ```
+Displays function metadata, parameters, local variable life ranges, constant pools, and recursive nested closures.
 
-### Pattern Matching
-```lua
-local s = "hello world 123"
-print(s:match("%w+"))      -- hello
-print(s:gsub("%d", "x"))   -- hello world xxx
-for word in s:gmatch("%w+") do
-    print(word)
-end
-```
-
-### Goto and Labels
-```lua
-local i = 1
-::loop::
-print(i)
-i = i + 1
-if i <= 3 then goto loop end
-```
-
-### Weak Tables & Userdata
-```lua
-local weak = setmetatable({}, {__mode = "v"})
-local obj = {}
-weak[1] = obj
-obj = nil
-collectgarbage()
-print(weak[1]) -- nil (collected)
-```
-
-## Metatables
-
-Supported metamethods:
-- **Arithmetic**: `__add`, `__sub`, `__mul`, `__div`, `__idiv`, `__mod`, `__pow`, `__unm`
-- **Bitwise**: `__band`, `__bor`, `__bxor`, `__bnot`, `__shl`, `__shr`
-- **Comparison**: `__eq`, `__lt`, `__le`
-- **Miscellaneous**: `__index`, `__newindex`, `__call`, `__concat`, `__len`
+---
 
 ## License
 
