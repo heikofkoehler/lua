@@ -159,6 +159,14 @@ Displays function metadata, parameters, local variable life ranges, constant poo
 
 ---
 
+## Documentation & Roadmaps
+
+- [Documentation Index](docs/INDEX.md): Overview of architecture, value representation, GC, and standard libraries.
+- [Lua 5.5 Compliance Plan](docs/LUA_5_5_COMPLIANCE_PLAN.md): Architectural gap analysis, test suite diagnostic matrix, and implementation roadmap for full Lua 5.5 compliance.
+- [JIT Compilation Plan](docs/JIT_COMPILATION_PLAN.md): Design and status of the template JIT compiler.
+
+---
+
 ## License
 
 MIT License - see [LICENSE](LICENSE) file for details.
