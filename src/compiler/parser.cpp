@@ -954,8 +954,15 @@ std::unique_ptr<ExprNode> Parser::primary() {
             return std::make_unique<LiteralNode>(Value::number(value), line);
         } else {
             try {
-                // Try parsing as integer (handles hex if prefixed with 0x)
-                long long value = std::stoll(lexeme, nullptr, 0);
+                // Try parsing as integer
+                // Lua doesn't have octal literals starting with 0. 
+                // std::stoll with base 0 would treat 010 as 8.
+                // We should use base 10 unless it's hex.
+                int base = 10;
+                if (lexeme.length() >= 2 && (lexeme[0] == '0' && (lexeme[1] == 'x' || lexeme[1] == 'X'))) {
+                    base = 0; // Let stoll handle hex
+                }
+                long long value = std::stoll(lexeme, nullptr, base);
                 // Ensure it fits in 32 bits for NaN-boxing
                 if (value >= std::numeric_limits<int32_t>::min() && value <= std::numeric_limits<int32_t>::max()) {
                     return std::make_unique<LiteralNode>(Value::integer(static_cast<int64_t>(value)), line);

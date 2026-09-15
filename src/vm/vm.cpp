@@ -529,10 +529,6 @@ bool VM::run(const FunctionObject& function, const std::vector<Value>& args) {
 
         internConstants(function);
 
-#ifdef PRINT_CODE
-        function.disassemble();
-#endif
-
         ClosureObject* closure = createClosure(const_cast<FunctionObject*>(&function));
         
         if (currentCoroutine_->frames.empty() && currentCoroutine_->stack.empty()) {
@@ -1130,8 +1126,14 @@ bool VM::callValue(int argCount, int retCount, bool isTailCall) {
         }
         std::reverse(results.begin(), results.end());
 
+        // Now the stack should have the closure and any remaining arguments
+        // We pop everything down to the closure position and then pop the closure too
         while (currentCoroutine_->stack.size() > funcPosition) {
             pop();
+        }
+        // If the closure was not already popped by the results loop
+        if (currentCoroutine_->stack.size() > funcPosition) {
+             pop(); 
         }
 
         if (retCount > 0 && currentCoroutine_->status != CoroutineObject::Status::SUSPENDED) {
@@ -1556,6 +1558,7 @@ void VM::jitSetTabUp(VM* vm, uint32_t upIndex, uint32_t keyIndex, uint32_t nextI
         TableObject* table = upTable.asTableObj();
         if (table->has(key)) {
             table->set(key, val);
+            vm->pop(); // MUST POP the value!
             return;
         }
     }

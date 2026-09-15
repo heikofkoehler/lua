@@ -13,6 +13,7 @@ bool native_math_sqrt(VM* vm, int argCount) {
     Value val = vm->peek(0);
     vm->pop();
     vm->push(Value::number(std::sqrt(val.asNumber())));
+    vm->currentCoroutine()->lastResultCount = 1;
     return true;
 }
 
@@ -26,6 +27,7 @@ bool native_math_abs(VM* vm, int argCount) {
     } else {
         vm->push(Value::number(std::abs(val.asNumber())));
     }
+    vm->currentCoroutine()->lastResultCount = 1;
     return true;
 }
 
@@ -38,6 +40,7 @@ bool native_math_floor(VM* vm, int argCount) {
     } else {
         vm->push(Value::number(std::floor(val.asNumber())));
     }
+    vm->currentCoroutine()->lastResultCount = 1;
     return true;
 }
 
@@ -50,6 +53,7 @@ bool native_math_ceil(VM* vm, int argCount) {
     } else {
         vm->push(Value::number(std::ceil(val.asNumber())));
     }
+    vm->currentCoroutine()->lastResultCount = 1;
     return true;
 }
 
@@ -58,6 +62,7 @@ bool native_math_sin(VM* vm, int argCount) {
     Value val = vm->peek(0);
     vm->pop();
     vm->push(Value::number(std::sin(val.asNumber())));
+    vm->currentCoroutine()->lastResultCount = 1;
     return true;
 }
 
@@ -66,6 +71,7 @@ bool native_math_cos(VM* vm, int argCount) {
     Value val = vm->peek(0);
     vm->pop();
     vm->push(Value::number(std::cos(val.asNumber())));
+    vm->currentCoroutine()->lastResultCount = 1;
     return true;
 }
 
@@ -74,6 +80,7 @@ bool native_math_tan(VM* vm, int argCount) {
     Value val = vm->peek(0);
     vm->pop();
     vm->push(Value::number(std::tan(val.asNumber())));
+    vm->currentCoroutine()->lastResultCount = 1;
     return true;
 }
 
@@ -82,6 +89,7 @@ bool native_math_exp(VM* vm, int argCount) {
     Value val = vm->peek(0);
     vm->pop();
     vm->push(Value::number(std::exp(val.asNumber())));
+    vm->currentCoroutine()->lastResultCount = 1;
     return true;
 }
 
@@ -95,6 +103,7 @@ bool native_math_log(VM* vm, int argCount) {
     } else {
         vm->push(Value::number(std::log(x)));
     }
+    vm->currentCoroutine()->lastResultCount = 1;
     return true;
 }
 
@@ -109,6 +118,7 @@ bool native_math_min(VM* vm, int argCount) {
     }
     for (int i = 0; i < argCount; i++) vm->pop();
     vm->push(minVal);
+    vm->currentCoroutine()->lastResultCount = 1;
     return true;
 }
 
@@ -123,6 +133,7 @@ bool native_math_max(VM* vm, int argCount) {
     }
     for (int i = 0; i < argCount; i++) vm->pop();
     vm->push(maxVal);
+    vm->currentCoroutine()->lastResultCount = 1;
     return true;
 }
 
@@ -131,6 +142,7 @@ bool native_math_acos(VM* vm, int argCount) {
     Value val = vm->peek(0);
     vm->pop();
     vm->push(Value::number(std::acos(val.asNumber())));
+    vm->currentCoroutine()->lastResultCount = 1;
     return true;
 }
 
@@ -139,6 +151,7 @@ bool native_math_asin(VM* vm, int argCount) {
     Value val = vm->peek(0);
     vm->pop();
     vm->push(Value::number(std::asin(val.asNumber())));
+    vm->currentCoroutine()->lastResultCount = 1;
     return true;
 }
 
@@ -153,6 +166,7 @@ bool native_math_atan(VM* vm, int argCount) {
         vm->pop();
         vm->push(Value::number(std::atan(y)));
     }
+    vm->currentCoroutine()->lastResultCount = 1;
     return true;
 }
 
@@ -161,6 +175,7 @@ bool native_math_deg(VM* vm, int argCount) {
     Value val = vm->peek(0);
     vm->pop();
     vm->push(Value::number(val.asNumber() * (180.0 / M_PI)));
+    vm->currentCoroutine()->lastResultCount = 1;
     return true;
 }
 
@@ -169,6 +184,7 @@ bool native_math_rad(VM* vm, int argCount) {
     Value val = vm->peek(0);
     vm->pop();
     vm->push(Value::number(val.asNumber() * (M_PI / 180.0)));
+    vm->currentCoroutine()->lastResultCount = 1;
     return true;
 }
 
@@ -178,6 +194,7 @@ bool native_math_fmod(VM* vm, int argCount) {
     double y = vm->peek(argCount - 2).asNumber();
     vm->pop(); vm->pop();
     vm->push(Value::number(std::fmod(x, y)));
+    vm->currentCoroutine()->lastResultCount = 1;
     return true;
 }
 
@@ -307,6 +324,7 @@ bool native_math_type(VM* vm, int argCount) {
     } else {
         vm->push(Value::nil());
     }
+    vm->currentCoroutine()->lastResultCount = 1;
     return true;
 }
 
@@ -327,6 +345,7 @@ bool native_math_tointeger(VM* vm, int argCount) {
     } else {
         vm->push(Value::nil());
     }
+    vm->currentCoroutine()->lastResultCount = 1;
     return true;
 }
 
@@ -336,6 +355,7 @@ bool native_math_ult(VM* vm, int argCount) {
     uint64_t n = static_cast<uint64_t>(vm->peek(argCount - 2).asInteger());
     vm->pop(); vm->pop();
     vm->push(Value::boolean(m < n));
+    vm->currentCoroutine()->lastResultCount = 1;
     return true;
 }
 

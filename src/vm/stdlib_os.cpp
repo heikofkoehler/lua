@@ -4,6 +4,10 @@
 #include <iostream>
 #include <cstdlib>
 #include <cstdio>
+#include <clocale>
+#include <cmath>
+#include <limits>
+#include "value/table.hpp"
 
 namespace {
 
@@ -14,6 +18,7 @@ bool native_os_clock(VM* vm, int argCount) {
     
     for(int i=0; i<argCount; i++) vm->pop();
     vm->push(Value::number(seconds));
+    vm->currentCoroutine()->lastResultCount = 1;
     return true;
 }
 
@@ -46,6 +51,7 @@ static bool getIntField(VM* vm, TableObject* tbl, const char* name, bool require
 bool native_os_time(VM* vm, int argCount) {
     if (argCount == 0) {
         vm->push(Value::number(static_cast<double>(std::time(nullptr))));
+        vm->currentCoroutine()->lastResultCount = 1;
         return true;
     }
 
@@ -92,6 +98,7 @@ bool native_os_time(VM* vm, int argCount) {
 
     for(int i=0; i<argCount; i++) vm->pop();
     vm->push(Value::number(static_cast<double>(tt)));
+    vm->currentCoroutine()->lastResultCount = 1;
     return true;
 }
 
@@ -110,6 +117,7 @@ bool native_os_difftime(VM* vm, int argCount) {
     
     for(int i=0; i<argCount; i++) vm->pop();
     vm->push(Value::number(diff));
+    vm->currentCoroutine()->lastResultCount = 1;
     return true;
 }
 
@@ -139,6 +147,7 @@ bool native_os_getenv(VM* vm, int argCount) {
     } else {
         vm->push(Value::nil());
     }
+    vm->currentCoroutine()->lastResultCount = 1;
     return true;
 }
 
@@ -235,6 +244,7 @@ bool native_os_setlocale(VM* vm, int argCount) {
     
     for(int i=0; i<argCount; i++) vm->pop();
     vm->push(result);
+    vm->currentCoroutine()->lastResultCount = 1;
     return true;
 }
 
@@ -276,6 +286,7 @@ bool native_os_tmpname(VM* vm, int argCount) {
     
     for(int i=0; i<argCount; i++) vm->pop();
     vm->push(Value::runtimeString(vm->internString(tmpName)));
+    vm->currentCoroutine()->lastResultCount = 1;
     return true;
 }
 
@@ -313,6 +324,7 @@ bool native_os_date(VM* vm, int argCount) {
         
         for(int i=0; i<argCount; i++) vm->pop();
         vm->push(Value::table(tbl));
+        vm->currentCoroutine()->lastResultCount = 1;
         return true;
     }
     
@@ -320,11 +332,13 @@ bool native_os_date(VM* vm, int argCount) {
     if (std::strftime(buffer, sizeof(buffer), format.c_str(), tms)) {
         for(int i=0; i<argCount; i++) vm->pop();
         vm->push(Value::runtimeString(vm->internString(buffer)));
+        vm->currentCoroutine()->lastResultCount = 1;
         return true;
     }
     
     for(int i=0; i<argCount; i++) vm->pop();
     vm->push(Value::nil());
+    vm->currentCoroutine()->lastResultCount = 1;
     return true;
 }
 

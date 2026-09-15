@@ -4,6 +4,8 @@
 #include "value/string.hpp"
 #include <iostream>
 #include <sstream>
+#include <vector>
+#include <algorithm>
 
 namespace {
 
@@ -27,9 +29,11 @@ bool native_io_open(VM* vm, int argCount) {
 
     if (file->isOpen()) {
         vm->push(Value::file(file));
+        vm->currentCoroutine()->lastResultCount = 1;
     } else {
         vm->push(Value::nil());
         vm->push(Value::runtimeString(vm->internString("could not open file")));
+        vm->currentCoroutine()->lastResultCount = 2;
     }
     return true;
 }
@@ -72,6 +76,7 @@ bool native_io_write(VM* vm, int argCount) {
     for(int i=0; i<argCount; i++) vm->pop();
     
     vm->push(Value::boolean(true));
+    vm->currentCoroutine()->lastResultCount = 1;
     return true;
 }
 
@@ -155,7 +160,7 @@ static bool read_item(VM* vm, FileObject* file, std::string fmt, Value& res) {
             res = Value::number(d);
             return true;
         }
-    } else if (std::isdigit(fmt[0])) {
+    } else if (!fmt.empty() && std::isdigit(fmt[0])) {
         size_t len = std::stoul(fmt);
         std::string result = file ? file->read(len) : "";
         if (result.empty() && (file ? file->isEOF() : std::cin.eof())) return false;
@@ -187,12 +192,12 @@ bool native_io_read(VM* vm, int argCount) {
     int formatCount = argCount - argStart;
     if (formatCount == 0) formatCount = 1; // Default "l"
 
-    int results = 0;
+    int resultsCount = 0;
     for (int i = 0; i < formatCount; i++) {
         std::string fmt = "l";
         if (argCount > argStart) {
-            // Adjust peek index by 'results' because we are pushing results onto the stack inside the loop
-            Value v = vm->peek(argCount - 1 - (argStart + i) + results);
+            // Adjust peek index by 'resultsCount' because we are pushing results onto the stack inside the loop
+            Value v = vm->peek(argCount - 1 - (argStart + i) + resultsCount);
             if (v.isString()) fmt = vm->getStringValue(v);
             else if (v.isNumber()) fmt = std::to_string((int)v.asNumber());
         }
@@ -200,23 +205,23 @@ bool native_io_read(VM* vm, int argCount) {
         Value res;
         if (read_item(vm, file, fmt, res)) {
             vm->push(res);
-            results++;
+            resultsCount++;
         } else {
             vm->push(Value::nil());
-            results++;
+            resultsCount++;
             break;
         }
     }
     
     // Cleanup args
     std::vector<Value> res_vals;
-    for(int i=0; i<results; i++) res_vals.push_back(vm->pop());
+    for(int i=0; i<resultsCount; i++) res_vals.push_back(vm->pop());
     std::reverse(res_vals.begin(), res_vals.end());
     
     for(int i=0; i<argCount; i++) vm->pop();
     for(const auto& v : res_vals) vm->push(v);
     
-    vm->currentCoroutine()->lastResultCount = results;
+    vm->currentCoroutine()->lastResultCount = resultsCount;
     return true;
 }
 
@@ -236,6 +241,7 @@ bool native_io_close(VM* vm, int argCount) {
     }
     
     vm->push(Value::boolean(true));
+    vm->currentCoroutine()->lastResultCount = 1;
     return true;
 }
 
@@ -270,9 +276,11 @@ bool native_io_seek(VM* vm, int argCount) {
     int64_t newPosition = 0;
     if (file->seek(whence, offset, newPosition)) {
         vm->push(Value::number(static_cast<double>(newPosition)));
+        vm->currentCoroutine()->lastResultCount = 1;
     } else {
         vm->push(Value::nil());
         vm->push(Value::runtimeString(vm->internString("seek failed")));
+        vm->currentCoroutine()->lastResultCount = 2;
     }
     return true;
 }
@@ -290,9 +298,11 @@ bool native_io_flush(VM* vm, int argCount) {
 
     if (file && file->flush()) {
         vm->push(Value::boolean(true));
+        vm->currentCoroutine()->lastResultCount = 1;
     } else {
         vm->push(Value::nil());
         vm->push(Value::runtimeString(vm->internString("flush failed")));
+        vm->currentCoroutine()->lastResultCount = 2;
     }
     return true;
 }
@@ -301,6 +311,7 @@ bool native_io_setvbuf(VM* vm, int argCount) {
     for(int i=0; i<argCount; i++) vm->pop();
     // Dummy implementation for compatibility
     vm->push(Value::boolean(true));
+    vm->currentCoroutine()->lastResultCount = 1;
     return true;
 }
 
@@ -320,6 +331,7 @@ bool native_io_type(VM* vm, int argCount) {
     } else {
         vm->push(Value::nil());
     }
+    vm->currentCoroutine()->lastResultCount = 1;
     return true;
 }
 
@@ -335,6 +347,7 @@ bool native_io_tmpfile(VM* vm, int argCount) {
     } else {
         vm->push(Value::nil());
     }
+    vm->currentCoroutine()->lastResultCount = 1;
     return true;
 }
 
@@ -348,6 +361,7 @@ bool native_io_input(VM* vm, int argCount) {
         } else {
             vm->push(Value::nil());
         }
+        vm->currentCoroutine()->lastResultCount = 1;
         return true;
     }
     
@@ -369,6 +383,7 @@ bool native_io_input(VM* vm, int argCount) {
         vm->runtimeError("io.input expects a file or string");
         return false;
     }
+    vm->currentCoroutine()->lastResultCount = 1;
     return true;
 }
 
@@ -382,6 +397,7 @@ bool native_io_output(VM* vm, int argCount) {
         } else {
             vm->push(Value::nil());
         }
+        vm->currentCoroutine()->lastResultCount = 1;
         return true;
     }
     
@@ -403,6 +419,7 @@ bool native_io_output(VM* vm, int argCount) {
         vm->runtimeError("io.output expects a file or string");
         return false;
     }
+    vm->currentCoroutine()->lastResultCount = 1;
     return true;
 }
 
@@ -488,6 +505,7 @@ bool native_io_popen(VM* vm, int argCount) {
 
     if (file && file->isOpen()) {
         vm->push(Value::file(file));
+        vm->currentCoroutine()->lastResultCount = 1;
     } else {
         vm->push(Value::nil());
         vm->push(Value::runtimeString(vm->internString("could not open pipe")));

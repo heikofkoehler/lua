@@ -68,6 +68,7 @@ bool native_table_insert(VM* vm, int argCount) {
 
     for (int i = 0; i < argCount; i++) vm->pop();
     vm->push(Value::nil());
+    vm->currentCoroutine()->lastResultCount = 1;
     return true;
 }
 
@@ -111,6 +112,7 @@ bool native_table_remove(VM* vm, int argCount) {
 
     for (int i = 0; i < argCount; i++) vm->pop();
     vm->push(removed);
+    vm->currentCoroutine()->lastResultCount = 1;
     return true;
 }
 
@@ -149,6 +151,7 @@ bool native_table_concat(VM* vm, int argCount) {
 
     for (int i = 0; i < argCount; i++) vm->pop();
     vm->push(Value::runtimeString(vm->internString(result)));
+    vm->currentCoroutine()->lastResultCount = 1;
     return true;
 }
 
@@ -164,6 +167,7 @@ bool native_table_pack(VM* vm, int argCount) {
     
     for (int i = 0; i < argCount; i++) vm->pop();
     vm->push(Value::table(table));
+    vm->currentCoroutine()->lastResultCount = 1;
     return true;
 }
 
@@ -235,6 +239,7 @@ bool native_table_sort(VM* vm, int argCount) {
     if (n <= 1) {
         for(int i=0; i<argCount; i++) vm->pop();
         vm->push(Value::nil());
+        vm->currentCoroutine()->lastResultCount = 1;
         return true;
     }
 
@@ -289,6 +294,7 @@ bool native_table_sort(VM* vm, int argCount) {
 
     for(int i=0; i<argCount; i++) vm->pop();
     vm->push(Value::nil());
+    vm->currentCoroutine()->lastResultCount = 1;
     return true;
 }
 
@@ -329,6 +335,7 @@ bool native_table_move(VM* vm, int argCount) {
     
     for(int i=0; i<argCount; i++) vm->pop();
     vm->push(a2Val);
+    vm->currentCoroutine()->lastResultCount = 1;
     return true;
 }
 

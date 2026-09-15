@@ -37,13 +37,11 @@ Lexer::Lexer(const std::string& source)
         current_ = 3;
     }
 
-    // Skip shebang or first-line comment starting with #
-    // This MUST happen here, before any scanToken call
-    if (current_ < source_.length() && source_[current_] == '#') {
+    // Skip shebang ONLY if it starts with #!
+    if (current_ + 1 < source_.length() && source_[current_] == '#' && source_[current_ + 1] == '!') {
         while (current_ < source_.length() && source_[current_] != '\n') {
             current_++;
         }
-        // If we hit a newline, we want to leave it for skipWhitespace to handle line counting
     }
 }
 
@@ -434,9 +432,11 @@ Token Lexer::longString() {
     // If first character is a newline, skip it
     if (peek() == '\n') {
         current_++;
+        line_++;
     } else if (peek() == '\r') {
         current_++;
         if (peek() == '\n') current_++;
+        line_++;
     }
 
     std::string value;

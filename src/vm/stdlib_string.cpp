@@ -332,6 +332,7 @@ bool native_string_sub(VM* vm, int argCount) {
 
     for (int i = 0; i < argCount; i++) vm->pop();
     vm->push(Value::runtimeString(vm->internString(result)));
+    vm->currentCoroutine()->lastResultCount = 1;
     return true;
 }
 
@@ -373,6 +374,7 @@ bool native_string_char(VM* vm, int argCount) {
     }
     for (int i = 0; i < argCount; i++) vm->pop();
     vm->push(Value::runtimeString(vm->internString(result)));
+    vm->currentCoroutine()->lastResultCount = 1;
     return true;
 }
 
@@ -777,6 +779,7 @@ bool native_string_format(VM* vm, int argCount) {
     
     for (int i = 0; i < argCount; i++) vm->pop();
     vm->push(Value::runtimeString(vm->internString(result)));
+    vm->currentCoroutine()->lastResultCount = 1;
     return true;
 }
 
@@ -1189,6 +1192,7 @@ bool native_string_rep(VM* vm, int argCount) {
 
     for (int i = 0; i < argCount; i++) vm->pop();
     vm->push(Value::runtimeString(vm->internString(result)));
+    vm->currentCoroutine()->lastResultCount = 1;
     return true;
 }
 

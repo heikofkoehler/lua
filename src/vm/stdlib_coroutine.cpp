@@ -2,6 +2,8 @@
 #include "value/coroutine.hpp"
 #include "value/closure.hpp"
 #include <iostream>
+#include <vector>
+#include <algorithm>
 
 namespace {
 
@@ -19,6 +21,7 @@ bool native_coroutine_create(VM* vm, int argCount) {
     ClosureObject* closure = funcVal.asClosureObj();
     CoroutineObject* co = vm->createCoroutine(closure);
     vm->push(Value::thread(co));
+    vm->currentCoroutine()->lastResultCount = 1;
     return true;
 }
 
@@ -45,6 +48,7 @@ bool native_coroutine_resume(VM* vm, int argCount) {
         vm->push(Value::boolean(false));
         StringObject* errStr = vm->internString("cannot resume dead coroutine");
         vm->push(Value::runtimeString(errStr));
+        vm->currentCoroutine()->lastResultCount = 2;
         return true;
     }
 
@@ -59,14 +63,14 @@ bool native_coroutine_resume(VM* vm, int argCount) {
         FunctionObject* func = co->frames[0].closure->function();
         int arity = func->arity();
         bool hasVarargs = func->hasVarargs();
-        int argCount = static_cast<int>(args.size());
+        int aCount = static_cast<int>(args.size());
 
-        if (argCount < arity) {
-            for (int i = 0; i < arity - argCount; i++) {
+        if (aCount < arity) {
+            for (int i = 0; i < arity - aCount; i++) {
                 co->stack.push_back(Value::nil());
             }
-        } else if (argCount > arity) {
-            uint8_t extraCount = argCount - arity;
+        } else if (aCount > arity) {
+            uint8_t extraCount = aCount - arity;
             if (hasVarargs) {
                 for (int i = 0; i < extraCount; i++) {
                     co->frames[0].varargs.push_back(co->stack.back());
@@ -145,11 +149,16 @@ bool native_coroutine_status(VM* vm, int argCount) {
     CoroutineObject* co = coVal.asThreadObj();
     StringObject* str = vm->internString(co->statusToString());
     vm->push(Value::runtimeString(str));
+    vm->currentCoroutine()->lastResultCount = 1;
     return true;
 }
 
-bool native_coroutine_running(VM* vm, int /*argCount*/) {
-    vm->push(Value::thread(vm->currentCoroutine()));
+bool native_coroutine_running(VM* vm, int argCount) {
+    for(int i=0; i<argCount; i++) vm->pop();
+    CoroutineObject* co = vm->currentCoroutine();
+    vm->push(Value::thread(co));
+    vm->push(Value::boolean(co == vm->mainCoroutine()));
+    vm->currentCoroutine()->lastResultCount = 2;
     return true;
 }
 
@@ -257,6 +266,7 @@ bool native_coroutine_isyieldable(VM* vm, int argCount) {
     
     for (int i = 0; i < argCount; i++) vm->pop();
     vm->push(Value::boolean(yieldable));
+    vm->currentCoroutine()->lastResultCount = 1;
     return true;
 }
 

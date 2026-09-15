@@ -67,6 +67,7 @@ bool native_utf8_char(VM* vm, int argCount) {
     }
     for (int i = 0; i < argCount; i++) vm->pop();
     vm->push(Value::runtimeString(vm->internString(result)));
+    vm->currentCoroutine()->lastResultCount = 1;
     return true;
 }
 
@@ -102,6 +103,7 @@ bool native_utf8_len(VM* vm, int argCount) {
 
     for (int k = 0; k < argCount; k++) vm->pop();
     vm->push(Value::number(count));
+    vm->currentCoroutine()->lastResultCount = 1;
     return true;
 }
 
@@ -175,6 +177,7 @@ bool native_utf8_offset(VM* vm, int argCount) {
         while (p > s_start && (*(unsigned char*)p & 0xC0) == 0x80) p--;
         for(int k=0; k<argCount; k++) vm->pop();
         vm->push(Value::number(p - s_start + 1));
+        vm->currentCoroutine()->lastResultCount = 1;
         return true;
     }
 
@@ -203,6 +206,7 @@ bool native_utf8_offset(VM* vm, int argCount) {
     } else {
         vm->push(Value::nil());
     }
+    vm->currentCoroutine()->lastResultCount = 1;
     return true;
 }
 
@@ -237,7 +241,7 @@ bool native_utf8_codes(VM* vm, int argCount) {
         if (vm->currentCoroutine()->frames.size() > baseFrames) {
             vm->run(baseFrames);
         }
-        // results are already on stack, lastResultCount should be 3
+        vm->currentCoroutine()->lastResultCount = 3;
         return true;
     }
     return false;

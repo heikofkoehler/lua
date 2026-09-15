@@ -506,8 +506,10 @@ bool VM::run(size_t targetFrameCount) {
                     push(Value::boolean(a.asNumber() > b.asNumber()));
                 } else if ((a.isString() || a.isRuntimeString()) && (b.isString() || b.isRuntimeString())) {
                     push(Value::boolean(getStringValue(a) > getStringValue(b)));
-                } else if (!callBinaryMetamethod(b, a, "__lt")) {
-                    runtimeError("attempt to compare " + a.typeToString() + " and " + b.typeToString());
+                } else {
+                    if (!callBinaryMetamethod(b, a, "__lt")) {
+                        runtimeError("attempt to compare " + a.typeToString() + " and " + b.typeToString());
+                    }
                 }
                 break;
             }
@@ -519,8 +521,10 @@ bool VM::run(size_t targetFrameCount) {
                     push(Value::boolean(a.asNumber() >= b.asNumber()));
                 } else if ((a.isString() || a.isRuntimeString()) && (b.isString() || b.isRuntimeString())) {
                     push(Value::boolean(getStringValue(a) >= getStringValue(b)));
-                } else if (!callBinaryMetamethod(b, a, "__le")) {
-                    runtimeError("attempt to compare " + a.typeToString() + " and " + b.typeToString());
+                } else {
+                    if (!callBinaryMetamethod(b, a, "__le")) {
+                        runtimeError("attempt to compare " + a.typeToString() + " and " + b.typeToString());
+                    }
                 }
                 break;
             }

@@ -856,19 +856,24 @@ void CodeGenerator::visitForStmt(ForStmtNode* node) {
     beginScope();
 
     // Evaluate start expression and create loop variable
+    uint8_t oldRetCount = expectedRetCount_;
+    expectedRetCount_ = 2;
     node->start()->accept(*this);
     addLocal(node->varName(), true);
 
     // Evaluate end expression and store in hidden local
+    expectedRetCount_ = 2;
     node->end()->accept(*this);
     addLocal("(for limit)", true);
 
     // Evaluate step expression (or default to 1) and store in hidden local
     if (node->step()) {
+        expectedRetCount_ = 2;
         node->step()->accept(*this);
     } else {
         emitConstant(Value::integer(1));
     }
+    expectedRetCount_ = oldRetCount;
     addLocal("(for step)", true);
 
     beginLoop();  // Start loop context for break statements

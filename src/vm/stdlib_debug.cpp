@@ -19,6 +19,7 @@ bool native_debug_sethook(VM* vm, int argCount) {
         co->hookCount = 0;
         for(int i=0; i<argCount; i++) vm->pop();
         vm->push(Value::nil());
+        vm->currentCoroutine()->lastResultCount = 1;
         return true;
     }
 
@@ -45,6 +46,7 @@ bool native_debug_sethook(VM* vm, int argCount) {
 
     for(int i=0; i<argCount; i++) vm->pop();
     vm->push(Value::nil());
+    vm->currentCoroutine()->lastResultCount = 1;
     return true;
 }
 
@@ -88,6 +90,7 @@ bool native_debug_setmetatable(VM* vm, int argCount) {
     
     for(int i=0; i<argCount; i++) vm->pop();
     vm->push(obj);
+    vm->currentCoroutine()->lastResultCount = 1;
     return true;
 }
 
@@ -103,6 +106,7 @@ bool native_debug_getlocal(VM* vm, int argCount) {
     if (!frame || !frame->closure) {
         for(int i=0; i<argCount; i++) vm->pop();
         vm->push(Value::nil());
+        vm->currentCoroutine()->lastResultCount = 1;
         return true;
     }
 
@@ -143,6 +147,7 @@ bool native_debug_getlocal(VM* vm, int argCount) {
         vm->currentCoroutine()->lastResultCount = 2;
     } else {
         vm->push(Value::nil());
+        vm->currentCoroutine()->lastResultCount = 1;
     }
     return true;
 }
@@ -160,6 +165,7 @@ bool native_debug_setlocal(VM* vm, int argCount) {
     if (!frame || !frame->closure) {
         for(int i=0; i<argCount; i++) vm->pop();
         vm->push(Value::nil());
+        vm->currentCoroutine()->lastResultCount = 1;
         return true;
     }
 
@@ -190,6 +196,7 @@ bool native_debug_setlocal(VM* vm, int argCount) {
     } else {
         vm->push(Value::nil());
     }
+    vm->currentCoroutine()->lastResultCount = 1;
     return true;
 }
 
@@ -247,6 +254,7 @@ bool native_debug_setupvalue(VM* vm, int argCount) {
         vm->pop(); vm->pop(); vm->pop();
         vm->push(Value::nil());
     }
+    vm->currentCoroutine()->lastResultCount = 1;
     return true;
 }
 
@@ -269,6 +277,7 @@ bool native_debug_upvalueid(VM* vm, int argCount) {
         vm->pop(); vm->pop();
         // Return memory address as a light userdata or number representation
         vm->push(Value::number(reinterpret_cast<uint64_t>(upvalue)));
+        vm->currentCoroutine()->lastResultCount = 1;
     } else {
         vm->runtimeError("invalid upvalue index");
         return false;
@@ -303,6 +312,7 @@ bool native_debug_upvaluejoin(VM* vm, int argCount) {
     
     for(int i=0; i<4; i++) vm->pop();
     vm->push(Value::nil());
+    vm->currentCoroutine()->lastResultCount = 1;
     return true;
 }
 
@@ -318,6 +328,7 @@ bool native_debug_getregistry(VM* vm, int argCount) {
     }
     
     vm->push(Value::table(regTable));
+    vm->currentCoroutine()->lastResultCount = 1;
     return true;
 }
 
@@ -335,6 +346,7 @@ bool native_debug_getmetatable(VM* vm, int argCount) {
         mt = vm->getTypeMetatable(obj.type());
     }
     vm->push(mt);
+    vm->currentCoroutine()->lastResultCount = 1;
     return true;
 }
 
@@ -389,6 +401,7 @@ bool native_debug_setuservalue(VM* vm, int argCount) {
         for (int i = 0; i < argCount; i++) vm->pop();
         vm->push(Value::nil()); // out of bounds returns nil in Lua 5.4, or error depending on version. Lua 5.4 says: returns u or nil.
     }
+    vm->currentCoroutine()->lastResultCount = 1;
     return true;
 }
 
@@ -450,11 +463,13 @@ void registerDebugLibrary(VM* vm, TableObject* debugTable) {
 
         for(int i=0; i<argCount; i++) vm->pop();
         vm->push(Value::runtimeString(vm->internString(result)));
+        vm->currentCoroutine()->lastResultCount = 1;
         return true;
     });
     vm->addNativeToTable(debugTable, "getinfo", [](VM* vm, int argCount) -> bool {
         if (argCount < 1) {
             vm->push(Value::nil());
+            vm->currentCoroutine()->lastResultCount = 1;
             return true;
         }
         Value f = vm->peek(argCount - 1);
@@ -479,6 +494,7 @@ void registerDebugLibrary(VM* vm, TableObject* debugTable) {
             } else {
                 for(int i=0; i<argCount; i++) vm->pop();
                 vm->push(Value::nil());
+                vm->currentCoroutine()->lastResultCount = 1;
                 return true;
             }
         } else if (f.isClosure()) {
@@ -490,6 +506,7 @@ void registerDebugLibrary(VM* vm, TableObject* debugTable) {
             info->set("short_src", Value::runtimeString(vm->internString("[C]")));
             for(int i=0; i<argCount; i++) vm->pop();
             vm->push(Value::table(info));
+            vm->currentCoroutine()->lastResultCount = 1;
             return true;
         }
 
@@ -521,6 +538,7 @@ void registerDebugLibrary(VM* vm, TableObject* debugTable) {
 
         for(int i=0; i<argCount; i++) vm->pop();
         vm->push(Value::table(info));
+        vm->currentCoroutine()->lastResultCount = 1;
         return true;
     });
 

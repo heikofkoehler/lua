@@ -59,14 +59,17 @@ bool native_collectgarbage(VM* vm, int argCount) {
         vm->collectGarbage();
         for(int i=0; i<argCount; i++) vm->pop();
         vm->push(Value::boolean(true));
+        vm->currentCoroutine()->lastResultCount = 1;
         return true;
     } else if (opt == "stop") {
         vm->setGCEnabled(false);
         for(int i=0; i<argCount; i++) vm->pop();
+        vm->currentCoroutine()->lastResultCount = 0;
         return true;
     } else if (opt == "restart") {
         vm->setGCEnabled(true);
         for(int i=0; i<argCount; i++) vm->pop();
+        vm->currentCoroutine()->lastResultCount = 0;
         return true;
     }
  else if (opt == "param") {
@@ -78,11 +81,13 @@ bool native_collectgarbage(VM* vm, int argCount) {
                 double val = vm->peek(0).asNumber();
                 for(int i=0; i<argCount; i++) vm->pop();
                 vm->push(Value::number(val)); // Return new value
+                vm->currentCoroutine()->lastResultCount = 1;
                 return true;
             } else {
                 // Getting a value (stub)
                 for(int i=0; i<argCount; i++) vm->pop();
                 vm->push(Value::number(100)); // Return a default value
+                vm->currentCoroutine()->lastResultCount = 1;
                 return true;
             }
         }
@@ -95,6 +100,7 @@ bool native_collectgarbage(VM* vm, int argCount) {
         vm->setMemoryLimit(static_cast<size_t>(limit));
         for(int i=0; i<argCount; i++) vm->pop();
         vm->push(Value::nil());
+        vm->currentCoroutine()->lastResultCount = 1;
         return true;
     }
 
@@ -139,6 +145,7 @@ bool native_setmetatable(VM* vm, int argCount) {
     
     for(int i=0; i<argCount; i++) vm->pop();
     vm->push(tableValue);
+    vm->currentCoroutine()->lastResultCount = 1;
     return true;
 }
 
@@ -163,11 +170,13 @@ bool native_getmetatable(VM* vm, int argCount) {
         Value protected_mt = mt.asTableObj()->get("__metatable");
         if (!protected_mt.isNil()) {
             vm->push(protected_mt);
+            vm->currentCoroutine()->lastResultCount = 1;
             return true;
         }
     }
 
     vm->push(mt);
+    vm->currentCoroutine()->lastResultCount = 1;
     return true;
 }
 
@@ -201,6 +210,7 @@ bool native_tostring(VM* vm, int argCount) {
     std::string str = vm->getStringValue(val);
     vm->pop();
     vm->push(Value::runtimeString(vm->internString(str)));
+    vm->currentCoroutine()->lastResultCount = 1;
     return true;
 }
 
@@ -217,6 +227,7 @@ bool native_tonumber(VM* vm, int argCount) {
     if (start == std::string::npos) {
         for (int i = 0; i < argCount; i++) vm->pop();
         vm->push(Value::nil());
+        vm->currentCoroutine()->lastResultCount = 1;
         return true;
     }
     auto end = s.find_last_not_of(" \t\n\r\f\v");
@@ -264,6 +275,7 @@ bool native_tonumber(VM* vm, int argCount) {
         }
     }
 
+    vm->currentCoroutine()->lastResultCount = 1;
     return true;
 }
 
@@ -292,7 +304,7 @@ bool native_print(VM* vm, int argCount) {
     std::cout << std::endl;
 
     for (int i = 0; i < argCount; i++) vm->pop();
-    vm->push(Value::nil());
+    vm->currentCoroutine()->lastResultCount = 0;
     return true;
 }
 
@@ -305,7 +317,7 @@ bool native_sleep(VM* vm, int argCount) {
     std::this_thread::sleep_for(std::chrono::milliseconds(static_cast<long long>(seconds * 1000)));
     
     vm->pop();
-    vm->push(Value::nil());
+    vm->currentCoroutine()->lastResultCount = 0;
     return true;
 }
 
@@ -459,6 +471,7 @@ bool native_rawget(VM* vm, int argCount) {
     }
     vm->pop(); vm->pop();
     vm->push(table.asTableObj()->get(key));
+    vm->currentCoroutine()->lastResultCount = 1;
     return true;
 }
 
@@ -523,7 +536,10 @@ bool native_vm_jit(VM* vm, int argCount) {
 }
 
 bool native_warn(VM* vm, int argCount) {
-    if (argCount == 0) return true;
+    if (argCount == 0) {
+        vm->currentCoroutine()->lastResultCount = 0;
+        return true;
+    }
 
     // Check for control messages
     Value first = vm->peek(argCount - 1);
@@ -540,7 +556,7 @@ bool native_warn(VM* vm, int argCount) {
             }
             // Control messages are not printed.
             for (int i = 0; i < argCount; i++) vm->pop();
-            vm->push(Value::nil());
+            vm->currentCoroutine()->lastResultCount = 0;
             return true;
         }
     }
@@ -554,7 +570,7 @@ bool native_warn(VM* vm, int argCount) {
     }
 
     for (int i = 0; i < argCount; i++) vm->pop();
-    vm->push(Value::nil());
+    vm->currentCoroutine()->lastResultCount = 0;
     return true;
 }
 
@@ -585,6 +601,7 @@ bool native_loadfile(VM* vm, int argCount) {
         vm->push(Value::nil());
         StringObject* errStr = vm->internString("Could not open file: " + path);
         vm->push(Value::runtimeString(errStr));
+        vm->currentCoroutine()->lastResultCount = 2;
         return true;
     }
 
@@ -615,6 +632,7 @@ bool native_loadfile(VM* vm, int argCount) {
         vm->setupRootUpvalues(closure, env);
         for(int i=0; i<argCount; i++) vm->pop();
         vm->push(Value::closure(closure));
+        vm->currentCoroutine()->lastResultCount = 1;
         return true;
     }
 
@@ -765,6 +783,7 @@ bool native_load(VM* vm, int argCount) {
         vm->setupRootUpvalues(closure, env);
         for(int i=0; i<argCount; i++) vm->pop();
         vm->push(Value::closure(closure));
+        vm->currentCoroutine()->lastResultCount = 1;
         return true;
     }
 
@@ -846,6 +865,7 @@ bool native_select(VM* vm, int argCount) {
     if (selector.isString() && vm->getStringValue(selector) == "#") {
         for(int i=0; i<argCount; i++) vm->pop();
         vm->push(Value::number(argCount - 1));
+        vm->currentCoroutine()->lastResultCount = 1;
         return true;
     }
     int index;

@@ -36,6 +36,7 @@ bool native_socket_create(VM* vm, int argCount) {
 
     SocketObject* sock = vm->createSocket(fd);
     vm->push(Value::socket(sock));
+    vm->currentCoroutine()->lastResultCount = 1;
     return true;
 }
 
@@ -63,6 +64,7 @@ bool native_socket_bind(VM* vm, int argCount) {
     std::string address = vm->getStringValue(addrVal);
     bool success = sock->bind(address, (int)portVal.asNumber());
     vm->push(Value::boolean(success));
+    vm->currentCoroutine()->lastResultCount = 1;
     return true;
 }
 
@@ -88,6 +90,7 @@ bool native_socket_listen(VM* vm, int argCount) {
 
     bool success = sock->listen((int)backlogVal.asNumber());
     vm->push(Value::boolean(success));
+    vm->currentCoroutine()->lastResultCount = 1;
     return true;
 }
 
@@ -117,6 +120,7 @@ bool native_socket_accept(VM* vm, int argCount) {
 
     vm->addObject(client);
     vm->push(Value::socket(client));
+    vm->currentCoroutine()->lastResultCount = 1;
     return true;
 }
 
@@ -137,12 +141,14 @@ bool native_socket_send(VM* vm, int argCount) {
     SocketObject* sock = sockVal.asSocketObj();
     if (!sock) {
         vm->push(Value::number(-1));
+        vm->currentCoroutine()->lastResultCount = 1;
         return true;
     }
 
     std::string data = vm->getStringValue(dataVal);
     int sent = sock->send(data);
     vm->push(Value::number(sent));
+    vm->currentCoroutine()->lastResultCount = 1;
     return true;
 }
 
@@ -163,6 +169,7 @@ bool native_socket_receive(VM* vm, int argCount) {
     SocketObject* sock = sockVal.asSocketObj();
     if (!sock) {
         vm->push(Value::nil());
+        vm->currentCoroutine()->lastResultCount = 1;
         return true;
     }
 
@@ -173,6 +180,7 @@ bool native_socket_receive(VM* vm, int argCount) {
         StringObject* str = vm->internString(data);
         vm->push(Value::runtimeString(str));
     }
+    vm->currentCoroutine()->lastResultCount = 1;
     return true;
 }
 
@@ -190,6 +198,7 @@ bool native_socket_close(VM* vm, int argCount) {
 
     vm->closeSocket(sockVal.asSocketObj());
     vm->push(Value::nil());
+    vm->currentCoroutine()->lastResultCount = 1;
     return true;
 }
 
