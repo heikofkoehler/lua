@@ -30,3 +30,15 @@ lua
 
 # Test scripts
 test_repl.sh
+
+# REPL history
+lua_history.txt
+
+# External test suite
+lua-5.5.0-tests/
+
+# Debug and scratch files
+debug_test*.lua
+disasm*.txt
+stack_test.lua
+run_disasm.cpp
