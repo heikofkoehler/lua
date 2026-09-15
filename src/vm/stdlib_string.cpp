@@ -263,7 +263,7 @@ bool native_string_len(VM* vm, int argCount) {
     }
     std::string s = vm->getStringValue(str);
     vm->pop();
-    vm->push(Value::number(static_cast<double>(s.length())));
+    vm->push(Value::integer(static_cast<int64_t>(s.length())));
     return true;
 }
 
@@ -526,6 +526,7 @@ bool native_string_gmatch_step(VM* vm, int argCount) {
     }
 
     for(int i=0; i<argCount; i++) vm->pop();
+    vm->currentCoroutine()->lastResultCount = 0;
     return true;
 }
 

@@ -181,16 +181,16 @@ bool native_getmetatable(VM* vm, int argCount) {
 }
 
 bool native_tostring(VM* vm, int argCount) {
-    if (argCount != 1) {
-        vm->runtimeError("tostring expects 1 argument");
+    if (argCount < 1) {
+        vm->runtimeError("tostring expects at least 1 argument");
         return false;
     }
-    Value val = vm->peek(0);
+    Value val = vm->peek(argCount - 1);
     
     Value mm = vm->getMetamethod(val, "__tostring");
     if (!mm.isNil()) {
-        // Pop the original argument first so it doesn't get counted as a result
-        vm->pop();
+        // Pop all arguments first so they don't get counted as a result
+        for (int i = 0; i < argCount; i++) vm->pop();
         
         vm->push(mm);
         vm->push(val);
@@ -208,7 +208,7 @@ bool native_tostring(VM* vm, int argCount) {
     }
 
     std::string str = vm->getStringValue(val);
-    vm->pop();
+    for (int i = 0; i < argCount; i++) vm->pop();
     vm->push(Value::runtimeString(vm->internString(str)));
     vm->currentCoroutine()->lastResultCount = 1;
     return true;

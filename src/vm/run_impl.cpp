@@ -63,7 +63,10 @@ bool VM::run(size_t targetFrameCount) {
                     currentCoroutine_->status == CoroutineObject::Status::SUSPENDED) {
                     return true;
                 }
-                if (res != -1 && static_cast<size_t>(res) != entryIp) {
+                if (res == -2) {
+                    continue;
+                }
+                if (res >= 0 && static_cast<size_t>(res) != entryIp) {
                     currentFrame().ip = static_cast<size_t>(res);
                     continue;
                 }

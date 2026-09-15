@@ -1003,7 +1003,7 @@ void CodeGenerator::visitForInStmt(ForInStmtNode* node) {
     const auto& varNames = node->varNames();
     for (const auto& name : varNames) {
         emitOpCode(OpCode::OP_NIL);
-        addLocal(name, true);
+        addLocal(name);
     }
     
     beginLoop();  // Start loop context for break statements
