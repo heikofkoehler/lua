@@ -23,7 +23,12 @@ bool native_math_abs(VM* vm, int argCount) {
     vm->pop();
     if (val.isInteger()) {
         int64_t i = val.asInteger();
-        vm->push(Value::integer(i < 0 ? -i : i));
+        if (i < 0) {
+            uint64_t u = 0ULL - static_cast<uint64_t>(i);
+            vm->push(vm->makeInteger(static_cast<int64_t>(u)));
+        } else {
+            vm->push(val);
+        }
     } else {
         vm->push(Value::number(std::abs(val.asNumber())));
     }
@@ -260,18 +265,29 @@ bool native_math_random(VM* vm, int argCount) {
         double d = (rv >> 11) * (1.0 / 9007199254740992.0);
         vm->push(Value::number(d));
     } else if (argCount == 1) {
-        int64_t m = vm->peek(0).asInteger();
+        int64_t m = 0;
+        if (!vm->toInteger(vm->peek(0), m)) {
+            vm->runtimeError("bad argument #1 to 'random' (number has no integer representation)");
+            return false;
+        }
         vm->pop();
         if (m < 1) { vm->runtimeError("bad argument #1 to 'random' (interval is empty)"); return false; }
         std::uniform_int_distribution<int64_t> dist(1, m);
-        vm->push(Value::integer(dist(rng)));
+        vm->push(vm->makeInteger(dist(rng)));
     } else if (argCount == 2) {
-        int64_t m = vm->peek(argCount - 1).asInteger();
-        int64_t n = vm->peek(argCount - 2).asInteger();
+        int64_t m = 0, n = 0;
+        if (!vm->toInteger(vm->peek(argCount - 1), m)) {
+            vm->runtimeError("bad argument #1 to 'random' (number has no integer representation)");
+            return false;
+        }
+        if (!vm->toInteger(vm->peek(argCount - 2), n)) {
+            vm->runtimeError("bad argument #2 to 'random' (number has no integer representation)");
+            return false;
+        }
         vm->pop(); vm->pop();
         if (m > n) { vm->runtimeError("bad argument #1 to 'random' (interval is empty)"); return false; }
         std::uniform_int_distribution<int64_t> dist(m, n);
-        vm->push(Value::integer(dist(rng)));
+        vm->push(vm->makeInteger(dist(rng)));
     } else {
         vm->runtimeError("math.random expects 0, 1, or 2 arguments");
         return false;
@@ -285,9 +301,13 @@ bool native_math_randomseed(VM* vm, int argCount) {
     uint64_t s1, s2;
     
     if (argCount >= 1) {
-        s1 = static_cast<uint64_t>(vm->peek(argCount - 1).asInteger());
+        int64_t val = 0;
+        vm->toInteger(vm->peek(argCount - 1), val);
+        s1 = static_cast<uint64_t>(val);
         if (argCount >= 2) {
-            s2 = static_cast<uint64_t>(vm->peek(argCount - 2).asInteger());
+            val = 0;
+            vm->toInteger(vm->peek(argCount - 2), val);
+            s2 = static_cast<uint64_t>(val);
         } else {
             s2 = 0;
         }
@@ -307,8 +327,8 @@ bool native_math_randomseed(VM* vm, int argCount) {
 
     for (int i = 0; i < argCount; i++) vm->pop();
     
-    vm->push(Value::integer(static_cast<int64_t>(s1)));
-    vm->push(Value::integer(static_cast<int64_t>(s2)));
+    vm->push(vm->makeInteger(static_cast<int64_t>(s1)));
+    vm->push(vm->makeInteger(static_cast<int64_t>(s2)));
     vm->currentCoroutine()->lastResultCount = 2;
     return true;
 }
@@ -332,16 +352,9 @@ bool native_math_tointeger(VM* vm, int argCount) {
     if (argCount < 1) { vm->runtimeError("math.tointeger expects 1 argument"); return false; }
     Value val = vm->peek(0);
     vm->pop();
-    if (val.isInteger()) {
-        vm->push(val);
-    } else if (val.isNumber()) {
-        double d = val.asNumber();
-        double i;
-        if (std::modf(d, &i) == 0.0) {
-            vm->push(Value::integer(static_cast<int64_t>(i)));
-        } else {
-            vm->push(Value::nil());
-        }
+    int64_t i = 0;
+    if (vm->toInteger(val, i)) {
+        vm->push(vm->makeInteger(i));
     } else {
         vm->push(Value::nil());
     }
@@ -351,10 +364,15 @@ bool native_math_tointeger(VM* vm, int argCount) {
 
 bool native_math_ult(VM* vm, int argCount) {
     if (argCount < 2) { vm->runtimeError("math.ult expects 2 arguments"); return false; }
-    uint64_t m = static_cast<uint64_t>(vm->peek(argCount - 1).asInteger());
-    uint64_t n = static_cast<uint64_t>(vm->peek(argCount - 2).asInteger());
-    vm->pop(); vm->pop();
-    vm->push(Value::boolean(m < n));
+    Value v1 = vm->peek(argCount - 1);
+    Value v2 = vm->peek(argCount - 2);
+    int64_t m = 0, n = 0;
+    if (!vm->toInteger(v1, m) || !vm->toInteger(v2, n)) {
+        vm->runtimeError("number has no integer representation");
+        return false;
+    }
+    for (int i = 0; i < argCount; i++) vm->pop();
+    vm->push(Value::boolean(static_cast<uint64_t>(m) < static_cast<uint64_t>(n)));
     vm->currentCoroutine()->lastResultCount = 1;
     return true;
 }
@@ -394,6 +412,6 @@ void registerMathLibrary(VM* vm, TableObject* mathTable) {
     mathTable->set("huge", Value::number(HUGE_VAL));
 
     // Add math.maxinteger and math.mininteger
-    mathTable->set("maxinteger", Value::integer(std::numeric_limits<int32_t>::max()));
-    mathTable->set("mininteger", Value::integer(std::numeric_limits<int32_t>::min()));
+    mathTable->set("maxinteger", vm->makeInteger(std::numeric_limits<int64_t>::max()));
+    mathTable->set("mininteger", vm->makeInteger(std::numeric_limits<int64_t>::min()));
 }

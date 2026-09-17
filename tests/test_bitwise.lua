@@ -1,7 +1,8 @@
 -- Test bitwise operators
 print("--- Bitwise AND ---")
 print(5 & 3)   -- 101 & 011 = 001 (1)
-print(5.5 & 3.1) -- 101 & 011 = 001 (1)
+print(5.0 & 3.0) -- 101 & 011 = 001 (1)
+assert(not pcall(function() return 5.5 & 3.1 end))
 print(12 & 7)  -- 1100 & 0111 = 0100 (4)
 
 print("--- Bitwise OR ---")
@@ -18,8 +19,8 @@ print(~5)      -- ~0101 = ...1010 (should be -6)
 print("--- Bitwise Shifts ---")
 print(1 << 3)  -- 8
 print(16 >> 2) -- 4
--- In our 48-bit VM, -1 is 0xFFFFFFFFFFFF.
--- Logical shift right by 1 should be 0x7FFFFFFFFFFF (140737488355327).
+-- In 64-bit Lua, -1 is 0xFFFFFFFFFFFFFFFF.
+-- Logical shift right by 1 should be 0x7FFFFFFFFFFFFFFF (9223372036854775807).
 print(-1 >> 1)
 
 print("--- Integer Division ---")

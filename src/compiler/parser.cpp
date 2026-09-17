@@ -1,4 +1,23 @@
 #include "compiler/parser.hpp"
+#include <clocale>
+#include <cstdlib>
+#include <cerrno>
+
+static double parseNumberLiteral(const std::string& lexeme) {
+    char dec = '.';
+    struct lconv* lc = localeconv();
+    if (lc && lc->decimal_point && lc->decimal_point[0] != '\0') {
+        dec = lc->decimal_point[0];
+    }
+    std::string s = lexeme;
+    if (dec != '.') {
+        for (char& c : s) {
+            if (c == '.') c = dec;
+        }
+    }
+    char* endp = nullptr;
+    return std::strtod(s.c_str(), &endp);
+}
 
 Parser::Parser(Lexer& lexer)
     : lexer_(lexer), current_(TokenType::ERROR, ""), previous_(TokenType::ERROR, ""),
@@ -190,6 +209,10 @@ std::unique_ptr<StmtNode> Parser::statement() {
 std::unique_ptr<StmtNode> Parser::expressionStatement() {
     int line = current_.line;
     auto expr = expression();
+    if (dynamic_cast<CallExprNode*>(expr.get()) == nullptr &&
+        dynamic_cast<MethodCallExprNode*>(expr.get()) == nullptr) {
+        error("syntax error");
+    }
     return std::make_unique<ExprStmtNode>(std::move(expr), line);
 }
 
@@ -251,8 +274,14 @@ std::unique_ptr<StmtNode> Parser::assignmentOrExpression() {
         );
     }
 
-    // Expression statement
-    return std::make_unique<ExprStmtNode>(std::move(firstExpr), line);
+    // Function or method call statement
+    if (dynamic_cast<CallExprNode*>(firstExpr.get()) != nullptr ||
+        dynamic_cast<MethodCallExprNode*>(firstExpr.get()) != nullptr) {
+        return std::make_unique<ExprStmtNode>(std::move(firstExpr), line);
+    }
+
+    error("syntax error");
+    return nullptr;
 }
 
 Parser::Attribute Parser::attribute() {
@@ -557,7 +586,7 @@ std::unique_ptr<StmtNode> Parser::functionDeclaration() {
             table = std::make_unique<IndexExprNode>(std::move(table),
                         std::make_unique<StringLiteralNode>(field, line), line);
         }
-        consume(TokenType::IDENTIFIER, "Expected field name after '.'");
+        consume(TokenType::IDENTIFIER, "<name> expected");
         field = previous_.lexeme;
     }
 
@@ -569,7 +598,7 @@ std::unique_ptr<StmtNode> Parser::functionDeclaration() {
             table = std::make_unique<IndexExprNode>(std::move(table),
                         std::make_unique<StringLiteralNode>(field, line), line);
         }
-        consume(TokenType::IDENTIFIER, "Expected method name after ':'");
+        consume(TokenType::IDENTIFIER, "<name> expected");
         field = previous_.lexeme;
         isMethod = true;
     }
@@ -880,22 +909,16 @@ std::unique_ptr<ExprNode> Parser::postfix() {
         }
         // Field access with dot notation: expr.field
         else if (match(TokenType::DOT)) {
-            if (!check(TokenType::IDENTIFIER)) {
-                error("Expected field name after '.'");
-                return expr;
-            }
-            advance();
+            consume(TokenType::IDENTIFIER, "<name> expected");
+            if (hadError_) return expr;
             std::string fieldName = previous_.lexeme;
             auto key = std::make_unique<StringLiteralNode>(fieldName, line);
             expr = std::make_unique<IndexExprNode>(std::move(expr), std::move(key), line);
         }
         // Method call: expr:method(args), expr:method{table}, expr:method"string"
         else if (match(TokenType::COLON)) {
-            if (!check(TokenType::IDENTIFIER)) {
-                error("Expected method name after ':'");
-                return expr;
-            }
-            advance();
+            consume(TokenType::IDENTIFIER, "<name> expected");
+            if (hadError_) return expr;
             std::string methodName = previous_.lexeme;
             
             std::vector<std::unique_ptr<ExprNode>> args;
@@ -943,35 +966,43 @@ std::unique_ptr<ExprNode> Parser::primary() {
 
     if (match(TokenType::NUMBER)) {
         std::string lexeme = previous_.lexeme;
-        bool isFloat = (lexeme.find('.') != std::string::npos || 
-                        lexeme.find('e') != std::string::npos || 
-                        lexeme.find('E') != std::string::npos ||
-                        lexeme.find('p') != std::string::npos ||
-                        lexeme.find('P') != std::string::npos);
+        bool isHex = (lexeme.length() >= 2 && (lexeme[0] == '0' && (lexeme[1] == 'x' || lexeme[1] == 'X')));
+        bool isFloat = false;
+        if (isHex) {
+            isFloat = (lexeme.find('.') != std::string::npos || 
+                       lexeme.find('p') != std::string::npos || 
+                       lexeme.find('P') != std::string::npos);
+        } else {
+            isFloat = (lexeme.find('.') != std::string::npos || 
+                       lexeme.find('e') != std::string::npos || 
+                       lexeme.find('E') != std::string::npos);
+        }
         
         if (isFloat) {
-            double value = std::stod(lexeme);
+            double value = parseNumberLiteral(lexeme);
             return std::make_unique<LiteralNode>(Value::number(value), line);
         } else {
             try {
-                // Try parsing as integer
-                // Lua doesn't have octal literals starting with 0. 
-                // std::stoll with base 0 would treat 010 as 8.
-                // We should use base 10 unless it's hex.
-                int base = 10;
-                if (lexeme.length() >= 2 && (lexeme[0] == '0' && (lexeme[1] == 'x' || lexeme[1] == 'X'))) {
-                    base = 0; // Let stoll handle hex
+                if (isHex) {
+                    char* end = nullptr;
+                    unsigned long long uval = std::strtoull(lexeme.c_str(), &end, 16);
+                    if (end && *end == '\0') {
+                        int64_t ival = static_cast<int64_t>(uval);
+                        return std::make_unique<LiteralNode>(ival, line);
+                    }
                 }
-                long long value = std::stoll(lexeme, nullptr, base);
-                // Ensure it fits in 32 bits for NaN-boxing
-                if (value >= std::numeric_limits<int32_t>::min() && value <= std::numeric_limits<int32_t>::max()) {
-                    return std::make_unique<LiteralNode>(Value::integer(static_cast<int64_t>(value)), line);
-                } else {
-                    return std::make_unique<LiteralNode>(Value::number(static_cast<double>(value)), line);
+                char* end = nullptr;
+                errno = 0;
+                unsigned long long uval = std::strtoull(lexeme.c_str(), &end, 10);
+                if (end && *end == '\0' && errno != ERANGE) {
+                    int64_t ival = static_cast<int64_t>(uval);
+                    return std::make_unique<LiteralNode>(ival, line);
                 }
+                double value = parseNumberLiteral(lexeme);
+                return std::make_unique<LiteralNode>(Value::number(value), line);
             } catch (...) {
                 // Fallback to double if it's too large for long long
-                double value = std::stod(lexeme);
+                double value = parseNumberLiteral(lexeme);
                 return std::make_unique<LiteralNode>(Value::number(value), line);
             }
         }

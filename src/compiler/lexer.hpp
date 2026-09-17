@@ -34,6 +34,7 @@ private:
     size_t current_;    // Current position in source
     int line_;          // Current line number
     std::string sourceName_ = "chunk";
+    bool isFirstToken_ = true;
 
     // Keywords map
     static const std::unordered_map<std::string, TokenType> keywords_;

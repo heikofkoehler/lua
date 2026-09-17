@@ -67,10 +67,10 @@ private:
 
     // Upvalue tracking
     struct Upvalue {
-        uint8_t index;      // Parent slot/upvalue index
-        bool isLocal;       // true = local, false = upvalue
-        bool isConstant;    // true if captured variable is constant
-        std::string name;   // For debugging
+        uint8_t index = 0;      // Parent slot/upvalue index
+        bool isLocal = false;       // true = local, false = upvalue
+        bool isConstant = false;    // true if captured variable is constant
+        std::string name = "";   // For debugging
     };
 
     // Label and Goto tracking for Lua 5.2+

@@ -16,7 +16,8 @@ public:
         FILE,
         SOCKET,
         COROUTINE,
-        USERDATA
+        USERDATA,
+        INT64
     };
 
     enum class Color {

@@ -19,6 +19,12 @@ bool VM::run(size_t targetFrameCount) {
             return !hadError_;
         }
 
+        if (interrupted_) {
+            interrupted_ = 0;
+            setupSigintHandler();
+            runtimeError("interrupted!");
+        }
+
         // Handle debug hooks
         if (stdlibInitialized_ && !currentCoroutine_->inHook && currentCoroutine_->hookMask != 0) {
             bool triggerCount = false;
@@ -58,7 +64,12 @@ bool VM::run(size_t targetFrameCount) {
             JITFunc jitCode = currentFrame().closure->function()->getJITCode();
             if (isJitEnabled() && jitCode) {
                 size_t entryIp = currentFrame().ip;
+                isJitExecuting_ = true;
                 int64_t res = jitCode(this);
+                isJitExecuting_ = false;
+                if (hadError_) {
+                    throw RuntimeError(lastErrorMessage_);
+                }
                 if (currentCoroutine_->status == CoroutineObject::Status::DEAD || 
                     currentCoroutine_->status == CoroutineObject::Status::SUSPENDED) {
                     return true;
@@ -88,7 +99,17 @@ bool VM::run(size_t targetFrameCount) {
                 uint32_t index = readByte();
                 index |= (readByte() << 8);
                 index |= (readByte() << 16);
-                push(currentFrame().chunk->constants()[index]);
+                Value constant = currentFrame().chunk->constants()[index];
+                if (constant.isString() && !constant.isRuntimeString()) {
+                    StringObject* str = currentFrame().chunk->getString(constant.asStringIndex());
+                    StringObject* runtimeStr = internString(str->chars(), str->length());
+                    push(Value::runtimeString(runtimeStr));
+                } else if (constant.isInt64() && !constant.isRuntimeInt64()) {
+                    int64_t num = currentFrame().chunk->getInt64(constant.asInt64Index());
+                    push(makeInteger(num));
+                } else {
+                    push(constant);
+                }
                 break;
             }
 
@@ -207,10 +228,43 @@ bool VM::run(size_t targetFrameCount) {
                 }
                 Value upTable = upvalue->get(currentCoroutine_->stack);
 
-                if (upTable.isTable()) {
-                    push(upTable.asTableObj()->get(key));
-                } else {
-                    runtimeError("attempt to index a " + upTable.typeToString() + " value");
+                Value t = upTable;
+                bool done = false;
+                for (int loop = 0; loop < 100; loop++) {
+                    if (t.isTable()) {
+                        TableObject* table = t.asTableObj();
+                        Value value = table->get(key);
+                        if (!value.isNil()) {
+                            push(value);
+                            done = true;
+                            break;
+                        }
+                    }
+
+                    Value indexMethod = getMetamethod(t, "__index");
+                    if (indexMethod.isNil()) {
+                        if (!t.isTable()) {
+                            runtimeError("attempt to index a " + t.typeToString() + " value");
+                        }
+                        push(Value::nil());
+                        done = true;
+                        break;
+                    } else if (indexMethod.isFunction()) {
+                        push(indexMethod);
+                        push(t);
+                        push(key);
+                        callValue(2, 2);
+                        done = true;
+                        break;
+                    } else if (indexMethod.isTable()) {
+                        t = indexMethod;
+                    } else {
+                        t = indexMethod;
+                    }
+                }
+                if (!done) {
+                    runtimeError("'__index' chain too long; possible loop");
+                    push(Value::nil());
                 }
                 break;
             }
@@ -235,13 +289,48 @@ bool VM::run(size_t targetFrameCount) {
                 }
                 Value upTable = upvalue->get(currentCoroutine_->stack);
 
-                if (upTable.isTable()) {
-                    upTable.asTableObj()->set(key, value);
-                } else {
-                    runtimeError("attempt to index a " + upTable.typeToString() + " value");
+                Value t = upTable;
+                bool done = false;
+                for (int loop = 0; loop < 100; loop++) {
+                    if (t.isTable()) {
+                        TableObject* table = t.asTableObj();
+                        if (table->has(key)) {
+                            table->set(key, value);
+                            pop();
+                            done = true;
+                            break;
+                        }
+                    }
+
+                    Value newIndex = getMetamethod(t, "__newindex");
+                    if (newIndex.isNil()) {
+                        if (t.isTable()) {
+                            t.asTableObj()->set(key, value);
+                        } else {
+                            runtimeError("attempt to index a " + t.typeToString() + " value");
+                        }
+                        pop();
+                        done = true;
+                        break;
+                    } else if (newIndex.isFunction()) {
+                        pop();
+                        push(newIndex);
+                        push(t);
+                        push(key);
+                        push(value);
+                        callValue(3, 1);
+                        done = true;
+                        break;
+                    } else if (newIndex.isTable()) {
+                        t = newIndex;
+                    } else {
+                        t = newIndex;
+                    }
                 }
-                
-                pop(); // Pop after setting
+                if (!done) {
+                    runtimeError("'__newindex' chain too long; possible loop");
+                    pop();
+                }
                 break;
             }
             case OpCode::OP_CLOSE_UPVALUE: {
@@ -262,8 +351,9 @@ bool VM::run(size_t targetFrameCount) {
             case OpCode::OP_ADD: {
                 Value b = pop();
                 Value a = pop();
-                if (a.isNumber() && b.isNumber()) {
-                    push(add(a, b));
+                Value ca = a, cb = b;
+                if (coerceToNumber(ca) && coerceToNumber(cb)) {
+                    push(add(ca, cb));
                 } else if (!callBinaryMetamethod(a, b, "__add")) {
                     runtimeError("attempt to perform arithmetic on " + a.typeToString() + " and " + b.typeToString());
                 }
@@ -273,8 +363,9 @@ bool VM::run(size_t targetFrameCount) {
             case OpCode::OP_SUB: {
                 Value b = pop();
                 Value a = pop();
-                if (a.isNumber() && b.isNumber()) {
-                    push(subtract(a, b));
+                Value ca = a, cb = b;
+                if (coerceToNumber(ca) && coerceToNumber(cb)) {
+                    push(subtract(ca, cb));
                 } else if (!callBinaryMetamethod(a, b, "__sub")) {
                     runtimeError("attempt to perform arithmetic on " + a.typeToString() + " and " + b.typeToString());
                 }
@@ -284,8 +375,9 @@ bool VM::run(size_t targetFrameCount) {
             case OpCode::OP_MUL: {
                 Value b = pop();
                 Value a = pop();
-                if (a.isNumber() && b.isNumber()) {
-                    push(multiply(a, b));
+                Value ca = a, cb = b;
+                if (coerceToNumber(ca) && coerceToNumber(cb)) {
+                    push(multiply(ca, cb));
                 } else if (!callBinaryMetamethod(a, b, "__mul")) {
                     runtimeError("attempt to perform arithmetic on " + a.typeToString() + " and " + b.typeToString());
                 }
@@ -295,8 +387,9 @@ bool VM::run(size_t targetFrameCount) {
             case OpCode::OP_DIV: {
                 Value b = pop();
                 Value a = pop();
-                if (a.isNumber() && b.isNumber()) {
-                    push(divide(a, b));
+                Value ca = a, cb = b;
+                if (coerceToNumber(ca) && coerceToNumber(cb)) {
+                    push(divide(ca, cb));
                 } else if (!callBinaryMetamethod(a, b, "__div")) {
                     runtimeError("attempt to perform arithmetic on " + a.typeToString() + " and " + b.typeToString());
                 }
@@ -306,8 +399,9 @@ bool VM::run(size_t targetFrameCount) {
             case OpCode::OP_IDIV: {
                 Value b = pop();
                 Value a = pop();
-                if (a.isNumber() && b.isNumber()) {
-                    push(integerDivide(a, b));
+                Value ca = a, cb = b;
+                if (coerceToNumber(ca) && coerceToNumber(cb)) {
+                    push(integerDivide(ca, cb));
                 } else if (!callBinaryMetamethod(a, b, "__idiv")) {
                     runtimeError("attempt to perform arithmetic on " + a.typeToString() + " and " + b.typeToString());
                 }
@@ -317,8 +411,9 @@ bool VM::run(size_t targetFrameCount) {
             case OpCode::OP_MOD: {
                 Value b = pop();
                 Value a = pop();
-                if (a.isNumber() && b.isNumber()) {
-                    push(modulo(a, b));
+                Value ca = a, cb = b;
+                if (coerceToNumber(ca) && coerceToNumber(cb)) {
+                    push(modulo(ca, cb));
                 } else if (!callBinaryMetamethod(a, b, "__mod")) {
                     runtimeError("attempt to perform arithmetic on " + a.typeToString() + " and " + b.typeToString());
                 }
@@ -328,8 +423,9 @@ bool VM::run(size_t targetFrameCount) {
             case OpCode::OP_POW: {
                 Value b = pop();
                 Value a = pop();
-                if (a.isNumber() && b.isNumber()) {
-                    push(power(a, b));
+                Value ca = a, cb = b;
+                if (coerceToNumber(ca) && coerceToNumber(cb)) {
+                    push(power(ca, cb));
                 } else if (!callBinaryMetamethod(a, b, "__pow")) {
                     runtimeError("attempt to perform arithmetic on " + a.typeToString() + " and " + b.typeToString());
                 }
@@ -339,10 +435,15 @@ bool VM::run(size_t targetFrameCount) {
             case OpCode::OP_BAND: {
                 Value b = pop();
                 Value a = pop();
-                if (a.isNumber() && b.isNumber()) {
-                    push(bitwiseAnd(a, b));
+                int64_t ia, ib;
+                if (toIntegerNoString(a, ia) && toIntegerNoString(b, ib)) {
+                    push(makeInteger(ia & ib));
                 } else if (!callBinaryMetamethod(a, b, "__band")) {
-                    runtimeError("attempt to perform bitwise operation on " + a.typeToString() + " and " + b.typeToString());
+                    if (a.isNumber() && b.isNumber()) {
+                        runtimeError("number has no integer representation");
+                    } else {
+                        runtimeError("attempt to perform bitwise operation on " + a.typeToString() + " and " + b.typeToString());
+                    }
                 }
                 break;
             }
@@ -350,10 +451,15 @@ bool VM::run(size_t targetFrameCount) {
             case OpCode::OP_BOR: {
                 Value b = pop();
                 Value a = pop();
-                if (a.isNumber() && b.isNumber()) {
-                    push(bitwiseOr(a, b));
+                int64_t ia, ib;
+                if (toIntegerNoString(a, ia) && toIntegerNoString(b, ib)) {
+                    push(makeInteger(ia | ib));
                 } else if (!callBinaryMetamethod(a, b, "__bor")) {
-                    runtimeError("attempt to perform bitwise operation on " + a.typeToString() + " and " + b.typeToString());
+                    if (a.isNumber() && b.isNumber()) {
+                        runtimeError("number has no integer representation");
+                    } else {
+                        runtimeError("attempt to perform bitwise operation on " + a.typeToString() + " and " + b.typeToString());
+                    }
                 }
                 break;
             }
@@ -361,10 +467,15 @@ bool VM::run(size_t targetFrameCount) {
             case OpCode::OP_BXOR: {
                 Value b = pop();
                 Value a = pop();
-                if (a.isNumber() && b.isNumber()) {
-                    push(bitwiseXor(a, b));
+                int64_t ia, ib;
+                if (toIntegerNoString(a, ia) && toIntegerNoString(b, ib)) {
+                    push(makeInteger(ia ^ ib));
                 } else if (!callBinaryMetamethod(a, b, "__bxor")) {
-                    runtimeError("attempt to perform bitwise operation on " + a.typeToString() + " and " + b.typeToString());
+                    if (a.isNumber() && b.isNumber()) {
+                        runtimeError("number has no integer representation");
+                    } else {
+                        runtimeError("attempt to perform bitwise operation on " + a.typeToString() + " and " + b.typeToString());
+                    }
                 }
                 break;
             }
@@ -372,10 +483,15 @@ bool VM::run(size_t targetFrameCount) {
             case OpCode::OP_SHL: {
                 Value b = pop();
                 Value a = pop();
-                if (a.isNumber() && b.isNumber()) {
+                int64_t ia, ib;
+                if (toIntegerNoString(a, ia) && toIntegerNoString(b, ib)) {
                     push(shiftLeft(a, b));
                 } else if (!callBinaryMetamethod(a, b, "__shl")) {
-                    runtimeError("attempt to perform bitwise operation on " + a.typeToString() + " and " + b.typeToString());
+                    if (a.isNumber() && b.isNumber()) {
+                        runtimeError("number has no integer representation");
+                    } else {
+                        runtimeError("attempt to perform bitwise operation on " + a.typeToString() + " and " + b.typeToString());
+                    }
                 }
                 break;
             }
@@ -383,10 +499,15 @@ bool VM::run(size_t targetFrameCount) {
             case OpCode::OP_SHR: {
                 Value b = pop();
                 Value a = pop();
-                if (a.isNumber() && b.isNumber()) {
+                int64_t ia, ib;
+                if (toIntegerNoString(a, ia) && toIntegerNoString(b, ib)) {
                     push(shiftRight(a, b));
                 } else if (!callBinaryMetamethod(a, b, "__shr")) {
-                    runtimeError("attempt to perform bitwise operation on " + a.typeToString() + " and " + b.typeToString());
+                    if (a.isNumber() && b.isNumber()) {
+                        runtimeError("number has no integer representation");
+                    } else {
+                        runtimeError("attempt to perform bitwise operation on " + a.typeToString() + " and " + b.typeToString());
+                    }
                 }
                 break;
             }
@@ -404,17 +525,11 @@ bool VM::run(size_t targetFrameCount) {
 
             case OpCode::OP_NEG: {
                 Value a = pop();
-                if (a.isNumber()) {
-                    push(negate(a));
-                } else {
-                    Value func = getMetamethod(a, "__unm");
-                    if (!func.isNil()) {
-                        push(func);
-                        push(a);
-                        callValue(1, 2); // Expect 1 result (1+1=2)
-                    } else {
-                        runtimeError("attempt to perform arithmetic on " + a.typeToString());
-                    }
+                Value ca = a;
+                if (coerceToNumber(ca)) {
+                    push(negate(ca));
+                } else if (!callBinaryMetamethod(a, a, "__unm")) {
+                    runtimeError("attempt to perform arithmetic on " + a.typeToString());
                 }
                 break;
             }
@@ -427,10 +542,15 @@ bool VM::run(size_t targetFrameCount) {
 
             case OpCode::OP_BNOT: {
                 Value a = pop();
-                if (a.isNumber()) {
-                    push(bitwiseNot(a));
+                int64_t ia;
+                if (toIntegerNoString(a, ia)) {
+                    push(makeInteger(~ia));
                 } else if (!callBinaryMetamethod(a, a, "__bnot")) { // Unary bitwise NOT
-                    runtimeError("attempt to perform bitwise operation on " + a.typeToString());
+                    if (a.isNumber()) {
+                        runtimeError("number has no integer representation");
+                    } else {
+                        runtimeError("attempt to perform bitwise operation on " + a.typeToString());
+                    }
                 }
                 break;
             }
@@ -444,7 +564,8 @@ bool VM::run(size_t targetFrameCount) {
                     if (!mm.isNil()) {
                         push(mm);
                         push(a);
-                        callValue(1, 2); // Expect 1 result (1+1=2)
+                        push(a);
+                        callValue(2, 2); // Expect 1 result (1+1=2)
                     } else {
                         push(Value::integer(static_cast<int64_t>(a.asTableObj()->length())));
                     }
@@ -453,7 +574,8 @@ bool VM::run(size_t targetFrameCount) {
                     if (!mm.isNil()) {
                         push(mm);
                         push(a);
-                        callValue(1, 2);
+                        push(a);
+                        callValue(2, 2);
                     } else {
                         runtimeError("attempt to get length of a " + a.typeToString() + " value");
                     }
@@ -478,7 +600,7 @@ bool VM::run(size_t targetFrameCount) {
                 Value b = pop();
                 Value a = pop();
                 if (a.isNumber() && b.isNumber()) {
-                    push(Value::boolean(a.asNumber() < b.asNumber()));
+                    push(less(a, b));
                 } else if ((a.isString() || a.isRuntimeString()) && (b.isString() || b.isRuntimeString())) {
                     push(Value::boolean(getStringValue(a) < getStringValue(b)));
                 } else if (!callBinaryMetamethod(a, b, "__lt")) {
@@ -491,7 +613,7 @@ bool VM::run(size_t targetFrameCount) {
                 Value b = pop();
                 Value a = pop();
                 if (a.isNumber() && b.isNumber()) {
-                    push(Value::boolean(a.asNumber() <= b.asNumber()));
+                    push(lessEqual(a, b));
                 } else if ((a.isString() || a.isRuntimeString()) && (b.isString() || b.isRuntimeString())) {
                     push(Value::boolean(getStringValue(a) <= getStringValue(b)));
                 } else {
@@ -506,7 +628,7 @@ bool VM::run(size_t targetFrameCount) {
                 Value b = pop();
                 Value a = pop();
                 if (a.isNumber() && b.isNumber()) {
-                    push(Value::boolean(a.asNumber() > b.asNumber()));
+                    push(less(b, a));
                 } else if ((a.isString() || a.isRuntimeString()) && (b.isString() || b.isRuntimeString())) {
                     push(Value::boolean(getStringValue(a) > getStringValue(b)));
                 } else {
@@ -849,59 +971,51 @@ bool VM::run(size_t targetFrameCount) {
                 Value key = pop();
                 Value tableValue = pop();
 
-                if (tableValue.isTable()) {
-                    TableObject* table = tableValue.asTableObj();
-                    Value value = table->get(key);
-                    if (!value.isNil()) {
-                        push(value);
-                        break;
-                    }
-                }
-
-                // Not found in table or not a table, check metatable for the property itself
-                // (e.g. string methods are in the string metatable or its __index)
-                if (key.isString()) {
-                    Value mm = getMetamethod(tableValue, getStringValue(key));
-                    if (!mm.isNil()) {
-                        push(mm);
-                        break;
-                    }
-                }
-
-                // If not found as property, check standard __index metamethod
-                Value indexMethod = getMetamethod(tableValue, "__index");
-                /*
-                if (indexMethod.isNil()) {
-                    // Fallback to type metatable if it's not a table (for string methods, file methods)
-                    Value typeMt = getTypeMetatable(tableValue.type());
-                    if (typeMt.isTable()) {
-                        Value method = typeMt.asTableObj()->get(key);
-                        if (!method.isNil()) {
-                            push(method);
+                Value t = tableValue;
+                bool done = false;
+                for (int loop = 0; loop < 100; loop++) {
+                    if (t.isTable()) {
+                        TableObject* table = t.asTableObj();
+                        Value value = table->get(key);
+                        if (!value.isNil()) {
+                            push(value);
+                            done = true;
                             break;
                         }
-                        
-                        indexMethod = typeMt.asTableObj()->get("__index");
+                    }
+
+                    if (key.isString()) {
+                        Value mm = getMetamethod(t, getStringValue(key));
+                        if (!mm.isNil()) {
+                            push(mm);
+                            done = true;
+                            break;
+                        }
+                    }
+
+                    Value indexMethod = getMetamethod(t, "__index");
+                    if (indexMethod.isNil()) {
+                        if (!t.isTable()) {
+                            runtimeError("attempt to index a " + t.typeToString() + " value");
+                        }
+                        push(Value::nil());
+                        done = true;
+                        break;
+                    } else if (indexMethod.isFunction()) {
+                        push(indexMethod);
+                        push(t);
+                        push(key);
+                        callValue(2, 2); // Expect 1 result (1 + 1 = 2)
+                        done = true;
+                        break;
+                    } else if (indexMethod.isTable()) {
+                        t = indexMethod;
+                    } else {
+                        t = indexMethod;
                     }
                 }
-                */
-                
-                if (indexMethod.isNil()) {
-                    if (!tableValue.isTable()) {
-                        runtimeError("attempt to index a " + tableValue.typeToString() + " value");
-                    }
-                    push(Value::nil());
-                } else if (indexMethod.isFunction()) {
-                    push(indexMethod);
-                    push(tableValue);
-                    push(key);
-                    callValue(2, 2); // Expect 1 result (1 + 1 = 2)
-                } else if (indexMethod.isTable()) {
-                    // Recurse into the __index table
-                    TableObject* indexTable = indexMethod.asTableObj();
-                    Value result = key.isString() ? indexTable->get(getStringValue(key)) : indexTable->get(key);
-                    push(result);
-                } else {
+                if (!done) {
+                    runtimeError("'__index' chain too long; possible loop");
                     push(Value::nil());
                 }
                 break;
@@ -912,45 +1026,44 @@ bool VM::run(size_t targetFrameCount) {
                 Value key = peek(1);
                 Value tableValue = peek(2);
 
-                if (tableValue.isTable()) {
-                    TableObject* table = tableValue.asTableObj();
-                    if (table->has(key)) {
-                        table->set(key, value);
+                Value t = tableValue;
+                bool done = false;
+                for (int loop = 0; loop < 100; loop++) {
+                    if (t.isTable()) {
+                        TableObject* table = t.asTableObj();
+                        if (table->has(key)) {
+                            table->set(key, value);
+                            pop(); pop(); pop();
+                            done = true;
+                            break;
+                        }
+                    }
+
+                    Value newIndex = getMetamethod(t, "__newindex");
+                    if (newIndex.isNil()) {
+                        if (t.isTable()) {
+                            TableObject* table = t.asTableObj();
+                            table->set(key, value);
+                        } else {
+                            runtimeError("attempt to index a " + t.typeToString() + " value");
+                        }
                         pop(); pop(); pop();
+                        done = true;
                         break;
+                    } else if (newIndex.isFunction()) {
+                        currentCoroutine_->stack[currentCoroutine_->stack.size() - 3] = t;
+                        currentCoroutine_->stack.insert(currentCoroutine_->stack.end() - 3, newIndex);
+                        callValue(3, 1); // Expect 0 results (0 + 1 = 1)
+                        done = true;
+                        break;
+                    } else if (newIndex.isTable()) {
+                        t = newIndex;
+                    } else {
+                        t = newIndex;
                     }
                 }
-
-                Value newIndex = getMetamethod(tableValue, "__newindex");
-                if (newIndex.isNil()) {
-                    if (tableValue.isTable()) {
-                        TableObject* table = tableValue.asTableObj();
-                        table->set(key, value);
-                    } else {
-                        runtimeError("attempt to index a " + tableValue.typeToString() + " value");
-                    }
-                    pop(); pop(); pop();
-                } else if (newIndex.isFunction()) {
-                    // To call mm(table, key, value), we need to insert mm below the 3 arguments
-                    // Stack currently has: [..., tableValue, key, value]
-                    // We need it to be: [..., mm, tableValue, key, value]
-                    currentCoroutine_->stack.insert(currentCoroutine_->stack.end() - 3, newIndex);
-                    callValue(3, 1); // Expect 0 results (0 + 1 = 1)
-                } else if (newIndex.isTable()) {
-                    TableObject* niTable = newIndex.asTableObj();
-                    if (key.isString()) {
-                        niTable->set(getStringValue(key), value);
-                    } else {
-                        niTable->set(key, value);
-                    }
-                    pop(); pop(); pop();
-                } else {
-                    if (tableValue.isTable()) {
-                        TableObject* table = tableValue.asTableObj();
-                        table->set(key, value);
-                    } else {
-                        runtimeError("attempt to index a " + tableValue.typeToString() + " value");
-                    }
+                if (!done) {
+                    runtimeError("'__newindex' chain too long; possible loop");
                     pop(); pop(); pop();
                 }
                 break;
@@ -1057,6 +1170,7 @@ bool VM::run(size_t targetFrameCount) {
                     // Pop closure if it exists
                     if (stackBase > 0) pop();
 
+                    uint8_t expectedRetCount = currentFrame().retCount;
                     const Chunk* returnChunk = currentFrame().callerChunk;
                     currentCoroutine_->frames.pop_back();
 
@@ -1068,20 +1182,28 @@ bool VM::run(size_t targetFrameCount) {
                         shouldExit = currentCoroutine_->frames.empty();
                     }
 
+                    size_t toPush = 0;
+                    if (expectedRetCount > 0) {
+                        toPush = static_cast<size_t>(expectedRetCount - 1);
+                    }
+
                     if (shouldExit) {
                         if (currentCoroutine_->frames.empty()) {
                             currentCoroutine_->status = CoroutineObject::Status::DEAD;
                         } else {
-                            // If returning to a caller, push nil as result
-                            push(Value::nil());
-                            currentCoroutine_->lastResultCount = 1;
+                            for (size_t i = 0; i < toPush; i++) {
+                                push(Value::nil());
+                            }
+                            currentCoroutine_->lastResultCount = toPush;
                         }
                         return !hadError_;
                     }
 
                     currentCoroutine_->chunk = returnChunk;
-                    push(Value::nil());
-                    currentCoroutine_->lastResultCount = 1;
+                    for (size_t i = 0; i < toPush; i++) {
+                        push(Value::nil());
+                    }
+                    currentCoroutine_->lastResultCount = toPush;
                 }
                 break;
             }

@@ -23,6 +23,7 @@ Value Value::fromObj(GCObject* obj) {
         case GCObject::Type::SOCKET: return socket(static_cast<SocketObject*>(obj));
         case GCObject::Type::USERDATA: return userdata(static_cast<UserdataObject*>(obj));
         case GCObject::Type::COROUTINE: return thread(static_cast<CoroutineObject*>(obj));
+        case GCObject::Type::INT64: return fromInt64(static_cast<Int64Object*>(obj));
         default: return nil();
     }
 }
@@ -36,14 +37,16 @@ std::string Value::toString() const {
 std::string Value::typeToString() const {
     switch (type()) {
         case Type::NUMBER: 
-        case Type::INTEGER: return "number";
+        case Type::INTEGER:
+        case Type::INT64: return "number";
         case Type::BOOL: return "boolean";
         case Type::NIL: return "nil";
         case Type::STRING: return "string";
         case Type::TABLE: return "table";
         case Type::FUNCTION:
         case Type::CLOSURE:
-        case Type::NATIVE_FUNCTION: return "function";
+        case Type::NATIVE_FUNCTION:
+        case Type::C_FUNCTION: return "function";
         case Type::THREAD: return "thread";
         case Type::USERDATA: return "userdata";
         case Type::FILE:
@@ -57,7 +60,12 @@ void Value::print(std::ostream& os) const {
         case Type::NIL: os << "nil"; break;
         case Type::BOOL: os << (asBool() ? "true" : "false"); break;
         case Type::INTEGER: 
-            os << asInteger(); 
+        case Type::INT64:
+            if (isInt64() && !isRuntimeInt64()) {
+                os << "<int64:" << asInt64Index() << ">";
+            } else {
+                os << asInteger(); 
+            }
             break;
         case Type::NUMBER: {
             double num = asNumber();
@@ -102,6 +110,35 @@ bool Value::isFalsey() const {
 }
 
 bool Value::operator==(const Value& other) const {
+    if (isInt64() || other.isInt64()) {
+        if (!isRuntimeInt64() && !other.isRuntimeInt64()) {
+            return bits_ == other.bits_;
+        }
+        if (!isRuntimeInt64() || !other.isRuntimeInt64()) {
+            return false;
+        }
+    }
+    if (isInteger() && other.isInteger()) {
+        return asInteger() == other.asInteger();
+    }
+    if (isInteger() && other.isFloat()) {
+        double d = other.asNumber();
+        if (std::isnan(d) || d < -9223372036854775808.0 || d >= 9223372036854775808.0) return false;
+        double intpart;
+        if (std::modf(d, &intpart) == 0.0) {
+            return asInteger() == static_cast<int64_t>(d);
+        }
+        return false;
+    }
+    if (isFloat() && other.isInteger()) {
+        double d = asNumber();
+        if (std::isnan(d) || d < -9223372036854775808.0 || d >= 9223372036854775808.0) return false;
+        double intpart;
+        if (std::modf(d, &intpart) == 0.0) {
+            return static_cast<int64_t>(d) == other.asInteger();
+        }
+        return false;
+    }
     if (isNumber() && other.isNumber()) {
         return asNumber() == other.asNumber();
     }
@@ -120,6 +157,13 @@ bool Value::operator==(const Value& other) const {
     switch (type()) {
         case Type::NIL: return true;
         case Type::BOOL: return asBool() == other.asBool();
+        case Type::STRING: {
+            if (asObj() == other.asObj()) return true;
+            if (isRuntimeString() && other.isRuntimeString()) {
+                return asStringObj()->equals(other.asStringObj());
+            }
+            return false;
+        }
         case Type::FUNCTION: return asFunctionIndex() == other.asFunctionIndex();
         case Type::NATIVE_FUNCTION: return asNativeFunctionIndex() == other.asNativeFunctionIndex();
         case Type::C_FUNCTION: return asCFunction() == other.asCFunction();
@@ -137,10 +181,17 @@ bool Value::isStringEqual(const std::string& str) const {
 }
 
 size_t Value::hash() const {
-    if (isNumber()) {
+    if (isInt64() && !isRuntimeInt64()) {
+        return std::hash<size_t>()(asInt64Index());
+    }
+    if (isInteger()) {
+        return std::hash<int64_t>()(asInteger());
+    }
+    if (isFloat()) {
         double n = asNumber();
         double intPart;
-        if (std::modf(n, &intPart) == 0.0) {
+        if (std::isfinite(n) && std::modf(n, &intPart) == 0.0 &&
+            n >= -9223372036854775808.0 && n < 9223372036854775808.0) {
             return std::hash<int64_t>()(static_cast<int64_t>(n));
         }
         return std::hash<double>()(n);
@@ -179,19 +230,26 @@ void Value::serialize(std::ostream& os, const Chunk* chunk) const {
             os.write(reinterpret_cast<const char*>(&n), sizeof(n));
             break;
         }
-        case Type::INTEGER: {
+        case Type::INTEGER:
+        case Type::INT64: {
             int64_t n = asInteger();
             os.write(reinterpret_cast<const char*>(&n), sizeof(n));
             break;
         }
         case Type::STRING: {
+            const char* chars = nullptr;
+            uint32_t len = 0;
             if (isRuntimeString()) {
-                throw std::runtime_error("Cannot serialize runtime string");
+                StringObject* str = asStringObj();
+                chars = str->chars();
+                len = static_cast<uint32_t>(str->length());
+            } else {
+                StringObject* str = chunk->getString(asStringIndex());
+                chars = str->chars();
+                len = static_cast<uint32_t>(str->length());
             }
-            StringObject* str = chunk->getString(asStringIndex());
-            uint32_t len = static_cast<uint32_t>(str->length());
             os.write(reinterpret_cast<const char*>(&len), sizeof(len));
-            os.write(str->chars(), len);
+            os.write(chars, len);
             break;
         }
         case Type::FUNCTION: {
@@ -221,10 +279,15 @@ Value Value::deserialize(std::istream& is, Chunk* chunk) {
             is.read(reinterpret_cast<char*>(&n), sizeof(n));
             return Value::number(n);
         }
-        case Type::INTEGER: {
+        case Type::INTEGER:
+        case Type::INT64: {
             int64_t n;
             is.read(reinterpret_cast<char*>(&n), sizeof(n));
-            return Value::integer(n);
+            if (n >= -(1LL << 47) && n < (1LL << 47)) {
+                return Value::integer(n);
+            }
+            size_t idx = chunk->addInt64(n);
+            return Value::compileTimeInt64(idx);
         }
         case Type::STRING: {
             uint32_t len;

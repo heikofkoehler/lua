@@ -73,6 +73,21 @@ StringObject* Chunk::getString(size_t index) const {
     return strings_[index];
 }
 
+size_t Chunk::addInt64(int64_t val) {
+    for (size_t i = 0; i < int64s_.size(); ++i) {
+        if (int64s_[i] == val) return i;
+    }
+    int64s_.push_back(val);
+    return int64s_.size() - 1;
+}
+
+int64_t Chunk::getInt64(size_t index) const {
+    if (index >= int64s_.size()) {
+        return 0;
+    }
+    return int64s_[index];
+}
+
 int Chunk::getLine(size_t offset) const {
     if (offset >= lines_.size()) {
         return -1;

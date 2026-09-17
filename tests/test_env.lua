@@ -4,8 +4,7 @@ x = 10
 print("x =", x)
 print("_ENV.x =", _ENV.x)
 
-print("
-=== Custom _ENV ===")
+print("\n=== Custom _ENV ===")
 local my_env = {
     print = print,
     y = 20
@@ -19,8 +18,7 @@ do
     print("z =", z)
 end
 
-print("
-=== Back to default _ENV ===")
+print("\n=== Back to default _ENV ===")
 print("x =", x)
 print("y =", y) -- should be nil
 print("z =", z) -- should be nil

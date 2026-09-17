@@ -40,8 +40,8 @@ assert(f == 0.5)
 -- Constants
 assert(math.pi > 3.14 and math.pi < 3.15)
 assert(math.huge > 1e300)
-assert(math.maxinteger == 2147483647)
-assert(math.mininteger == -2147483648)
+assert(math.maxinteger == 0x7fffffffffffffff)
+assert(math.mininteger == -0x8000000000000000)
 
 -- Integer utilities
 assert(math.type(1) == "integer")
@@ -49,7 +49,7 @@ assert(math.type(1.5) == "float")
 assert(math.type("1") == nil)
 assert(math.tointeger(1.0) == 1)
 assert(math.tointeger(1.5) == nil)
-assert(math.tointeger("1") == nil)
+assert(math.tointeger("1") == 1)
 assert(math.ult(1, 2) == true)
 assert(math.ult(2, 1) == false)
 assert(math.ult(-1, 1) == false) -- -1 is large when unsigned

@@ -1,17 +1,13 @@
-#include "vm/vm.hpp"
+#include "api/lua.h"
 
 extern "C" {
 
 #ifdef _WIN32
 __declspec(dllexport)
 #endif
-bool dummy_test_function(VM* vm, int argCount) {
-    for (int i = 0; i < argCount; i++) {
-        vm->pop();
-    }
-    vm->push(Value::number(42.0));
-    vm->currentCoroutine()->lastResultCount = 1;
-    return true;
+int dummy_test_function(lua_State* L) {
+    lua_pushnumber(L, 42.0);
+    return 1;
 }
 
 }

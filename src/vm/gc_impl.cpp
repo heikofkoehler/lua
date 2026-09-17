@@ -6,6 +6,7 @@
 #include "value/upvalue.hpp"
 #include "value/coroutine.hpp"
 #include "value/userdata.hpp"
+#include "value/int64.hpp"
 #include <iostream>
 
 void VM::addObject(GCObject* object) {
@@ -155,6 +156,7 @@ void VM::freeObject(GCObject* object) {
         case GCObject::Type::FILE: delete static_cast<FileObject*>(object); break;
         case GCObject::Type::SOCKET: delete static_cast<SocketObject*>(object); break;
         case GCObject::Type::USERDATA: delete static_cast<class UserdataObject*>(object); break;
+        case GCObject::Type::INT64: delete static_cast<Int64Object*>(object); break;
         case GCObject::Type::COROUTINE: {
             CoroutineObject* co = static_cast<CoroutineObject*>(object);
             for (auto it = coroutines_.begin(); it != coroutines_.end(); ++it) {
@@ -207,6 +209,7 @@ static void blackenObject(VM* vm, GCObject* object) {
         case GCObject::Type::STRING: break;
         case GCObject::Type::FILE: break;
         case GCObject::Type::SOCKET: break;
+        case GCObject::Type::INT64: break;
 
         case GCObject::Type::TABLE: {
             TableObject* table = static_cast<TableObject*>(object);
@@ -469,10 +472,34 @@ void VM::runFinalizers() {
             push(mm);
             push(val);
             size_t baseFrames = currentCoroutine_->frames.size();
-            if (callValue(1, 1)) {
-                if (currentCoroutine_->frames.size() > baseFrames) {
-                    run(baseFrames);
+            size_t baseStack = (currentCoroutine_->stack.size() >= 2) ? currentCoroutine_->stack.size() - 2 : 0;
+            CoroutineObject::Status oldStatus = currentCoroutine_->status;
+            if (currentCoroutine_->status == CoroutineObject::Status::DEAD) {
+                currentCoroutine_->status = CoroutineObject::Status::RUNNING;
+            }
+            try {
+                if (callValue(1, 0)) {
+                    if (currentCoroutine_->frames.size() > baseFrames) {
+                        run(baseFrames);
+                    }
                 }
+            } catch (const RuntimeError& e) {
+                if (warnEnabled_) {
+                    std::cerr << "Lua warning: error in __gc metamethod (" << lastErrorMessage_ << ")" << std::endl;
+                }
+            } catch (const std::exception& e) {
+                if (warnEnabled_) {
+                    std::cerr << "Lua warning: error in __gc metamethod (" << e.what() << ")" << std::endl;
+                }
+            }
+            currentCoroutine_->status = oldStatus;
+            isHandlingError_ = false;
+            hadError_ = false;
+            while (currentCoroutine_->frames.size() > baseFrames) {
+                currentCoroutine_->frames.pop_back();
+            }
+            while (currentCoroutine_->stack.size() > baseStack) {
+                pop();
             }
         }
     }

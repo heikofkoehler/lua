@@ -67,8 +67,8 @@ public:
     FunctionObject* getFunction(size_t index);
 
     // String interning operations
-    StringObject* internString(const char* chars, size_t length);
-    StringObject* internString(const std::string& str);
+    StringObject* internString(const char* chars, size_t length, bool isConstant = false);
+    StringObject* internString(const std::string& str, bool isConstant = false);
     StringObject* getString(size_t index);
 
     // Table operations
@@ -211,6 +211,10 @@ public:
     void setGCEnabled(bool enabled) { gcEnabled_ = enabled; }
     bool warnEnabled() const { return warnEnabled_; }
     void setWarnEnabled(bool enabled) { warnEnabled_ = enabled; }
+    void close();
+    bool isClosing() const { return isClosing_; }
+    void setupSigintHandler();
+    const std::string& lastErrorMessage() const { return lastErrorMessage_; }
     void markRoots();
     void markValue(const Value& value);
     void markObject(GCObject* object);
@@ -241,6 +245,13 @@ public:
     lua_State* currentL() const { return currentL_; }
     void setCurrentL(lua_State* L) { currentL_ = L; }
 
+    Value makeInteger(int64_t val);
+    bool toInteger(const Value& val, int64_t& outInt);
+    bool toIntegerNoString(const Value& val, int64_t& outInt);
+    static bool stringToInteger(const std::string& str, int64_t& outInt);
+    static bool stringToNumber(const std::string& str, double& outNum, bool& isInt);
+    static bool stringToNumber(const std::string& str, double& outNum, int64_t& outInt, bool& isInt);
+
 private:
     lua_State* currentL_ = nullptr;
     // GC-aware object allocation helper
@@ -266,6 +277,9 @@ private:
             }
         }
     }
+
+    // Coercion and parsing
+    bool coerceToNumber(Value& val);
 
     // Arithmetic operations
     Value add(const Value& a, const Value& b);
@@ -307,6 +321,7 @@ private:
     // JIT related
     std::unique_ptr<JITCompiler> jit_;
     bool jitEnabled_;
+    bool isJitExecuting_ = false;
 
     // Garbage collection
     GCState gcState_;             // Current incremental GC state
@@ -320,6 +335,10 @@ private:
     size_t memoryLimit_;          // Maximum bytes allowed before Emergency GC
     bool gcEnabled_;              // Can disable GC for debugging
     bool warnEnabled_;            // Lua 5.4 warning state
+    bool isClosing_ = false;      // VM close in progress
+public:
+    volatile sig_atomic_t interrupted_ = 0; // SIGINT flag
+private:
     std::vector<class TableObject*> weakTables_;
 
     std::unordered_map<std::string, Value> registry_; // Internal registry

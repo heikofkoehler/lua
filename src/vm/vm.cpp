@@ -11,11 +11,26 @@
 #include "value/upvalue.hpp"
 #include "value/coroutine.hpp"
 #include "value/userdata.hpp"
+#include "value/int64.hpp"
 #include <iostream>
 #include <stdarg.h>
 #include <algorithm>
+#include <clocale>
+#include <csignal>
 
 VM* VM::currentVM = nullptr;
+
+static void vmSigintHandler(int sig) {
+    (void)sig;
+    signal(SIGINT, SIG_DFL);
+    if (VM::currentVM) {
+        VM::currentVM->interrupted_ = 1;
+    }
+}
+
+void VM::setupSigintHandler() {
+    signal(SIGINT, vmSigintHandler);
+}
 
 VM::VM() : 
 #ifdef DEBUG_TRACE_EXECUTION
@@ -31,7 +46,7 @@ VM::VM() :
            gcObjects_(nullptr), toBeFinalized_(nullptr), bytesAllocated_(0), nextGC_(1024 * 1024), 
            memoryLimit_(100 * 1024 * 1024), // Default 100MB limit
            gcEnabled_(true),
-           warnEnabled_(true) {
+           warnEnabled_(false) {
     currentVM = this;
     for (int i = 0; i < Value::NUM_TYPES; i++) {
         typeMetatables_[i] = Value::nil();
@@ -43,7 +58,42 @@ VM::VM() :
     currentCoroutine_ = mainCoroutine_;
 }
 
+void VM::close() {
+    if (isClosing_) return;
+    isClosing_ = true;
+
+    // 1. Close all to-be-closed variables in main coroutine
+    if (mainCoroutine_) {
+        closeTBCVariables(0, mainCoroutine_);
+    }
+
+    // 2. Separate all unfinalized objects with __gc into toBeFinalized_
+    GCObject** p = &gcObjects_;
+    GCObject** tbfTail = &toBeFinalized_;
+    while (*tbfTail != nullptr) {
+        tbfTail = &((*tbfTail)->nextRef());
+    }
+    while (*p != nullptr) {
+        GCObject* obj = *p;
+        if (!obj->isFinalized()) {
+            Value mm = getMetamethod(Value::fromObj(obj), "__gc");
+            if (!mm.isNil()) {
+                *p = obj->next();
+                obj->setNext(nullptr);
+                *tbfTail = obj;
+                tbfTail = &(obj->nextRef());
+                continue;
+            }
+        }
+        p = &(obj->nextRef());
+    }
+
+    // 3. Run all finalizers
+    runFinalizers();
+}
+
 VM::~VM() {
+    close();
     currentVM = nullptr;
     
     // 1. Clear all handles that could be roots
@@ -109,6 +159,7 @@ void VM::reset() {
 size_t VM::registerFunction(FunctionObject* func) {
     size_t index = functions_.size();
     functions_.push_back(func);
+    if (func) internConstants(*func);
     return index;
 }
 
@@ -120,11 +171,14 @@ FunctionObject* VM::getFunction(size_t index) {
     return functions_[index];
 }
 
-StringObject* VM::internString(const char* chars, size_t length) {
-    std::string s(chars, length);
-    auto it = runtimeStrings_.find(s);
-    if (it != runtimeStrings_.end()) {
-        return it->second;
+StringObject* VM::internString(const char* chars, size_t length, bool isConstant) {
+    bool canIntern = isConstant || (length <= 40);
+    if (canIntern) {
+        std::string s(chars, length);
+        auto it = runtimeStrings_.find(s);
+        if (it != runtimeStrings_.end()) {
+            return it->second;
+        }
     }
 
     // String size: sizeof(StringObject) + length + 1 (for null terminator)
@@ -134,14 +188,20 @@ StringObject* VM::internString(const char* chars, size_t length) {
     try {
         StringObject* str = new StringObject(chars, length);
         addObject(str);
-        runtimeStrings_[s] = str;
+        if (canIntern) {
+            std::string s(chars, length);
+            runtimeStrings_[s] = str;
+        }
         return str;
     } catch (const std::bad_alloc&) {
         collectGarbage();
         try {
             StringObject* str = new StringObject(chars, length);
             addObject(str);
-            runtimeStrings_[s] = str;
+            if (canIntern) {
+                std::string s(chars, length);
+                runtimeStrings_[s] = str;
+            }
             return str;
         } catch (const std::bad_alloc&) {
             runtimeError("not enough memory (hard allocation failure)");
@@ -150,8 +210,8 @@ StringObject* VM::internString(const char* chars, size_t length) {
     }
 }
 
-StringObject* VM::internString(const std::string& str) {
-    return internString(str.c_str(), str.length());
+StringObject* VM::internString(const std::string& str, bool isConstant) {
+    return internString(str.c_str(), str.length(), isConstant);
 }
 
 StringObject* VM::getString(size_t index) {
@@ -450,9 +510,13 @@ void VM::runInitializationFrames() {
 }
 
 Value VM::getGlobal(const std::string& name) const {
-    auto it = globals_.find(name);
-    if (it != globals_.end()) {
-        return it->second;
+    auto it = globals_.find("_G");
+    if (it != globals_.end() && it->second.isTable()) {
+        return it->second.asTableObj()->get(name);
+    }
+    auto it2 = globals_.find(name);
+    if (it2 != globals_.end()) {
+        return it2->second;
     }
     return Value::nil();
 }
@@ -495,7 +559,11 @@ void VM::internConstants(const FunctionObject& function) {
         Value& val = const_cast<std::vector<Value>&>(function.chunk()->constants())[i];
         if (val.isString() && !val.isRuntimeString()) {
             StringObject* str = function.chunk()->getString(val.asStringIndex());
-            val = Value::runtimeString(internString(str->chars(), str->length()));
+            val = Value::runtimeString(internString(str->chars(), str->length(), true));
+            rootedConstants_.push_back(val);
+        } else if (val.isInt64() && !val.isRuntimeInt64()) {
+            int64_t num = function.chunk()->getInt64(val.asInt64Index());
+            val = makeInteger(num);
             rootedConstants_.push_back(val);
         } else if (val.isFunction()) {
             FunctionObject* nested = function.chunk()->getFunction(val.asFunctionIndex());
@@ -808,6 +876,11 @@ Value VM::readConstant() {
         StringObject* runtimeStr = internString(str->chars(), str->length());
         return Value::runtimeString(runtimeStr);
     }
+    if (constant.isInt64() && !constant.isRuntimeInt64()) {
+        int64_t num = currentFrame().chunk->getInt64(constant.asInt64Index());
+        Value intVal = makeInteger(num);
+        return intVal;
+    }
     
     return constant;
 }
@@ -831,7 +904,11 @@ void VM::runtimeError(const std::string& message, int level) {
 
     int targetFrame = -1;
     if (level > 0 && !currentCoroutine_->frames.empty()) {
-        targetFrame = static_cast<int>(currentCoroutine_->frames.size()) - level;
+        if (currentCoroutine_->frames.back().isC) {
+            targetFrame = static_cast<int>(currentCoroutine_->frames.size()) - 1 - level;
+        } else {
+            targetFrame = static_cast<int>(currentCoroutine_->frames.size()) - level;
+        }
     }
 
     if (targetFrame >= 0 && targetFrame < static_cast<int>(currentCoroutine_->frames.size())) {
@@ -846,20 +923,28 @@ void VM::runtimeError(const std::string& message, int level) {
     }
 
     std::string prefix = "";
-    if (line != -1) {
-        std::string displaySource = source;
-        if (!displaySource.empty() && displaySource[0] == '@') {
-            displaySource = displaySource.substr(1);
+    if (level > 0) {
+        if (line != -1) {
+            std::string displaySource = source;
+            if (!displaySource.empty() && (displaySource[0] == '@' || displaySource[0] == '=')) {
+                displaySource = displaySource.substr(1);
+            }
+            prefix = displaySource + ":" + std::to_string(line) + ": ";
+        } else if (targetFrame >= 0) {
+            std::string displaySource = source;
+            if (!displaySource.empty() && (displaySource[0] == '@' || displaySource[0] == '=')) {
+                displaySource = displaySource.substr(1);
+            }
+            if (!displaySource.empty()) {
+                prefix = displaySource + ": ";
+            }
         }
-        prefix = displaySource + ":" + std::to_string(line) + ": ";
-    } else if (level != 0) {
-        prefix = source + ": ";
     }
 
     lastErrorMessage_ = prefix + message;
 
-    if (!inPcall_) {
-        std::cerr << lastErrorMessage_ << std::endl;
+    if (isJitExecuting_) {
+        return;
     }
 
     throw RuntimeError(lastErrorMessage_);
@@ -878,13 +963,254 @@ void VM::traceExecution() {
     }
 }
 
+bool VM::stringToNumber(const std::string& str, double& outNum, bool& isInt) {
+    int64_t dummyInt = 0;
+    return stringToNumber(str, outNum, dummyInt, isInt);
+}
+
+bool VM::stringToNumber(const std::string& str, double& outNum, int64_t& outInt, bool& isInt) {
+    auto start = str.find_first_not_of(" \t\n\r\f\v");
+    if (start == std::string::npos) return false;
+    auto end = str.find_last_not_of(" \t\n\r\f\v");
+    std::string s = str.substr(start, end - start + 1);
+
+    // Reject strings with embedded NUL bytes
+    if (s.length() != std::strlen(s.c_str())) {
+        return false;
+    }
+
+    std::string lower_s = s;
+    for (char& c : lower_s) c = std::tolower(static_cast<unsigned char>(c));
+    if (lower_s.find("inf") != std::string::npos || lower_s.find("nan") != std::string::npos) {
+        return false;
+    }
+
+    const char* p = s.c_str();
+    bool neg = false;
+    if (*p == '+') p++;
+    else if (*p == '-') { neg = true; p++; }
+
+    // Hex integer check
+    if (p[0] == '0' && (p[1] == 'x' || p[1] == 'X')) {
+        if (s.find('.') == std::string::npos && s.find(',') == std::string::npos &&
+            lower_s.find('p') == std::string::npos) {
+            char* endp = nullptr;
+            errno = 0;
+            unsigned long long uval = std::strtoull(p, &endp, 16);
+            if (endp && *endp == '\0' && endp != p + 2) {
+                uint64_t val64 = uval;
+                if (neg) val64 = 0ULL - val64;
+                int64_t ival = static_cast<int64_t>(val64);
+                outInt = ival;
+                outNum = static_cast<double>(ival);
+                isInt = true;
+                return true;
+            }
+            return false;
+        }
+    }
+
+    // Decimal integer check
+    if (s.find('.') == std::string::npos && s.find(',') == std::string::npos &&
+        lower_s.find('e') == std::string::npos) {
+        char* endp = nullptr;
+        errno = 0;
+        unsigned long long uval = std::strtoull(p, &endp, 10);
+        if (endp && *endp == '\0' && endp != p) {
+            if (errno == 0) {
+                if (neg) {
+                    if (uval <= 9223372036854775808ULL) {
+                        int64_t ival = (uval == 9223372036854775808ULL) ? std::numeric_limits<int64_t>::min() : -static_cast<int64_t>(uval);
+                        outInt = ival;
+                        outNum = static_cast<double>(ival);
+                        isInt = true;
+                        return true;
+                    }
+                } else {
+                    if (uval <= 9223372036854775807ULL) {
+                        int64_t ival = static_cast<int64_t>(uval);
+                        outInt = ival;
+                        outNum = static_cast<double>(ival);
+                        isInt = true;
+                        return true;
+                    }
+                }
+            }
+        }
+    }
+
+    auto try_strtod = [](const char* nptr, double& res) -> bool {
+        char* endp = nullptr;
+        errno = 0;
+        double d = std::strtod(nptr, &endp);
+        if (endp != nptr) {
+            while (*endp && std::isspace(static_cast<unsigned char>(*endp))) endp++;
+            if (*endp == '\0') {
+                res = d;
+                return true;
+            }
+        }
+        return false;
+    };
+
+    double dres = 0.0;
+    bool ok = try_strtod(s.c_str(), dres);
+    if (!ok) {
+        char dec = '.';
+        struct lconv* lc = localeconv();
+        if (lc && lc->decimal_point && lc->decimal_point[0] != '\0') {
+            dec = lc->decimal_point[0];
+        }
+
+        std::string swapped = s;
+        for (char& c : swapped) {
+            if (c == '.') c = dec;
+            else if (c == dec) c = '.';
+        }
+        ok = try_strtod(swapped.c_str(), dres);
+        if (!ok) {
+            swapped = s;
+            for (char& c : swapped) {
+                if (c == '.') c = ',';
+                else if (c == ',') c = '.';
+            }
+            ok = try_strtod(swapped.c_str(), dres);
+        }
+    }
+
+    if (ok) {
+        outNum = dres;
+        double intpart;
+        isInt = (std::modf(dres, &intpart) == 0.0 && s.find('.') == std::string::npos && s.find(',') == std::string::npos && lower_s.find('e') == std::string::npos && lower_s.find('p') == std::string::npos && dres >= -9223372036854775808.0 && dres < 9223372036854775808.0);
+        if (isInt) {
+            outInt = static_cast<int64_t>(dres);
+        }
+        return true;
+    }
+    return false;
+}
+
+bool VM::stringToInteger(const std::string& str, int64_t& outInt) {
+    double dnum = 0.0;
+    int64_t inum = 0;
+    bool isInt = false;
+    if (stringToNumber(str, dnum, inum, isInt)) {
+        if (isInt) {
+            outInt = inum;
+            return true;
+        }
+        if (!std::isnan(dnum) && !std::isinf(dnum)) {
+            double intpart;
+            if (std::modf(dnum, &intpart) == 0.0 &&
+                dnum >= -9223372036854775808.0 && dnum < 9223372036854775808.0) {
+                outInt = static_cast<int64_t>(dnum);
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+Value VM::makeInteger(int64_t val) {
+    if (val >= -(1LL << 47) && val < (1LL << 47)) {
+        return Value::integer(val);
+    }
+    return Value::fromInt64(allocateObject<Int64Object>(val));
+}
+
+bool VM::toIntegerNoString(const Value& val, int64_t& outInt) {
+    if (val.isInteger()) {
+        outInt = val.asInteger();
+        return true;
+    }
+    if (val.isFloat()) {
+        double d = val.asNumber();
+        if (std::isnan(d) || std::isinf(d)) return false;
+        double intpart;
+        if (std::modf(d, &intpart) == 0.0 &&
+            d >= -9223372036854775808.0 && d < 9223372036854775808.0) {
+            outInt = static_cast<int64_t>(d);
+            return true;
+        }
+    }
+    return false;
+}
+
+bool VM::toInteger(const Value& val, int64_t& outInt) {
+    if (toIntegerNoString(val, outInt)) return true;
+    if (val.isString()) {
+        return stringToInteger(getStringValue(val), outInt);
+    }
+    return false;
+}
+
+bool VM::coerceToNumber(Value& val) {
+    if (val.isNumber()) return true;
+    if (val.isString()) {
+        double num = 0.0;
+        int64_t inum = 0;
+        bool isInt = false;
+        if (stringToNumber(getStringValue(val), num, inum, isInt)) {
+            if (isInt) {
+                val = makeInteger(inum);
+            } else {
+                val = Value::number(num);
+            }
+            return true;
+        }
+    }
+    return false;
+}
+
+static inline int64_t lua_shift_left(int64_t x, int64_t y) {
+    if (y < 0) {
+        if (y <= -64) return 0;
+        return static_cast<int64_t>(static_cast<uint64_t>(x) >> (-y));
+    } else {
+        if (y >= 64) return 0;
+        return static_cast<int64_t>(static_cast<uint64_t>(x) << y);
+    }
+}
+
+static inline int64_t lua_shift_right(int64_t x, int64_t y) {
+    if (y < 0) {
+        if (y <= -64) return 0;
+        return static_cast<int64_t>(static_cast<uint64_t>(x) << (-y));
+    } else {
+        if (y >= 64) return 0;
+        return static_cast<int64_t>(static_cast<uint64_t>(x) >> y);
+    }
+}
+
+static inline bool LTintfloat(int64_t i, double f) {
+    if (std::isnan(f)) return false;
+    if (f < -9223372036854775808.0) return false;
+    if (f >= 9223372036854775808.0) return true;
+    double intpart;
+    if (std::modf(f, &intpart) == 0.0) {
+        return i < static_cast<int64_t>(f);
+    }
+    return static_cast<double>(i) < f;
+}
+
+static inline bool LEintfloat(int64_t i, double f) {
+    if (std::isnan(f)) return false;
+    if (f < -9223372036854775808.0) return false;
+    if (f >= 9223372036854775808.0) return true;
+    double intpart;
+    if (std::modf(f, &intpart) == 0.0) {
+        return i <= static_cast<int64_t>(f);
+    }
+    return static_cast<double>(i) <= f;
+}
+
 Value VM::add(const Value& a, const Value& b) {
     if (!a.isNumber() || !b.isNumber()) {
         runtimeError("Operands must be numbers");
         return Value::nil();
     }
     if (a.isInteger() && b.isInteger()) {
-        return Value::integer(static_cast<int64_t>(static_cast<uint64_t>(a.asInteger()) + static_cast<uint64_t>(b.asInteger())));
+        return makeInteger(static_cast<int64_t>(static_cast<uint64_t>(a.asInteger()) + static_cast<uint64_t>(b.asInteger())));
     }
     return Value::number(a.asNumber() + b.asNumber());
 }
@@ -895,7 +1221,7 @@ Value VM::subtract(const Value& a, const Value& b) {
         return Value::nil();
     }
     if (a.isInteger() && b.isInteger()) {
-        return Value::integer(static_cast<int64_t>(static_cast<uint64_t>(a.asInteger()) - static_cast<uint64_t>(b.asInteger())));
+        return makeInteger(static_cast<int64_t>(static_cast<uint64_t>(a.asInteger()) - static_cast<uint64_t>(b.asInteger())));
     }
     return Value::number(a.asNumber() - b.asNumber());
 }
@@ -906,7 +1232,7 @@ Value VM::multiply(const Value& a, const Value& b) {
         return Value::nil();
     }
     if (a.isInteger() && b.isInteger()) {
-        return Value::integer(static_cast<int64_t>(static_cast<uint64_t>(a.asInteger()) * static_cast<uint64_t>(b.asInteger())));
+        return makeInteger(static_cast<int64_t>(static_cast<uint64_t>(a.asInteger()) * static_cast<uint64_t>(b.asInteger())));
     }
     return Value::number(a.asNumber() * b.asNumber());
 }
@@ -924,13 +1250,51 @@ Value VM::integerDivide(const Value& a, const Value& b) {
         runtimeError("Operands must be numbers");
         return Value::nil();
     }
-    return Value::number(std::floor(a.asNumber() / b.asNumber()));
+    if (a.isInteger() && b.isInteger()) {
+        int64_t ib = b.asInteger();
+        if (ib == 0) {
+            runtimeError("attempt to divide by zero");
+            return Value::nil();
+        }
+        int64_t ia = a.asInteger();
+        if (ia == std::numeric_limits<int64_t>::min() && ib == -1) {
+            return makeInteger(std::numeric_limits<int64_t>::min());
+        }
+        int64_t q = ia / ib;
+        int64_t r = ia % ib;
+        if ((ia ^ ib) < 0 && r != 0) {
+            q -= 1;
+        }
+        return makeInteger(q);
+    }
+    double db = b.asNumber();
+    if (db == 0.0) {
+        runtimeError("attempt to divide by zero");
+        return Value::nil();
+    }
+    return Value::number(std::floor(a.asNumber() / db));
 }
 
 Value VM::modulo(const Value& a, const Value& b) {
     if (!a.isNumber() || !b.isNumber()) {
         runtimeError("Operands must be numbers");
         return Value::nil();
+    }
+    if (a.isInteger() && b.isInteger()) {
+        int64_t ib = b.asInteger();
+        if (ib == 0) {
+            runtimeError("attempt to perform 'n%0'");
+            return Value::nil();
+        }
+        int64_t ia = a.asInteger();
+        if (ia == std::numeric_limits<int64_t>::min() && ib == -1) {
+            return makeInteger(0);
+        }
+        int64_t r = ia % ib;
+        if ((ia ^ ib) < 0 && r != 0) {
+            r += ib;
+        }
+        return makeInteger(r);
     }
     double da = a.asNumber();
     double db = b.asNumber();
@@ -946,43 +1310,48 @@ Value VM::power(const Value& a, const Value& b) {
 }
 
 Value VM::bitwiseAnd(const Value& a, const Value& b) {
-    if (!a.isNumber() || !b.isNumber()) {
-        runtimeError("Operands must be numbers");
+    int64_t ia, ib;
+    if (!toInteger(a, ia) || !toInteger(b, ib)) {
+        runtimeError("number has no integer representation");
         return Value::nil();
     }
-    return Value::integer(a.asInteger() & b.asInteger());
+    return makeInteger(ia & ib);
 }
 
 Value VM::bitwiseOr(const Value& a, const Value& b) {
-    if (!a.isNumber() || !b.isNumber()) {
-        runtimeError("Operands must be numbers");
+    int64_t ia, ib;
+    if (!toInteger(a, ia) || !toInteger(b, ib)) {
+        runtimeError("number has no integer representation");
         return Value::nil();
     }
-    return Value::integer(a.asInteger() | b.asInteger());
+    return makeInteger(ia | ib);
 }
 
 Value VM::bitwiseXor(const Value& a, const Value& b) {
-    if (!a.isNumber() || !b.isNumber()) {
-        runtimeError("Operands must be numbers");
+    int64_t ia, ib;
+    if (!toInteger(a, ia) || !toInteger(b, ib)) {
+        runtimeError("number has no integer representation");
         return Value::nil();
     }
-    return Value::integer(a.asInteger() ^ b.asInteger());
+    return makeInteger(ia ^ ib);
 }
 
 Value VM::shiftLeft(const Value& a, const Value& b) {
-    if (!a.isNumber() || !b.isNumber()) {
-        runtimeError("Operands must be numbers");
+    int64_t ia, ib;
+    if (!toInteger(a, ia) || !toInteger(b, ib)) {
+        runtimeError("number has no integer representation");
         return Value::nil();
     }
-    return Value::integer(a.asInteger() << b.asInteger());
+    return makeInteger(lua_shift_left(ia, ib));
 }
 
 Value VM::shiftRight(const Value& a, const Value& b) {
-    if (!a.isNumber() || !b.isNumber()) {
-        runtimeError("Operands must be numbers");
+    int64_t ia, ib;
+    if (!toInteger(a, ia) || !toInteger(b, ib)) {
+        runtimeError("number has no integer representation");
         return Value::nil();
     }
-    return Value::integer(a.asInteger() >> b.asInteger());
+    return makeInteger(lua_shift_right(ia, ib));
 }
 
 Value VM::concat(const Value& a, const Value& b) {
@@ -995,17 +1364,18 @@ Value VM::negate(const Value& a) {
         return Value::nil();
     }
     if (a.isInteger()) {
-        return Value::integer(static_cast<int64_t>(0ULL - static_cast<uint64_t>(a.asInteger())));
+        return makeInteger(static_cast<int64_t>(0ULL - static_cast<uint64_t>(a.asInteger())));
     }
     return Value::number(-a.asNumber());
 }
 
 Value VM::bitwiseNot(const Value& a) {
-    if (!a.isNumber()) {
-        runtimeError("attempt to perform bitwise operation on non-number");
+    int64_t ia;
+    if (!toInteger(a, ia)) {
+        runtimeError("number has no integer representation");
         return Value::nil();
     }
-    return Value::integer(static_cast<int64_t>(~static_cast<uint64_t>(a.asInteger())));
+    return makeInteger(~ia);
 }
 
 Value VM::equal(const Value& a, const Value& b) {
@@ -1017,6 +1387,15 @@ Value VM::less(const Value& a, const Value& b) {
         runtimeError("Operands must be numbers");
         return Value::nil();
     }
+    if (a.isInteger() && b.isInteger()) {
+        return Value::boolean(a.asInteger() < b.asInteger());
+    }
+    if (a.isInteger() && b.isFloat()) {
+        return Value::boolean(LTintfloat(a.asInteger(), b.asNumber()));
+    }
+    if (a.isFloat() && b.isInteger()) {
+        return Value::boolean(!LEintfloat(b.asInteger(), a.asNumber()));
+    }
     return Value::boolean(a.asNumber() < b.asNumber());
 }
 
@@ -1024,6 +1403,15 @@ Value VM::lessEqual(const Value& a, const Value& b) {
     if (!a.isNumber() || !b.isNumber()) {
         runtimeError("Operands must be numbers");
         return Value::nil();
+    }
+    if (a.isInteger() && b.isInteger()) {
+        return Value::boolean(a.asInteger() <= b.asInteger());
+    }
+    if (a.isInteger() && b.isFloat()) {
+        return Value::boolean(LEintfloat(a.asInteger(), b.asNumber()));
+    }
+    if (a.isFloat() && b.isInteger()) {
+        return Value::boolean(!LTintfloat(b.asInteger(), a.asNumber()));
     }
     return Value::boolean(a.asNumber() <= b.asNumber());
 }
@@ -1092,6 +1480,28 @@ bool VM::callValue(int argCount, int retCount, bool isTailCall) {
     if (callee.isNativeFunction() || callee.isCFunction()) {
         size_t funcPosition = currentCoroutine_->stack.size() - argCount - 1;
         currentCoroutine_->lastResultCount = 1;
+
+        CallFrame cframe;
+        cframe.closure = nullptr;
+        cframe.chunk = nullptr;
+        cframe.callerChunk = nullptr;
+        cframe.ip = 0;
+        cframe.stackBase = funcPosition + 1;
+        cframe.retCount = retCount;
+        cframe.isPcall = false;
+        cframe.isHook = false;
+        cframe.isC = true;
+        cframe.cFunc = callee;
+
+        struct FrameGuard {
+            std::vector<CallFrame>& frames;
+            FrameGuard(std::vector<CallFrame>& f, const CallFrame& fr) : frames(f) {
+                frames.push_back(fr);
+            }
+            ~FrameGuard() {
+                frames.pop_back();
+            }
+        } guard(currentCoroutine_->frames, cframe);
 
         if (callee.isNativeFunction()) {
             NativeFunction function = nativeFunctions_[callee.asNativeFunctionIndex()];
@@ -1266,6 +1676,15 @@ Value VM::getRegistry(const std::string& key) const {
 }
 
 void VM::setTypeMetatable(Value::Type type, const Value& mt) {
+    if (type == Value::Type::INTEGER || type == Value::Type::INT64 || type == Value::Type::NUMBER) {
+        int idx1 = static_cast<int>(Value::Type::INTEGER) & 0x0F;
+        int idx2 = static_cast<int>(Value::Type::NUMBER) & 0x0F;
+        int idx3 = static_cast<int>(Value::Type::INT64) & 0x0F;
+        if (idx1 >= 0 && idx1 < Value::NUM_TYPES) typeMetatables_[idx1] = mt;
+        if (idx2 >= 0 && idx2 < Value::NUM_TYPES) typeMetatables_[idx2] = mt;
+        if (idx3 >= 0 && idx3 < Value::NUM_TYPES) typeMetatables_[idx3] = mt;
+        return;
+    }
     int index = static_cast<int>(type) & 0x0F;
     if (index >= 0 && index < Value::NUM_TYPES) {
         typeMetatables_[index] = mt;
@@ -1273,6 +1692,9 @@ void VM::setTypeMetatable(Value::Type type, const Value& mt) {
 }
 
 Value VM::getTypeMetatable(Value::Type type) const {
+    if (type == Value::Type::INTEGER || type == Value::Type::INT64) {
+        type = Value::Type::NUMBER;
+    }
     int index = static_cast<int>(type) & 0x0F;
     if (index >= 0 && index < Value::NUM_TYPES) {
         return typeMetatables_[index];
@@ -1308,6 +1730,7 @@ void VM::callHook(const char* event, int line) {
 }
 
 void VM::jitGetTable(VM* vm, uint32_t nextIp) {
+    vm->getFrame(0)->ip = nextIp;
     Value key = vm->pop();
     Value tableValue = vm->pop();
 
@@ -1335,7 +1758,6 @@ void VM::jitGetTable(VM* vm, uint32_t nextIp) {
         }
         vm->push(Value::nil());
     } else {
-        vm->getFrame(0)->ip = nextIp;
         if (indexMethod.isFunction()) {
             vm->push(indexMethod);
             vm->push(tableValue);
@@ -1352,6 +1774,7 @@ void VM::jitGetTable(VM* vm, uint32_t nextIp) {
 }
 
 void VM::jitSetTable(VM* vm, uint32_t nextIp) {
+    vm->getFrame(0)->ip = nextIp;
     Value value = vm->peek(0);
     Value key = vm->peek(1);
     Value tableValue = vm->peek(2);
@@ -1701,42 +2124,108 @@ void VM::jitNeg(VM* vm, uint32_t nextIp) {
 void VM::jitBand(VM* vm, uint32_t nextIp) {
     Value b = vm->pop();
     Value a = vm->pop();
-    vm->getFrame(0)->ip = nextIp;
-    vm->push(vm->bitwiseAnd(a, b));
+    int64_t ia, ib;
+    if (vm->toIntegerNoString(a, ia) && vm->toIntegerNoString(b, ib)) {
+        vm->push(vm->makeInteger(ia & ib));
+    } else {
+        vm->getFrame(0)->ip = nextIp;
+        if (!vm->callBinaryMetamethod(a, b, "__band")) {
+            if (a.isNumber() && b.isNumber()) {
+                vm->runtimeError("number has no integer representation");
+            } else {
+                vm->runtimeError("attempt to perform bitwise operation on " + a.typeToString() + " and " + b.typeToString());
+            }
+        }
+    }
 }
 
 void VM::jitBor(VM* vm, uint32_t nextIp) {
     Value b = vm->pop();
     Value a = vm->pop();
-    vm->getFrame(0)->ip = nextIp;
-    vm->push(vm->bitwiseOr(a, b));
+    int64_t ia, ib;
+    if (vm->toIntegerNoString(a, ia) && vm->toIntegerNoString(b, ib)) {
+        vm->push(vm->makeInteger(ia | ib));
+    } else {
+        vm->getFrame(0)->ip = nextIp;
+        if (!vm->callBinaryMetamethod(a, b, "__bor")) {
+            if (a.isNumber() && b.isNumber()) {
+                vm->runtimeError("number has no integer representation");
+            } else {
+                vm->runtimeError("attempt to perform bitwise operation on " + a.typeToString() + " and " + b.typeToString());
+            }
+        }
+    }
 }
 
 void VM::jitBxor(VM* vm, uint32_t nextIp) {
     Value b = vm->pop();
     Value a = vm->pop();
-    vm->getFrame(0)->ip = nextIp;
-    vm->push(vm->bitwiseXor(a, b));
+    int64_t ia, ib;
+    if (vm->toIntegerNoString(a, ia) && vm->toIntegerNoString(b, ib)) {
+        vm->push(vm->makeInteger(ia ^ ib));
+    } else {
+        vm->getFrame(0)->ip = nextIp;
+        if (!vm->callBinaryMetamethod(a, b, "__bxor")) {
+            if (a.isNumber() && b.isNumber()) {
+                vm->runtimeError("number has no integer representation");
+            } else {
+                vm->runtimeError("attempt to perform bitwise operation on " + a.typeToString() + " and " + b.typeToString());
+            }
+        }
+    }
 }
 
 void VM::jitBnot(VM* vm, uint32_t nextIp) {
     Value a = vm->pop();
-    vm->getFrame(0)->ip = nextIp;
-    vm->push(vm->bitwiseNot(a));
+    int64_t ia;
+    if (vm->toIntegerNoString(a, ia)) {
+        vm->push(vm->makeInteger(~ia));
+    } else {
+        vm->getFrame(0)->ip = nextIp;
+        if (!vm->callBinaryMetamethod(a, a, "__bnot")) {
+            if (a.isNumber()) {
+                vm->runtimeError("number has no integer representation");
+            } else {
+                vm->runtimeError("attempt to perform bitwise operation on " + a.typeToString());
+            }
+        }
+    }
 }
 
 void VM::jitShl(VM* vm, uint32_t nextIp) {
     Value b = vm->pop();
     Value a = vm->pop();
-    vm->getFrame(0)->ip = nextIp;
-    vm->push(vm->shiftLeft(a, b));
+    int64_t ia, ib;
+    if (vm->toIntegerNoString(a, ia) && vm->toIntegerNoString(b, ib)) {
+        vm->push(vm->makeInteger(lua_shift_left(ia, ib)));
+    } else {
+        vm->getFrame(0)->ip = nextIp;
+        if (!vm->callBinaryMetamethod(a, b, "__shl")) {
+            if (a.isNumber() && b.isNumber()) {
+                vm->runtimeError("number has no integer representation");
+            } else {
+                vm->runtimeError("attempt to perform bitwise operation on " + a.typeToString() + " and " + b.typeToString());
+            }
+        }
+    }
 }
 
 void VM::jitShr(VM* vm, uint32_t nextIp) {
     Value b = vm->pop();
     Value a = vm->pop();
-    vm->getFrame(0)->ip = nextIp;
-    vm->push(vm->shiftRight(a, b));
+    int64_t ia, ib;
+    if (vm->toIntegerNoString(a, ia) && vm->toIntegerNoString(b, ib)) {
+        vm->push(vm->makeInteger(lua_shift_right(ia, ib)));
+    } else {
+        vm->getFrame(0)->ip = nextIp;
+        if (!vm->callBinaryMetamethod(a, b, "__shr")) {
+            if (a.isNumber() && b.isNumber()) {
+                vm->runtimeError("number has no integer representation");
+            } else {
+                vm->runtimeError("attempt to perform bitwise operation on " + a.typeToString() + " and " + b.typeToString());
+            }
+        }
+    }
 }
 
 void VM::jitEq(VM* vm, uint32_t nextIp) {

@@ -1,4 +1,8 @@
 #include "compiler/lexer.hpp"
+#include <clocale>
+#include <cstdlib>
+#include <cerrno>
+#include <cctype>
 
 // Initialize keywords map
 const std::unordered_map<std::string, TokenType> Lexer::keywords_ = {
@@ -36,16 +40,21 @@ Lexer::Lexer(const std::string& source)
         static_cast<unsigned char>(source_[2]) == 0xBF) {
         current_ = 3;
     }
-
-    // Skip shebang ONLY if it starts with #!
-    if (current_ + 1 < source_.length() && source_[current_] == '#' && source_[current_ + 1] == '!') {
-        while (current_ < source_.length() && source_[current_] != '\n') {
-            current_++;
-        }
-    }
 }
 
 Token Lexer::scanToken() {
+    if (isFirstToken_) {
+        isFirstToken_ = false;
+        // Skip shebang comment on line 1 if this is a file or stdin
+        if (!sourceName_.empty() && (sourceName_[0] == '@' || sourceName_ == "=stdin" || sourceName_ == "=[string \"stdin\"]")) {
+            if (current_ < source_.length() && source_[current_] == '#') {
+                while (current_ < source_.length() && source_[current_] != '\n') {
+                    current_++;
+                }
+            }
+        }
+    }
+
     skipWhitespace();
 
     start_ = current_;
@@ -209,16 +218,14 @@ void Lexer::skipWhitespace() {
                 break;
 
             case '\n':
+            case '\r': {
+                char old = advance();
+                if ((peek() == '\n' || peek() == '\r') && peek() != old) {
+                    advance();
+                }
                 line_++;
-                advance();
-                if (peek() == '\r') advance();
                 break;
-
-            case '\r':
-                line_++;
-                advance();
-                if (peek() == '\n') advance();
-                break;
+            }
 
             case '-':
                 // Lua comments start with --
@@ -250,21 +257,27 @@ void Lexer::skipWhitespace() {
                                         advance();
                                         break; // continue the while(true) loop
                                     }
+                                } else if (peek() == '\n' || peek() == '\r') {
+                                    char old = advance();
+                                    if ((peek() == '\n' || peek() == '\r') && peek() != old) {
+                                        advance();
+                                    }
+                                    line_++;
                                 } else {
-                                    if (advance() == '\n') line_++;
+                                    advance();
                                 }
                             }
                         } else {
                             // Not a long comment, skip until end of line
                             current_ = savedCurrent;
                             line_ = savedLine;
-                            while (peek() != '\n' && !isAtEnd()) {
+                            while (peek() != '\n' && peek() != '\r' && !isAtEnd()) {
                                 advance();
                             }
                         }
                     } else {
                         // Skip until end of line
-                        while (peek() != '\n' && !isAtEnd()) {
+                        while (peek() != '\n' && peek() != '\r' && !isAtEnd()) {
                             advance();
                         }
                     }
@@ -305,24 +318,30 @@ Token Lexer::string() {
                     // Skip following whitespace
                     while (!isAtEnd()) {
                         char c = peek();
-                        if (c == ' ' || c == '\t' || c == '\r' || c == '\n' || c == '\v' || c == '\f') {
-                            if (c == '\n') line_++;
-                            else if (c == '\r' && peekNext() == '\n') {
-                                advance(); // skip \r
-                            } else if (c == '\r') line_++;
+                        if (c == ' ' || c == '\t' || c == '\v' || c == '\f') {
                             advance();
+                        } else if (c == '\n' || c == '\r') {
+                            char old = advance();
+                            if ((peek() == '\n' || peek() == '\r') && peek() != old) {
+                                advance();
+                            }
+                            line_++;
                         } else {
                             break;
                         }
                     }
                     continue; 
                 }
-                case '\n': line_++; value += '\n'; break;
-                case '\r':
-                    if (peek() == '\n') advance();
+                case '\n':
+                case '\r': {
+                    char old = c;
+                    if ((peek() == '\n' || peek() == '\r') && peek() != old) {
+                        advance();
+                    }
                     line_++;
                     value += '\n';
                     break;
+                }
                 case 'u': {
                     // Unicode escape \u{XXX}
                     if (advance() != '{') return errorToken("invalid escape sequence");
@@ -398,7 +417,9 @@ Token Lexer::string() {
                     break;
             }
         } else {
-            if (c == '\n') line_++;
+            if (c == '\n' || c == '\r') {
+                return errorToken("unfinished string");
+            }
             value += advance();
         }
     }
@@ -430,12 +451,11 @@ Token Lexer::longString() {
     advance(); // Consume the second '['
 
     // If first character is a newline, skip it
-    if (peek() == '\n') {
-        current_++;
-        line_++;
-    } else if (peek() == '\r') {
-        current_++;
-        if (peek() == '\n') current_++;
+    if (peek() == '\n' || peek() == '\r') {
+        char old = advance();
+        if ((peek() == '\n' || peek() == '\r') && peek() != old) {
+            advance();
+        }
         line_++;
     }
 
@@ -456,15 +476,12 @@ Token Lexer::longString() {
             value += ']';
             for (int i = 0; i < closingLevel; i++) value += '=';
             // Continue scanning from after the '='
-        } else if (peek() == '\n') {
+        } else if (peek() == '\n' || peek() == '\r') {
+            char old = advance();
+            if ((peek() == '\n' || peek() == '\r') && peek() != old) {
+                advance();
+            }
             line_++;
-            advance();
-            if (peek() == '\r') advance();
-            value += '\n';
-        } else if (peek() == '\r') {
-            line_++;
-            advance();
-            if (peek() == '\n') advance();
             value += '\n';
         } else {
             value += advance();
@@ -478,50 +495,71 @@ Token Lexer::longString() {
     return errorToken("unfinished long string");
 }
 
+static bool isValidLuaNumber(const std::string& lexeme) {
+    if (lexeme.empty()) return false;
+    
+    char dec = '.';
+    struct lconv* lc = localeconv();
+    if (lc && lc->decimal_point && lc->decimal_point[0] != '\0') {
+        dec = lc->decimal_point[0];
+    }
+    std::string s = lexeme;
+    if (dec != '.') {
+        for (char& c : s) {
+            if (c == '.') c = dec;
+        }
+    }
+
+    char* endp = nullptr;
+    errno = 0;
+    bool isHex = (s.length() >= 2 && s[0] == '0' && (s[1] == 'x' || s[1] == 'X'));
+    if (isHex && s.find(dec) == std::string::npos && s.find('p') == std::string::npos && s.find('P') == std::string::npos) {
+        std::strtoull(s.c_str(), &endp, 16);
+        return endp && *endp == '\0' && endp != (s.c_str() + 2);
+    }
+
+    std::strtod(s.c_str(), &endp);
+    return endp && *endp == '\0' && endp != s.c_str();
+}
+
 Token Lexer::number() {
+    bool isHex = false;
     if (source_[start_] == '0' && (peek() == 'x' || peek() == 'X')) {
+        isHex = true;
         advance(); // skip x/X
-        while (isxdigit(peek())) {
-            advance();
-        }
-        if (peek() == '.') {
-            advance();
-            while (isxdigit(peek())) {
-                advance();
-            }
-        }
-        if (peek() == 'p' || peek() == 'P') {
+    }
+
+    char expo = isHex ? 'p' : 'e';
+    char expoUpper = isHex ? 'P' : 'E';
+
+    while (!isAtEnd()) {
+        char c = peek();
+        if (c == expo || c == expoUpper) {
             advance();
             if (peek() == '+' || peek() == '-') {
                 advance();
             }
-            while (isDigit(peek())) {
-                advance();
+        } else if (c == '.') {
+            if (peekNext() == '.') {
+                break;
             }
-        }
-    } else {
-        while (isDigit(peek())) {
             advance();
+        } else if (isHex ? isxdigit(static_cast<unsigned char>(c)) : isDigit(c)) {
+            advance();
+        } else {
+            break;
         }
+    }
 
-        // Look for decimal point
-        if (peek() == '.') {
+    if (isAlpha(peek())) {
+        while (isAlphaNumeric(peek())) {
             advance();
-            while (isDigit(peek())) {
-                advance();
-            }
         }
+    }
 
-        // Look for exponent
-        if (peek() == 'e' || peek() == 'E') {
-            advance();
-            if (peek() == '+' || peek() == '-') {
-                advance();
-            }
-            while (isDigit(peek())) {
-                advance();
-            }
-        }
+    std::string lexeme = source_.substr(start_, current_ - start_);
+    if (!isValidLuaNumber(lexeme)) {
+        return errorToken("malformed number", lexeme);
     }
 
     return makeToken(TokenType::NUMBER);

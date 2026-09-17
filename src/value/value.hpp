@@ -5,6 +5,7 @@
 #include <cstring>
 #include <cmath>
 #include <cstdint>
+#include "value/int64.hpp"
 
 // Forward declarations
 class FunctionObject;
@@ -17,6 +18,7 @@ class FileObject;
 class SocketObject;
 class CoroutineObject;
 class UserdataObject;
+class Int64Object;
 
 /*
  * NaN-Boxing Value Representation (64-bit)
@@ -59,6 +61,7 @@ public:
         C_FUNCTION      = 0xFFFC,
         FILE            = 0xFFFD,
         SOCKET          = 0xFFFE,
+        INT64           = 0xFFFF,
         
         // Pseudo-types for type checking
         NUMBER          = 0x0000, 
@@ -97,9 +100,15 @@ public:
     }
 
     static constexpr Value integer(int64_t value) {
-        // We store integers as 32-bit for simplicity in this NaN-box scheme
-        // or we could use the full 48 bits if needed. Let's use 32-bit.
-        return Value(encodeTag(Type::INTEGER) | (static_cast<uint64_t>(static_cast<uint32_t>(value))));
+        return Value(encodeTag(Type::INTEGER) | (static_cast<uint64_t>(value) & 0x0000FFFFFFFFFFFFULL));
+    }
+
+    static Value fromInt64(Int64Object* obj) {
+        return Value(encodeTag(Type::INT64) | reinterpret_cast<uint64_t>(obj));
+    }
+
+    static constexpr Value compileTimeInt64(size_t index) {
+        return Value(encodeTag(Type::INT64) | static_cast<uint64_t>(index));
     }
 
     static constexpr Value function(size_t funcIndex) {
@@ -153,17 +162,17 @@ public:
 
     // Type checking
     bool isFloat() const { 
-        // Any value where the top 16 bits are NOT 0xFFF1 through 0xFFFF is a float.
-        // Wait, what about encodeTag(Type::NIL) -> 0xFFF1...
-        // The base tag is 0xFFF0...
-        // Let's check if the top 16 bits are >= 0xFFF1. If so, it's a boxed value.
-        // If not, it's a number (including NaN, Infinity, -Infinity, etc.)
         return (bits_ >> 48) < 0xFFF1;
     }
     bool isNumber() const { return isFloat() || isInteger(); }
     bool isNil() const { return bits_ == encodeTag(Type::NIL); }
     bool isBool() const { return (bits_ & TAG_MASK) == encodeTag(Type::BOOL); }
-    bool isInteger() const { return (bits_ & TAG_MASK) == encodeTag(Type::INTEGER); }
+    bool isInteger() const {
+        uint64_t tag = bits_ & TAG_MASK;
+        return tag == encodeTag(Type::INTEGER) || tag == encodeTag(Type::INT64);
+    }
+    bool isInt64() const { return (bits_ & TAG_MASK) == encodeTag(Type::INT64); }
+    bool isRuntimeInt64() const { return isInt64() && (bits_ & 0xFFFFFFFFFFFFULL) > 0x10000; }
     bool isString() const { return (bits_ & TAG_MASK) == encodeTag(Type::STRING); }
     bool isTable() const { return (bits_ & TAG_MASK) == encodeTag(Type::TABLE); }
     bool isClosure() const { return (bits_ & TAG_MASK) == encodeTag(Type::CLOSURE); }
@@ -182,7 +191,7 @@ public:
 
     bool isObj() const {
         // Most tagged types in our VM are GC objects if they aren't numbers, bools, nils or indices.
-        return isTable() || isClosure() || isUserdata() || isThread() || isFile() || isSocket() || isRuntimeString();
+        return isTable() || isClosure() || isUserdata() || isThread() || isFile() || isSocket() || isRuntimeString() || isRuntimeInt64();
     }
 
     Type type() const {
@@ -196,7 +205,7 @@ public:
     
     double asNumber() const {
         if (isInteger()) {
-            return static_cast<double>(static_cast<int32_t>(bits_ & 0xFFFFFFFFULL));
+            return static_cast<double>(asInteger());
         }
         union { uint64_t b; double d; } u;
         u.b = bits_;
@@ -204,9 +213,25 @@ public:
     }
 
     int64_t asInteger() const {
-        if (isInteger()) return static_cast<int64_t>(static_cast<int32_t>(bits_ & 0xFFFFFFFFULL));
+        uint64_t tag = bits_ & TAG_MASK;
+        if (tag == encodeTag(Type::INTEGER)) {
+            uint64_t payload = bits_ & 0x0000FFFFFFFFFFFFULL;
+            if (payload & (1ULL << 47)) {
+                return static_cast<int64_t>(payload | 0xFFFF000000000000ULL);
+            }
+            return static_cast<int64_t>(payload);
+        }
+        if (tag == encodeTag(Type::INT64)) {
+            if (isRuntimeInt64()) {
+                return reinterpret_cast<const Int64Object*>(bits_ & 0xFFFFFFFFFFFFULL)->value;
+            }
+            return 0;
+        }
         return static_cast<int64_t>(asNumber());
     }
+
+    size_t asInt64Index() const { return static_cast<size_t>(bits_ & 0xFFFFFFFFFFFFULL); }
+    Int64Object* asInt64Obj() const { return reinterpret_cast<Int64Object*>(bits_ & 0xFFFFFFFFFFFFULL); }
 
     size_t asFunctionIndex() const { return static_cast<size_t>(bits_ & 0xFFFFFFFFFFFFULL); }
     size_t asStringIndex() const { return static_cast<size_t>(bits_ & 0xFFFFFFFFFFFFULL); }

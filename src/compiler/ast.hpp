@@ -35,14 +35,31 @@ protected:
 class LiteralNode : public ExprNode {
 public:
     LiteralNode(const Value& value, int line)
-        : ExprNode(line), value_(value) {}
+        : ExprNode(line), value_(value), isLargeInt_(false), largeInt_(0) {}
+
+    LiteralNode(int64_t val, int line)
+        : ExprNode(line) {
+        if (val >= -(1LL << 47) && val < (1LL << 47)) {
+            value_ = Value::integer(val);
+            isLargeInt_ = false;
+            largeInt_ = 0;
+        } else {
+            value_ = Value::nil();
+            isLargeInt_ = true;
+            largeInt_ = val;
+        }
+    }
 
     void accept(ASTVisitor& visitor) override;
 
     const Value& value() const { return value_; }
+    bool isLargeInt() const { return isLargeInt_; }
+    int64_t largeInt() const { return largeInt_; }
 
 private:
     Value value_;
+    bool isLargeInt_ = false;
+    int64_t largeInt_ = 0;
 };
 
 // String literal (interned during codegen)

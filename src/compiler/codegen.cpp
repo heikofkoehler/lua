@@ -21,6 +21,7 @@ std::unique_ptr<FunctionObject> CodeGenerator::generate(ProgramNode* program, co
     env.name = "_ENV";
     env.index = 0; 
     env.isLocal = false; 
+    env.isConstant = false;
     upvalues_.push_back(env);
 
     // Generate code for the program
@@ -46,6 +47,12 @@ std::unique_ptr<FunctionObject> CodeGenerator::generate(ProgramNode* program, co
 void CodeGenerator::visitLiteral(LiteralNode* node) {
     setLine(node->line());
 
+    if (node->isLargeInt()) {
+        size_t idx = currentChunk()->addInt64(node->largeInt());
+        emitConstant(Value::compileTimeInt64(idx));
+        return;
+    }
+
     const Value& value = node->value();
 
     // Use dedicated opcodes for common constants
@@ -53,8 +60,6 @@ void CodeGenerator::visitLiteral(LiteralNode* node) {
         emitOpCode(OpCode::OP_NIL);
     } else if (value.isBool()) {
         emitOpCode(value.asBool() ? OpCode::OP_TRUE : OpCode::OP_FALSE);
-    } else if (value.isNumber()) {
-        emitConstant(value);
     } else {
         emitConstant(value);
     }
@@ -1558,10 +1563,9 @@ void CodeGenerator::visitReturn(ReturnStmtNode* node) {
     // Compile all return values
     const auto& values = node->values();
     if (values.empty()) {
-        // Return with no values - just return nil
-        emitOpCode(OpCode::OP_NIL);
+        // Return with no values - return 0 values
         emitOpCode(OpCode::OP_RETURN_VALUE);
-        emitByte(1);  // Returning 1 value (nil)
+        emitByte(0);
     } else {
         bool isLastMultires = false;
         const auto& args = values;

@@ -42,6 +42,11 @@ public:
     StringObject* getString(size_t index) const;
     size_t numStrings() const { return strings_.size(); }
 
+    // Add an int64 to the int64 pool
+    size_t addInt64(int64_t val);
+    int64_t getInt64(size_t index) const;
+    size_t numInt64s() const { return int64s_.size(); }
+
     // Access bytecode
     const std::vector<uint8_t>& code() const { return code_; }
     std::vector<uint8_t>& code() { return code_; }  // Non-const for patching jumps
@@ -73,6 +78,7 @@ private:
     std::vector<FunctionObject*> functions_;  // Function pool (owned)
     std::vector<StringObject*> strings_;  // String pool (owned, interned)
     std::unordered_map<std::string, size_t> stringIndices_;  // For interning
+    std::vector<int64_t> int64s_;      // 64-bit integers exceeding 48 bits
     std::vector<int> lines_;           // Line numbers (parallel to code_)
     std::string sourceName_ = "chunk"; // Name of source file or [string "chunk"]
 

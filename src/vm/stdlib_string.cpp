@@ -12,6 +12,7 @@
 #include <cstring>
 #include <sstream>
 #include <iostream>
+#include <clocale>
 
 namespace {
 
@@ -714,8 +715,16 @@ bool native_string_format(VM* vm, int argCount) {
 
             if (spec == 's') {
                 std::string s = vm->getStringValue(arg);
-                snprintf(buf, sizeof(buf), sub_fmt.c_str(), s.c_str());
-                result += buf;
+                if (sub_fmt == "%s") {
+                    result += s;
+                } else {
+                    int needed = snprintf(nullptr, 0, sub_fmt.c_str(), s.c_str());
+                    if (needed >= 0) {
+                        std::vector<char> dynBuf(needed + 1);
+                        snprintf(dynBuf.data(), dynBuf.size(), sub_fmt.c_str(), s.c_str());
+                        result += dynBuf.data();
+                    }
+                }
             } else if (spec == 'q') {
                 if (arg.isNil()) {
                     result += "nil";
@@ -724,10 +733,26 @@ bool native_string_format(VM* vm, int argCount) {
                 } else if (arg.isNumber()) {
                     if (arg.isInteger()) {
                         snprintf(buf, sizeof(buf), "%lld", (long long)arg.asInteger());
+                        result += buf;
                     } else {
-                        snprintf(buf, sizeof(buf), "%.14g", arg.asNumber()); // simpler approach for float
+                        snprintf(buf, sizeof(buf), "%.14g", arg.asNumber());
+                        char dec = '.';
+                        struct lconv* lc = localeconv();
+                        if (lc && lc->decimal_point && lc->decimal_point[0] != '\0') {
+                            dec = lc->decimal_point[0];
+                        }
+                        if (dec != '.') {
+                            for (char* p = buf; *p; ++p) {
+                                if (*p == dec) *p = '.';
+                            }
+                        }
+                        if (std::strchr(buf, '.') == nullptr && std::strchr(buf, 'e') == nullptr && std::strchr(buf, 'E') == nullptr) {
+                            result += buf;
+                            result += ".0";
+                        } else {
+                            result += buf;
+                        }
                     }
-                    result += buf;
                 } else {
                     std::string s = vm->getStringValue(arg);
                     result += '"';
@@ -794,18 +819,19 @@ static size_t get_spec_size(const std::string& fmt, size_t& i, char spec, int& s
                 size = size * 10 + (fmt[++i] - '0');
             }
         } else {
-            size = 8; // Default native size for this VM
+            size = sizeof(int64_t); // 8 bytes (lua_Integer)
         }
         return size;
     }
 
     switch (spec) {
-        case 'b': case 'B': size = 1; return 1;
-        case 'h': case 'H': size = 2; return 2;
-        case 'l': case 'L': size = 4; return 4;
-        case 'j': case 'J': case 'T': size = 8; return 8; 
-        case 'f': size = 4; return 4;
-        case 'd': case 'n': size = 8; return 8;
+        case 'b': case 'B': size = sizeof(char); return sizeof(char);
+        case 'h': case 'H': size = sizeof(short); return sizeof(short);
+        case 'l': case 'L': size = sizeof(int32_t); return sizeof(int32_t);
+        case 'j': case 'J': size = sizeof(int64_t); return sizeof(int64_t);
+        case 'T': size = sizeof(size_t); return sizeof(size_t);
+        case 'f': size = sizeof(float); return sizeof(float);
+        case 'd': case 'n': size = sizeof(double); return sizeof(double);
         default: size = 0; return 0;
     }
 }
@@ -879,7 +905,7 @@ bool native_string_packsize(VM* vm, int argCount) {
     apply_alignment(total, currentAlignment);
 
     for(int i=0; i<argCount; i++) vm->pop();
-    vm->push(Value::number(static_cast<double>(total)));
+    vm->push(Value::integer(static_cast<int64_t>(total)));
     vm->currentCoroutine()->lastResultCount = 1;
     return true;
 }
@@ -958,11 +984,11 @@ bool native_string_pack(VM* vm, int argCount) {
                     uint16_t v = static_cast<uint16_t>(val.asNumber());
                     result.append(reinterpret_cast<char*>(&v), 2);
                 } else if (spec == 'l') {
-                    int32_t v = static_cast<int32_t>(val.asNumber());
-                    result.append(reinterpret_cast<char*>(&v), 4);
+                    int32_t v = static_cast<int32_t>(val.asInteger());
+                    result.append(reinterpret_cast<char*>(&v), sizeof(int32_t));
                 } else if (spec == 'L') {
                     uint32_t v = static_cast<uint32_t>(val.asNumber());
-                    result.append(reinterpret_cast<char*>(&v), 4);
+                    result.append(reinterpret_cast<char*>(&v), sizeof(uint32_t));
                 } else if (spec == 'i' || spec == 'I') {
                     uint64_t v = (spec == 'I') ? static_cast<uint64_t>(val.asNumber()) : static_cast<uint64_t>(val.asInteger());
                     if (size == 1) {
@@ -979,10 +1005,13 @@ bool native_string_pack(VM* vm, int argCount) {
                     }
                 } else if (spec == 'j') {
                     int64_t v = val.asInteger();
-                    result.append(reinterpret_cast<char*>(&v), 8);
-                } else if (spec == 'J' || spec == 'T') {
-                    uint64_t v = static_cast<uint64_t>(val.asNumber());
-                    result.append(reinterpret_cast<char*>(&v), 8);
+                    result.append(reinterpret_cast<char*>(&v), sizeof(int64_t));
+                } else if (spec == 'J') {
+                    uint64_t v = static_cast<uint64_t>(val.asInteger());
+                    result.append(reinterpret_cast<char*>(&v), sizeof(uint64_t));
+                } else if (spec == 'T') {
+                    size_t v = static_cast<size_t>(val.asNumber());
+                    result.append(reinterpret_cast<char*>(&v), sizeof(size_t));
                 } else if (spec == 'f') {
                     float v = static_cast<float>(val.asNumber());
                     result.append(reinterpret_cast<char*>(&v), 4);
@@ -1099,11 +1128,11 @@ bool native_string_unpack(VM* vm, int argCount) {
                 uint16_t v; std::memcpy(&v, buf, 2);
                 vm->push(Value::number(v));
             } else if (spec == 'l') {
-                int32_t v; std::memcpy(&v, buf, 4);
-                vm->push(Value::number(v));
+                int32_t v; std::memcpy(&v, buf, sizeof(int32_t));
+                vm->push(Value::integer(v));
             } else if (spec == 'L') {
-                uint32_t v; std::memcpy(&v, buf, 4);
-                vm->push(Value::number(v));
+                uint32_t v; std::memcpy(&v, buf, sizeof(uint32_t));
+                vm->push(Value::number(static_cast<double>(v)));
             } else if (spec == 'i') {
                 if (size == 1) {
                     vm->push(Value::integer(static_cast<int8_t>(buf[0])));
@@ -1131,10 +1160,13 @@ bool native_string_unpack(VM* vm, int argCount) {
                     vm->push(Value::number(static_cast<double>(v)));
                 }
             } else if (spec == 'j') {
-                int64_t v; std::memcpy(&v, buf, 8);
+                int64_t v; std::memcpy(&v, buf, sizeof(int64_t));
                 vm->push(Value::integer(v));
-            } else if (spec == 'J' || spec == 'T') {
-                uint64_t v; std::memcpy(&v, buf, 8);
+            } else if (spec == 'J') {
+                uint64_t v; std::memcpy(&v, buf, sizeof(uint64_t));
+                vm->push(Value::integer(static_cast<int64_t>(v)));
+            } else if (spec == 'T') {
+                size_t v; std::memcpy(&v, buf, sizeof(size_t));
                 vm->push(Value::number(static_cast<double>(v)));
             } else if (spec == 'f') {
                 float v; std::memcpy(&v, buf, 4);
@@ -1196,8 +1228,6 @@ bool native_string_dump(VM* vm, int argCount) {
     FunctionObject* function = closure->function();
 
     std::ostringstream os(std::ios::binary);
-    // Add signature \x1bLua
-    os.write("\x1bLua", 4);
     function->serialize(os);
 
     std::string bytecode = os.str();

@@ -28,6 +28,9 @@ JITFunc JITCompiler::compile(FunctionObject* function) {
     size_t offsetStack = (size_t)&(((CoroutineObject*)0)->stack);
     size_t offsetFrames = (size_t)&(((CoroutineObject*)0)->frames);
     size_t offsetStackBase = (size_t)&(((CallFrame*)0)->stackBase);
+    size_t offsetIp = (size_t)&(((CallFrame*)0)->ip);
+    size_t offsetHadError = (size_t)&(((VM*)0)->hadError_);
+    size_t offsetInterrupted = (size_t)&(((VM*)0)->interrupted_);
 
     (void)vm_; // Suppress unused warning
 
@@ -55,6 +58,7 @@ JITFunc JITCompiler::compile(FunctionObject* function) {
     a64::Gp frames_size_reg = a64::x25;
     
     a64::Gp scratch = a64::x9;
+    a64::Gp scratch_w = a64::w(scratch.id());
     a64::Gp scratch2 = a64::x10;
 
     Label epilogue = a.new_label();
@@ -158,8 +162,13 @@ JITFunc JITCompiler::compile(FunctionObject* function) {
             }
             case OpCode::OP_LOOP: {
                 uint16_t offset = bytecode[i+1] | (bytecode[i+2] << 8);
+                size_t loop_dest = i + 1 - offset;
                 i += 2;
-                a.b(labels[i + 1 - offset]);
+                a.ldr(scratch_w, a64::ptr(vm_reg, offsetInterrupted));
+                a.mov(scratch2, loop_dest);
+                a.str(scratch2, a64::ptr(frame_reg, offsetIp));
+                a.cbnz(scratch_w, frame_changed);
+                a.b(labels[loop_dest]);
                 break;
             }
             case OpCode::OP_JUMP_IF_FALSE: {
@@ -192,6 +201,8 @@ JITFunc JITCompiler::compile(FunctionObject* function) {
                 a.mov(scratch, (uint64_t)VM::jitGetGlobal);
                 a.blr(scratch);
                 a.ldr(top_reg, a64::ptr(co_reg, offsetStack + 8));
+                a.ldrb(scratch_w, a64::ptr(vm_reg, offsetHadError));
+                a.cbnz(scratch, frame_changed);
                 a.ldr(stack_reg, a64::ptr(co_reg, offsetStack));
                 a.ldr(scratch, a64::ptr(co_reg, offsetFrames + 8));
                 a.sub(frame_reg, scratch, sizeof(CallFrame));
@@ -207,6 +218,8 @@ JITFunc JITCompiler::compile(FunctionObject* function) {
                 a.mov(scratch, (uint64_t)VM::jitSetGlobal);
                 a.blr(scratch);
                 a.ldr(top_reg, a64::ptr(co_reg, offsetStack + 8));
+                a.ldrb(scratch_w, a64::ptr(vm_reg, offsetHadError));
+                a.cbnz(scratch, frame_changed);
                 a.ldr(stack_reg, a64::ptr(co_reg, offsetStack));
                 a.ldr(scratch, a64::ptr(co_reg, offsetFrames + 8));
                 a.sub(frame_reg, scratch, sizeof(CallFrame));
@@ -225,7 +238,8 @@ JITFunc JITCompiler::compile(FunctionObject* function) {
                 a.mov(scratch, (uint64_t)VM::jitGetTabUp);
                 a.blr(scratch);
                 a.ldr(top_reg, a64::ptr(co_reg, offsetStack + 8));
-                a.ldr(top_reg, a64::ptr(co_reg, offsetStack + 8));
+                a.ldrb(scratch_w, a64::ptr(vm_reg, offsetHadError));
+                a.cbnz(scratch, frame_changed);
                 a.ldr(stack_reg, a64::ptr(co_reg, offsetStack));
 
                 a.ldr(scratch, a64::ptr(co_reg, offsetFrames + 8));
@@ -251,7 +265,8 @@ JITFunc JITCompiler::compile(FunctionObject* function) {
                 a.mov(scratch, (uint64_t)VM::jitSetTabUp);
                 a.blr(scratch);
                 a.ldr(top_reg, a64::ptr(co_reg, offsetStack + 8));
-                a.ldr(top_reg, a64::ptr(co_reg, offsetStack + 8));
+                a.ldrb(scratch_w, a64::ptr(vm_reg, offsetHadError));
+                a.cbnz(scratch, frame_changed);
                 a.ldr(stack_reg, a64::ptr(co_reg, offsetStack));
 
                 a.ldr(scratch, a64::ptr(co_reg, offsetFrames + 8));
@@ -273,7 +288,8 @@ JITFunc JITCompiler::compile(FunctionObject* function) {
                 a.mov(scratch, (uint64_t)VM::jitLen);
                 a.blr(scratch);
                 a.ldr(top_reg, a64::ptr(co_reg, offsetStack + 8));
-                a.ldr(top_reg, a64::ptr(co_reg, offsetStack + 8));
+                a.ldrb(scratch_w, a64::ptr(vm_reg, offsetHadError));
+                a.cbnz(scratch, frame_changed);
                 a.ldr(stack_reg, a64::ptr(co_reg, offsetStack));
 
                 a.ldr(scratch, a64::ptr(co_reg, offsetFrames + 8));
@@ -294,6 +310,8 @@ JITFunc JITCompiler::compile(FunctionObject* function) {
                 a.mov(scratch, (uint64_t)VM::jitNewTable);
                 a.blr(scratch);
                 a.ldr(top_reg, a64::ptr(co_reg, offsetStack + 8));
+                a.ldrb(scratch_w, a64::ptr(vm_reg, offsetHadError));
+                a.cbnz(scratch, frame_changed);
                 a.ldr(stack_reg, a64::ptr(co_reg, offsetStack));
                 a.ldr(scratch, a64::ptr(co_reg, offsetFrames + 8));
                 a.sub(frame_reg, scratch, sizeof(CallFrame));
@@ -308,7 +326,8 @@ JITFunc JITCompiler::compile(FunctionObject* function) {
                 a.mov(scratch, (uint64_t)VM::jitGetTable);
                 a.blr(scratch);
                 a.ldr(top_reg, a64::ptr(co_reg, offsetStack + 8));
-                a.ldr(top_reg, a64::ptr(co_reg, offsetStack + 8));
+                a.ldrb(scratch_w, a64::ptr(vm_reg, offsetHadError));
+                a.cbnz(scratch, frame_changed);
                 a.ldr(stack_reg, a64::ptr(co_reg, offsetStack));
 
                 a.ldr(scratch, a64::ptr(co_reg, offsetFrames + 8));
@@ -330,7 +349,8 @@ JITFunc JITCompiler::compile(FunctionObject* function) {
                 a.mov(scratch, (uint64_t)VM::jitSetTable);
                 a.blr(scratch);
                 a.ldr(top_reg, a64::ptr(co_reg, offsetStack + 8));
-                a.ldr(top_reg, a64::ptr(co_reg, offsetStack + 8));
+                a.ldrb(scratch_w, a64::ptr(vm_reg, offsetHadError));
+                a.cbnz(scratch, frame_changed);
                 a.ldr(stack_reg, a64::ptr(co_reg, offsetStack));
 
                 a.ldr(scratch, a64::ptr(co_reg, offsetFrames + 8));
@@ -353,6 +373,8 @@ JITFunc JITCompiler::compile(FunctionObject* function) {
                 a.mov(scratch, (uint64_t)VM::jitGetUpvalue);
                 a.blr(scratch);
                 a.ldr(top_reg, a64::ptr(co_reg, offsetStack + 8));
+                a.ldrb(scratch_w, a64::ptr(vm_reg, offsetHadError));
+                a.cbnz(scratch, frame_changed);
                 a.ldr(stack_reg, a64::ptr(co_reg, offsetStack));
                 a.ldr(scratch, a64::ptr(co_reg, offsetFrames + 8));
                 a.sub(frame_reg, scratch, sizeof(CallFrame));
@@ -368,6 +390,8 @@ JITFunc JITCompiler::compile(FunctionObject* function) {
                 a.mov(scratch, (uint64_t)VM::jitSetUpvalue);
                 a.blr(scratch);
                 a.ldr(top_reg, a64::ptr(co_reg, offsetStack + 8));
+                a.ldrb(scratch_w, a64::ptr(vm_reg, offsetHadError));
+                a.cbnz(scratch, frame_changed);
                 a.ldr(stack_reg, a64::ptr(co_reg, offsetStack));
                 a.ldr(scratch, a64::ptr(co_reg, offsetFrames + 8));
                 a.sub(frame_reg, scratch, sizeof(CallFrame));
@@ -387,6 +411,8 @@ JITFunc JITCompiler::compile(FunctionObject* function) {
                 a.mov(scratch, (uint64_t)VM::jitCloseUpvalues);
                 a.blr(scratch);
                 a.ldr(top_reg, a64::ptr(co_reg, offsetStack + 8));
+                a.ldrb(scratch_w, a64::ptr(vm_reg, offsetHadError));
+                a.cbnz(scratch, frame_changed);
                 a.ldr(stack_reg, a64::ptr(co_reg, offsetStack));
                 a.ldr(scratch, a64::ptr(co_reg, offsetFrames + 8));
                 a.sub(frame_reg, scratch, sizeof(CallFrame));
@@ -402,7 +428,8 @@ JITFunc JITCompiler::compile(FunctionObject* function) {
                 a.mov(scratch, (uint64_t)VM::jitConcat);
                 a.blr(scratch);
                 a.ldr(top_reg, a64::ptr(co_reg, offsetStack + 8));
-                a.ldr(top_reg, a64::ptr(co_reg, offsetStack + 8));
+                a.ldrb(scratch_w, a64::ptr(vm_reg, offsetHadError));
+                a.cbnz(scratch, frame_changed);
                 a.ldr(stack_reg, a64::ptr(co_reg, offsetStack));
 
                 a.ldr(scratch, a64::ptr(co_reg, offsetFrames + 8));
@@ -433,6 +460,8 @@ JITFunc JITCompiler::compile(FunctionObject* function) {
                 a.mov(scratch, (uint64_t)VM::jitClosure);
                 a.blr(scratch);
                 a.ldr(top_reg, a64::ptr(co_reg, offsetStack + 8));
+                a.ldrb(scratch_w, a64::ptr(vm_reg, offsetHadError));
+                a.cbnz(scratch, frame_changed);
                 a.ldr(stack_reg, a64::ptr(co_reg, offsetStack));
                 a.ldr(scratch, a64::ptr(co_reg, offsetFrames + 8));
                 a.sub(frame_reg, scratch, sizeof(CallFrame));
@@ -452,8 +481,8 @@ JITFunc JITCompiler::compile(FunctionObject* function) {
                 a.mov(scratch, (uint64_t)VM::jitCall);
                 a.blr(scratch);
                 a.ldr(top_reg, a64::ptr(co_reg, offsetStack + 8));
-                a.ldr(stack_reg, a64::ptr(co_reg, offsetStack));
-                a.ldr(top_reg, a64::ptr(co_reg, offsetStack + 8));
+                a.ldrb(scratch_w, a64::ptr(vm_reg, offsetHadError));
+                a.cbnz(scratch, frame_changed);
                 a.ldr(stack_reg, a64::ptr(co_reg, offsetStack));
 
                 a.ldr(scratch, a64::ptr(co_reg, offsetFrames + 8));
@@ -483,7 +512,16 @@ JITFunc JITCompiler::compile(FunctionObject* function) {
                 else if (op == OpCode::OP_SHR) a.mov(scratch, (uint64_t)VM::jitShr);
                 a.blr(scratch);
                 a.ldr(top_reg, a64::ptr(co_reg, offsetStack + 8));
+                a.ldrb(scratch_w, a64::ptr(vm_reg, offsetHadError));
+                a.cbnz(scratch, frame_changed);
                 a.ldr(stack_reg, a64::ptr(co_reg, offsetStack));
+
+                a.ldr(scratch, a64::ptr(co_reg, offsetFrames + 8));
+                a.ldr(scratch2, a64::ptr(co_reg, offsetFrames));
+                a.sub(scratch, scratch, scratch2);
+                a.cmp(scratch, frames_size_reg);
+                a.b_ne(frame_changed);
+
                 a.ldr(scratch, a64::ptr(co_reg, offsetFrames + 8));
                 a.sub(frame_reg, scratch, sizeof(CallFrame));
                 a.ldr(scratch, a64::ptr(frame_reg, offsetStackBase));
@@ -497,7 +535,16 @@ JITFunc JITCompiler::compile(FunctionObject* function) {
                 a.mov(scratch, (uint64_t)VM::jitBnot);
                 a.blr(scratch);
                 a.ldr(top_reg, a64::ptr(co_reg, offsetStack + 8));
+                a.ldrb(scratch_w, a64::ptr(vm_reg, offsetHadError));
+                a.cbnz(scratch, frame_changed);
                 a.ldr(stack_reg, a64::ptr(co_reg, offsetStack));
+
+                a.ldr(scratch, a64::ptr(co_reg, offsetFrames + 8));
+                a.ldr(scratch2, a64::ptr(co_reg, offsetFrames));
+                a.sub(scratch, scratch, scratch2);
+                a.cmp(scratch, frames_size_reg);
+                a.b_ne(frame_changed);
+
                 a.ldr(scratch, a64::ptr(co_reg, offsetFrames + 8));
                 a.sub(frame_reg, scratch, sizeof(CallFrame));
                 a.ldr(scratch, a64::ptr(frame_reg, offsetStackBase));
@@ -515,7 +562,8 @@ JITFunc JITCompiler::compile(FunctionObject* function) {
                 else if (op == OpCode::OP_POW) a.mov(scratch, (uint64_t)VM::jitPow);
                 a.blr(scratch);
                 a.ldr(top_reg, a64::ptr(co_reg, offsetStack + 8));
-                a.ldr(top_reg, a64::ptr(co_reg, offsetStack + 8));
+                a.ldrb(scratch_w, a64::ptr(vm_reg, offsetHadError));
+                a.cbnz(scratch, frame_changed);
                 a.ldr(stack_reg, a64::ptr(co_reg, offsetStack));
 
                 a.ldr(scratch, a64::ptr(co_reg, offsetFrames + 8));

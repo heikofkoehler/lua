@@ -21,6 +21,13 @@
 namespace {
 
 bool native_collectgarbage(VM* vm, int argCount) {
+    if (vm->isClosing()) {
+        for (int i = 0; i < argCount; i++) vm->pop();
+        vm->push(Value::boolean(false));
+        vm->currentCoroutine()->lastResultCount = 1;
+        return true;
+    }
+
     std::string opt = "collect";
     if (argCount >= 1) {
         Value var = vm->peek(argCount - 1);
@@ -220,7 +227,29 @@ bool native_tonumber(VM* vm, int argCount) {
         return false;
     }
     Value val = vm->peek(argCount - 1);
+    if (argCount == 1 && val.isNumber()) {
+        vm->pop();
+        vm->push(val);
+        vm->currentCoroutine()->lastResultCount = 1;
+        return true;
+    }
+
+    if (!val.isString()) {
+        for (int i = 0; i < argCount; i++) vm->pop();
+        vm->push(Value::nil());
+        vm->currentCoroutine()->lastResultCount = 1;
+        return true;
+    }
+
     std::string s = vm->getStringValue(val);
+
+    // Reject embedded NUL
+    if (std::strlen(s.c_str()) != s.length()) {
+        for (int i = 0; i < argCount; i++) vm->pop();
+        vm->push(Value::nil());
+        vm->currentCoroutine()->lastResultCount = 1;
+        return true;
+    }
 
     // Trim leading and trailing whitespace
     auto start = s.find_first_not_of(" \t\n\r\f\v");
@@ -234,23 +263,17 @@ bool native_tonumber(VM* vm, int argCount) {
     s = s.substr(start, end - start + 1);
 
     if (argCount == 1) {
-        try {
-            size_t pos;
-            double num = std::stod(s, &pos);
-            if (pos != s.length()) {
-                for (int i = 0; i < argCount; i++) vm->pop();
-                vm->push(Value::nil());
+        double num = 0.0;
+        int64_t inum = 0;
+        bool isInt = false;
+        if (VM::stringToNumber(s, num, inum, isInt)) {
+            for (int i = 0; i < argCount; i++) vm->pop();
+            if (isInt) {
+                vm->push(vm->makeInteger(inum));
             } else {
-                double intpart;
-                if (std::modf(num, &intpart) == 0.0) {
-                    for (int i = 0; i < argCount; i++) vm->pop();
-                    vm->push(Value::integer(static_cast<int64_t>(num)));
-                } else {
-                    for (int i = 0; i < argCount; i++) vm->pop();
-                    vm->push(Value::number(num));
-                }
+                vm->push(Value::number(num));
             }
-        } catch (...) {
+        } else {
             for (int i = 0; i < argCount; i++) vm->pop();
             vm->push(Value::nil());
         }
@@ -260,17 +283,19 @@ bool native_tonumber(VM* vm, int argCount) {
             vm->runtimeError("bad argument #2 to 'tonumber' (base out of range)");
             return false;
         }
-        try {
-            size_t pos;
-            int64_t num = std::stoll(s, &pos, base);
-            for (int i = 0; i < argCount; i++) vm->pop();
-            if (pos != s.length()) {
-                vm->push(Value::nil());
-            } else {
-                vm->push(Value::integer(num));
-            }
-        } catch (...) {
-            for (int i = 0; i < argCount; i++) vm->pop();
+        const char* p = s.c_str();
+        bool neg = false;
+        if (*p == '+') p++;
+        else if (*p == '-') { neg = true; p++; }
+        char* endp = nullptr;
+        errno = 0;
+        unsigned long long uval = std::strtoull(p, &endp, base);
+        for (int i = 0; i < argCount; i++) vm->pop();
+        if (endp && *endp == '\0' && endp != p && errno == 0) {
+            uint64_t finalVal = uval;
+            if (neg) finalVal = 0ULL - finalVal;
+            vm->push(vm->makeInteger(static_cast<int64_t>(finalVal)));
+        } else {
             vm->push(Value::nil());
         }
     }
@@ -433,9 +458,42 @@ bool native_error(VM* vm, int argCount) {
     std::string msg = "nil";
     int level = 1;
     if (argCount >= 1) {
-        msg = vm->peek(argCount - 1).toString();
-        if (argCount >= 2) {
+        Value val = vm->peek(argCount - 1);
+        if (argCount >= 2 && vm->peek(argCount - 2).isNumber()) {
             level = static_cast<int>(vm->peek(argCount - 2).asNumber());
+        }
+        if (val.isString()) {
+            msg = vm->getStringValue(val);
+        } else if (val.isNumber()) {
+            msg = val.toString();
+        } else if (val.isBool()) {
+            msg = val.asBool() ? "true" : "false";
+        } else if (val.isNil()) {
+            msg = "nil";
+        } else {
+            // Check for __tostring metamethod
+            Value tostringFunc = vm->getGlobal("tostring");
+            bool converted = false;
+            Value mm = vm->getMetamethod(val, "__tostring");
+            if (!mm.isNil()) {
+                vm->push(tostringFunc);
+                vm->push(val);
+                if (vm->callValue(1, 2)) {
+                    Value res = vm->pop();
+                    if (res.isString()) {
+                        msg = vm->getStringValue(res);
+                        converted = true;
+                    }
+                }
+            }
+            if (!converted) {
+                const char* typeName = "userdata";
+                if (val.isTable()) typeName = "table";
+                else if (val.isFunction() || val.isNativeFunction() || val.isCFunction()) typeName = "function";
+                else if (val.isThread()) typeName = "thread";
+                msg = std::string("(error object is a ") + typeName + " value)";
+            }
+            level = 0; // Do not prepend file/line for non-string error objects
         }
     }
     vm->runtimeError(msg, level);
@@ -459,52 +517,60 @@ bool native_assert(VM* vm, int argCount) {
 }
 
 bool native_rawget(VM* vm, int argCount) {
-    if (argCount != 2) {
-        vm->runtimeError("rawget expects 2 arguments");
+    if (argCount < 2) {
+        vm->runtimeError("bad argument #2 to 'rawget' (value expected)");
         return false;
     }
-    Value key = vm->peek(0);
-    Value table = vm->peek(1);
+    Value table = vm->peek(argCount - 1);
+    Value key = vm->peek(argCount - 2);
     if (!table.isTable()) {
         vm->runtimeError("bad argument #1 to 'rawget' (table expected)");
         return false;
     }
-    vm->pop(); vm->pop();
+    for (int i = 0; i < argCount; i++) vm->pop();
     vm->push(table.asTableObj()->get(key));
     vm->currentCoroutine()->lastResultCount = 1;
     return true;
 }
 
 bool native_rawset(VM* vm, int argCount) {
-    if (argCount != 3) {
-        vm->runtimeError("rawset expects 3 arguments");
+    if (argCount < 3) {
+        vm->runtimeError("bad argument #3 to 'rawset' (value expected)");
         return false;
     }
-    Value val = vm->peek(0);
-    Value key = vm->peek(1);
-    Value table = vm->peek(2);
+    Value table = vm->peek(argCount - 1);
+    Value key = vm->peek(argCount - 2);
+    Value val = vm->peek(argCount - 3);
     if (!table.isTable()) {
         vm->runtimeError("bad argument #1 to 'rawset' (table expected)");
         return false;
     }
     table.asTableObj()->set(key, val);
-    vm->pop(); vm->pop(); vm->pop();
+    for (int i = 0; i < argCount; i++) vm->pop();
     vm->push(table);
+    vm->currentCoroutine()->lastResultCount = 1;
     return true;
 }
 
 bool native_rawequal(VM* vm, int argCount) {
-    if (argCount != 2) { vm->runtimeError("rawequal expects 2 arguments"); return false; }
-    Value b = vm->peek(0);
-    Value a = vm->peek(1);
+    if (argCount < 2) {
+        vm->runtimeError("bad argument #2 to 'rawequal' (value expected)");
+        return false;
+    }
+    Value a = vm->peek(argCount - 1);
+    Value b = vm->peek(argCount - 2);
     for(int i=0; i<argCount; i++) vm->pop();
     vm->push(Value::boolean(a == b));
+    vm->currentCoroutine()->lastResultCount = 1;
     return true;
 }
 
 bool native_rawlen(VM* vm, int argCount) {
-    if (argCount != 1) { vm->runtimeError("rawlen expects 1 argument"); return false; }
-    Value a = vm->peek(0);
+    if (argCount < 1) {
+        vm->runtimeError("bad argument #1 to 'rawlen' (value expected)");
+        return false;
+    }
+    Value a = vm->peek(argCount - 1);
     for(int i=0; i<argCount; i++) vm->pop();
     if (a.isString()) {
         vm->push(Value::integer(static_cast<int64_t>(vm->getStringValue(a).length())));
@@ -537,25 +603,37 @@ bool native_vm_jit(VM* vm, int argCount) {
 
 bool native_warn(VM* vm, int argCount) {
     if (argCount == 0) {
-        vm->currentCoroutine()->lastResultCount = 0;
-        return true;
+        vm->runtimeError("bad argument #1 to 'warn' (string expected, got no value)");
+        return false;
     }
 
-    // Check for control messages
-    Value first = vm->peek(argCount - 1);
-    if (first.isString()) {
-        std::string s = vm->getStringValue(first);
+    // Check all arguments are strings
+    for (int i = 0; i < argCount; i++) {
+        Value val = vm->peek(argCount - 1 - i);
+        if (!val.isString()) {
+            std::string typeName = "nil";
+            if (val.isNumber()) typeName = "number";
+            else if (val.isBool()) typeName = "boolean";
+            else if (val.isTable()) typeName = "table";
+            else if (val.isFunction() || val.isNativeFunction() || val.isCFunction()) typeName = "function";
+            else if (val.isThread()) typeName = "thread";
+            else if (val.isUserdata()) typeName = "userdata";
+            vm->runtimeError("bad argument #" + std::to_string(i + 1) + " to 'warn' (string expected, got " + typeName + ")");
+            return false;
+        }
+    }
+
+    // Check for control messages (only valid when argCount == 1)
+    if (argCount == 1) {
+        std::string s = vm->getStringValue(vm->peek(0));
         if (!s.empty() && s[0] == '@') {
             if (s == "@off") {
                 vm->setWarnEnabled(false);
             } else if (s == "@on") {
                 vm->setWarnEnabled(true);
-            } else if (s == "@base") {
-                // @base is technically a no-op control msg in default warn, 
-                // it just resets the internal concatenation if it were stateful.
             }
-            // Control messages are not printed.
-            for (int i = 0; i < argCount; i++) vm->pop();
+            // Control messages are not printed
+            vm->pop();
             vm->currentCoroutine()->lastResultCount = 0;
             return true;
         }
@@ -564,7 +642,7 @@ bool native_warn(VM* vm, int argCount) {
     if (vm->warnEnabled()) {
         std::cerr << "Lua warning: ";
         for (int i = 0; i < argCount; i++) {
-            std::cerr << vm->peek(argCount - 1 - i).toString();
+            std::cerr << vm->getStringValue(vm->peek(argCount - 1 - i));
         }
         std::cerr << std::endl;
     }
@@ -605,6 +683,14 @@ bool native_loadfile(VM* vm, int argCount) {
         return true;
     }
 
+    std::streampos startPos = 0;
+    int firstChar = file.peek();
+    if (firstChar == '#') {
+        std::string commentLine;
+        std::getline(file, commentLine);
+        startPos = file.tellg();
+    }
+
     // Check for signature
     char sig[4];
     file.read(sig, 4);
@@ -618,6 +704,8 @@ bool native_loadfile(VM* vm, int argCount) {
             vm->currentCoroutine()->lastResultCount = 2;
             return true;
         }
+        file.clear();
+        file.seekg(startPos);
         auto function = FunctionObject::deserialize(file);
         if (!function) {
             for(int i=0; i<argCount; i++) vm->pop();
@@ -651,6 +739,11 @@ bool native_loadfile(VM* vm, int argCount) {
     std::stringstream buffer;
     buffer << file.rdbuf();
     std::string source = buffer.str();
+    if (!source.empty() && source[0] == '#') {
+        size_t nl = source.find('\n');
+        if (nl != std::string::npos) source = source.substr(nl);
+        else source.clear();
+    }
 
     try {
         Lexer lexer(source);
@@ -758,7 +851,13 @@ bool native_load(VM* vm, int argCount) {
         Value modeVal = vm->peek(argCount - 3);
         if (!modeVal.isNil()) mode = vm->getStringValue(modeVal);
     }
-    bool isBinary = (source.length() >= 4 && std::memcmp(source.data(), "\x1bLua", 4) == 0);
+    size_t offset = 0;
+    if (!source.empty() && source[0] == '#') {
+        size_t nl = source.find('\n');
+        if (nl != std::string::npos) offset = nl + 1;
+        else offset = source.length();
+    }
+    bool isBinary = (source.length() >= offset + 4 && std::memcmp(source.data() + offset, "\x1bLua", 4) == 0);
 
     if (isBinary) {
         if (mode.find('b') == std::string::npos) {
@@ -768,7 +867,7 @@ bool native_load(VM* vm, int argCount) {
             vm->currentCoroutine()->lastResultCount = 2;
             return true;
         }
-        std::istringstream is(source.substr(4), std::ios::binary);
+        std::istringstream is(source.substr(offset), std::ios::binary);
         auto function = FunctionObject::deserialize(is);
         if (!function) {
             for(int i=0; i<argCount; i++) vm->pop();
@@ -805,6 +904,7 @@ bool native_load(VM* vm, int argCount) {
             for(int i=0; i<argCount; i++) vm->pop();
             vm->push(Value::nil());
             vm->push(Value::runtimeString(vm->internString("parse error")));
+            vm->currentCoroutine()->lastResultCount = 2;
             return true;
         }
 
@@ -814,6 +914,7 @@ bool native_load(VM* vm, int argCount) {
             for(int i=0; i<argCount; i++) vm->pop();
             vm->push(Value::nil());
             vm->push(Value::runtimeString(vm->internString("code generation error")));
+            vm->currentCoroutine()->lastResultCount = 2;
             return true;
         }
 
@@ -824,6 +925,7 @@ bool native_load(VM* vm, int argCount) {
         vm->setupRootUpvalues(closure, env);
         for(int i=0; i<argCount; i++) vm->pop();
         vm->push(Value::closure(closure));
+        vm->currentCoroutine()->lastResultCount = 1;
         return true;
 
     } catch (const CompileError& e) {
@@ -836,6 +938,7 @@ bool native_load(VM* vm, int argCount) {
         for(int i=0; i<argCount; i++) vm->pop();
         vm->push(Value::nil());
         vm->push(Value::runtimeString(vm->internString(e.what())));
+        vm->currentCoroutine()->lastResultCount = 2;
         return true;
     }
 }
@@ -936,11 +1039,12 @@ bool native_package_searchpath(VM* vm, int argCount) {
         size_t end = path.find(';', start);
         std::string template_str = path.substr(start, (end == std::string::npos) ? std::string::npos : end - start);
         
-        // Replace ? with name
-        size_t q_pos = template_str.find('?');
+        // Replace all ? with name
         std::string filename = template_str;
-        if (q_pos != std::string::npos) {
+        size_t q_pos = 0;
+        while ((q_pos = filename.find('?', q_pos)) != std::string::npos) {
             filename.replace(q_pos, 1, name);
+            q_pos += name.length();
         }
 
         // Check if file exists and is readable
@@ -1024,10 +1128,8 @@ bool native_package_loadlib(VM* vm, int argCount) {
         return true;
     }
 
-    // Register the C function
-    NativeFunction nativeFunc = reinterpret_cast<NativeFunction>(func);
-    size_t funcIndex = vm->registerNativeFunction(funcname, nativeFunc);
-    vm->push(Value::nativeFunction(funcIndex));
+    // Push the C function as a C_FUNCTION value
+    vm->push(Value::cFunction(func));
     vm->currentCoroutine()->lastResultCount = 1;
     return true;
 }
@@ -1219,7 +1321,8 @@ void registerBaseLibrary(VM* vm) {
         "        if not sep then break end\n"
         "        local template = string.sub(cpath, start, sep - 1)\n"
         "        local filename = string.gsub(template, \"?\", modname)\n"
-        "        local openname = \"luaopen_\" .. string.gsub(modname, \"%%.\", \"_\")\n"
+        "        local modprefix = string.match(modname, \"^([^-]+)\") or modname\n"
+        "        local openname = \"luaopen_\" .. string.gsub(modprefix, \"%%.\", \"_\")\n"
         "        local f, e = package.loadlib(filename, openname)\n"
         "        if f then return f, filename end\n"
         "        err = err .. \"\\n\\tno file '\" .. filename .. \"' (C module)\"\n"

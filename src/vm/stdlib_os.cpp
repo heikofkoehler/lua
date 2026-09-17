@@ -7,6 +7,9 @@
 #include <clocale>
 #include <cmath>
 #include <limits>
+#if !defined(_WIN32)
+#include <sys/wait.h>
+#endif
 #include "value/table.hpp"
 
 namespace {
@@ -123,10 +126,23 @@ bool native_os_difftime(VM* vm, int argCount) {
 
 bool native_os_exit(VM* vm, int argCount) {
     int code = 0;
+    bool closeState = false;
     if (argCount >= 1) {
         Value val = vm->peek(argCount - 1);
         if (val.isBool()) code = val.asBool() ? 0 : 1;
         else if (val.isNumber()) code = static_cast<int>(val.asNumber());
+        else if (val.isNil()) code = 0;
+    }
+    if (argCount >= 2) {
+        Value closeVal = vm->peek(argCount - 2);
+        closeState = !closeVal.isFalsey();
+    }
+    if (closeState) {
+        if (vm->isClosing()) {
+            vm->runFinalizers();
+        } else {
+            vm->close();
+        }
     }
     std::exit(code);
     return true;
@@ -267,12 +283,30 @@ bool native_os_execute(VM* vm, int argCount) {
         vm->push(Value::number(-1));
         vm->currentCoroutine()->lastResultCount = 3;
     } else {
-        // In most systems, 0 means success.
-        // We should ideally use WIFEXITED/WEXITSTATUS on POSIX, 
-        // but for a simple cross-platform stub, res == 0 is success.
-        vm->push(Value::boolean(res == 0));
+#if !defined(_WIN32)
+        if (WIFSIGNALED(res)) {
+            vm->push(Value::nil());
+            vm->push(Value::runtimeString(vm->internString("signal")));
+            vm->push(Value::integer(WTERMSIG(res)));
+        } else {
+            int status = WEXITSTATUS(res);
+            if (status == 0) {
+                vm->push(Value::boolean(true));
+            } else {
+                vm->push(Value::nil());
+            }
+            vm->push(Value::runtimeString(vm->internString("exit")));
+            vm->push(Value::integer(status));
+        }
+#else
+        if (res == 0) {
+            vm->push(Value::boolean(true));
+        } else {
+            vm->push(Value::nil());
+        }
         vm->push(Value::runtimeString(vm->internString("exit")));
-        vm->push(Value::number(res));
+        vm->push(Value::integer(res));
+#endif
         vm->currentCoroutine()->lastResultCount = 3;
     }
     return true;

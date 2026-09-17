@@ -1,5 +1,11 @@
 #include "vm/vm.hpp"
 #include "value/userdata.hpp"
+#include "compiler/lexer.hpp"
+#include "compiler/parser.hpp"
+#include "compiler/codegen.hpp"
+#include <iostream>
+#include <cstdio>
+#include <cstring>
 
 namespace {
 
@@ -102,7 +108,7 @@ bool native_debug_getlocal(VM* vm, int argCount) {
     int index = static_cast<int>(vm->peek(0).asNumber());
     int level = static_cast<int>(vm->peek(1).asNumber());
 
-    CallFrame* frame = vm->getFrame(level - 1);
+    CallFrame* frame = vm->getFrame(level);
     if (!frame || !frame->closure) {
         for(int i=0; i<argCount; i++) vm->pop();
         vm->push(Value::nil());
@@ -161,7 +167,7 @@ bool native_debug_setlocal(VM* vm, int argCount) {
     int index = static_cast<int>(vm->peek(1).asNumber());
     int level = static_cast<int>(vm->peek(2).asNumber());
 
-    CallFrame* frame = vm->getFrame(level - 1);
+    CallFrame* frame = vm->getFrame(level);
     if (!frame || !frame->closure) {
         for(int i=0; i<argCount; i++) vm->pop();
         vm->push(Value::nil());
@@ -482,9 +488,28 @@ void registerDebugLibrary(VM* vm, TableObject* debugTable) {
 
         if (f.isNumber()) {
             int level = static_cast<int>(f.asNumber());
-            // level 1 in Lua is the caller of getinfo, which is getFrame(0) in our VM
-            CallFrame* frame = vm->getFrame(level - 1);
+            // level 1 in Lua is the caller of getinfo, which is getFrame(level) in our VM
+            CallFrame* frame = vm->getFrame(level);
             if (frame) {
+                if (frame->isC) {
+                    info->set("what", Value::runtimeString(vm->internString("C")));
+                    info->set("source", Value::runtimeString(vm->internString("=[C]")));
+                    info->set("short_src", Value::runtimeString(vm->internString("[C]")));
+                    info->set("currentline", Value::integer(-1));
+                    info->set("linedefined", Value::integer(-1));
+                    info->set("lastlinedefined", Value::integer(-1));
+                    info->set("nups", Value::integer(0));
+                    info->set("nparams", Value::integer(0));
+                    info->set("isvararg", Value::boolean(true));
+                    if (!frame->cFunc.isNil()) {
+                        info->set("func", frame->cFunc);
+                    }
+                    info->set("name", Value::runtimeString(vm->internString("?")));
+                    for(int i=0; i<argCount; i++) vm->pop();
+                    vm->push(Value::table(info));
+                    vm->currentCoroutine()->lastResultCount = 1;
+                    return true;
+                }
                 closure = frame->closure;
                 if (closure) {
                     size_t ip = (frame->ip > 0) ? frame->ip - 1 : 0;
@@ -517,21 +542,24 @@ void registerDebugLibrary(VM* vm, TableObject* debugTable) {
             info->set("source", Value::runtimeString(vm->internString(source)));
 
             std::string short_src = source;
+            if (!short_src.empty() && (short_src[0] == '@' || short_src[0] == '=')) {
+                short_src = short_src.substr(1);
+            }
             if (short_src.length() > 60) short_src = "..." + short_src.substr(short_src.length() - 57);
             info->set("short_src", Value::runtimeString(vm->internString(short_src)));
 
-            info->set("nups", Value::number(func->upvalueCount()));
-            info->set("nparams", Value::number(func->arity()));
+            info->set("nups", Value::integer(func->upvalueCount()));
+            info->set("nparams", Value::integer(func->arity()));
             info->set("isvararg", Value::boolean(func->hasVarargs()));
 
             if (line != -1) {
-                info->set("currentline", Value::number(line));
+                info->set("currentline", Value::integer(line));
             }
 
             // For now, our FunctionObject doesn't store linedefined/lastlinedefined.
             // We'll set them to -1 or use the first instruction's line.
-            info->set("linedefined", Value::number(1)); // Placeholder
-            info->set("lastlinedefined", Value::number(-1));
+            info->set("linedefined", Value::integer(1)); // Placeholder
+            info->set("lastlinedefined", Value::integer(-1));
 
             info->set("func", Value::closure(closure));
         }
@@ -542,4 +570,60 @@ void registerDebugLibrary(VM* vm, TableObject* debugTable) {
         return true;
     });
 
+    vm->addNativeToTable(debugTable, "debug", [](VM* vm, int argCount) -> bool {
+        for (int i = 0; i < argCount; i++) vm->pop();
+        char buffer[1024];
+        for (;;) {
+            std::cerr << "lua_debug> ";
+            std::cerr.flush();
+            if (std::fgets(buffer, sizeof(buffer), stdin) == nullptr) {
+                break;
+            }
+            if (std::strcmp(buffer, "cont\n") == 0 || std::strcmp(buffer, "cont\r\n") == 0 || std::strcmp(buffer, "cont") == 0) {
+                break;
+            }
+            std::string source(buffer);
+            std::string sourceName = "=(debug command)";
+            try {
+                Lexer lexer(source);
+                lexer.setSourceName(sourceName);
+                Parser parser(lexer);
+                auto program = parser.parse();
+                if (!program) {
+                    std::cerr << "parse error\n";
+                    std::cerr.flush();
+                    continue;
+                }
+                CodeGenerator codegen;
+                auto function = codegen.generate(program.get(), sourceName);
+                if (!function) {
+                    std::cerr << "codegen error\n";
+                    std::cerr.flush();
+                    continue;
+                }
+                FunctionObject* funcPtr = function.get();
+                vm->registerFunction(function.release());
+                ClosureObject* closure = vm->createClosure(funcPtr);
+                vm->setupRootUpvalues(closure, Value::nil());
+                vm->push(Value::closure(closure));
+                if (!vm->pcall(1)) {
+                    Value errVal = vm->pop();
+                    vm->pop(); // pop false
+                    std::string errStr = errVal.isString() ? vm->getStringValue(errVal) : errVal.toString();
+                    std::cerr << errStr << "\n";
+                    std::cerr.flush();
+                } else {
+                    while (vm->currentCoroutine()->lastResultCount > 0) {
+                        vm->pop();
+                        vm->currentCoroutine()->lastResultCount--;
+                    }
+                }
+            } catch (const std::exception& e) {
+                std::cerr << e.what() << "\n";
+                std::cerr.flush();
+            }
+        }
+        vm->currentCoroutine()->lastResultCount = 0;
+        return true;
+    });
 }

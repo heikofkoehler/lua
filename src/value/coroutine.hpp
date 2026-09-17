@@ -20,6 +20,8 @@ struct CallFrame {
     std::vector<Value> varargs; // Varargs passed to this function
     bool isPcall = false;       // TRUE if this frame is a pcall boundary
     bool isHook = false;        // TRUE if this frame is a debug hook
+    bool isC = false;           // TRUE if this frame is a C/native function
+    Value cFunc = Value::nil(); // The C function value
 };
 
 class CoroutineObject : public GCObject {
