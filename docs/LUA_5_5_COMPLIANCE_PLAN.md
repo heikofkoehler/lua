@@ -246,12 +246,13 @@ Each test file in `lua-5.5.0-tests/` was systematically evaluated against `./bui
 ## 4. Phased Implementation Roadmap
 
 ### Phase 1: Critical Core VM & Lexer Fixes (Immediate)
-- [ ] Update `src/compiler/lexer.cpp`: Accept any line starting with `#` on line 1 as a comment.
-- [ ] Update `src/compiler/codegen.hpp`: Initialize `Upvalue::isConstant = false`.
-- [ ] Update `src/vm/stdlib_base.cpp`: In `native_load()`, set `lastResultCount = 1` upon successful text chunk compilation.
-- [ ] Update `src/vm/stdlib_math.cpp`: Set `math.mininteger` and `math.maxinteger` to 64-bit `INT64_MIN` / `INT64_MAX`.
-- [ ] Update `src/vm/vm.cpp`: Rewrite `shiftLeft` and `shiftRight` with logical zero-fill and standard displacement semantics.
-- *Milestone Check:* `main.lua`, `bitwise.lua`, `events.lua`, and `literals.lua` pass.
+- [x] Update `src/compiler/lexer.cpp`: Accept any line starting with `#` on line 1 as a comment.
+- [x] Update `src/compiler/codegen.hpp`: Initialize `Upvalue::isConstant = false`.
+- [x] Update `src/vm/stdlib_base.cpp`: In `native_load()`, set `lastResultCount = 1` upon successful text chunk compilation.
+- [x] Update `src/vm/stdlib_math.cpp`: Set `math.mininteger` and `math.maxinteger` to 64-bit `INT64_MIN` / `INT64_MAX`.
+- [x] Update `src/vm/vm.cpp`: Rewrite `shiftLeft` and `shiftRight` with logical zero-fill and standard displacement semantics.
+- [x] Implement 64-bit integer NaN-boxing with `Int64Object` and inline 48-bit storage.
+- *Milestone Check:* `main.lua`, `bitwise.lua`, `events.lua`, and `literals.lua` pass (All PASSED 100%).
 
 ### Phase 2: Compiler Constant Pool Expansion
 - [ ] Refactor `src/compiler/codegen.cpp`:
