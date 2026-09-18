@@ -363,6 +363,7 @@ private:
 
     // Helper to read constant
     Value readConstant();
+    Value getConstant(size_t index);
 
     // Trace execution (for debugging)
     void traceExecution();

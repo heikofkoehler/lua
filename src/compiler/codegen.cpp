@@ -273,18 +273,12 @@ void CodeGenerator::visitVariable(VariableExprNode* node) {
     }
 
     // 3. Fall back to global variable (resolved via _ENV)
-    size_t nameIndex = currentChunk()->addConstant(Value::string(internString(name)));
-    if (nameIndex > UINT8_MAX) {
-        throw CompileError("Too many constants in one chunk", currentLine_);
-    }
-
     int envSlot = resolveLocal("_ENV");
     if (envSlot != -1) {
         // _ENV is a local variable
         emitOpCode(OpCode::OP_GET_LOCAL);
         emitByte(static_cast<uint8_t>(envSlot));
-        emitOpCode(OpCode::OP_CONSTANT);
-        emitByte(static_cast<uint8_t>(nameIndex));
+        emitConstant(Value::string(internString(name)));
         emitOpCode(OpCode::OP_GET_TABLE);
         return;
     }
@@ -295,9 +289,8 @@ void CodeGenerator::visitVariable(VariableExprNode* node) {
         envUpvalue = 0;
     }
 
-    emitOpCode(OpCode::OP_GET_TABUP);
-    emitByte(static_cast<uint8_t>(envUpvalue));
-    emitByte(static_cast<uint8_t>(nameIndex));
+    size_t nameIndex = currentChunk()->addConstant(Value::string(internString(name)));
+    emitGetTabUp(static_cast<uint8_t>(envUpvalue), nameIndex);
 }
 
 void CodeGenerator::visitVararg(VarargExprNode* node) {
@@ -357,19 +350,13 @@ void CodeGenerator::visitAssignmentStmt(AssignmentStmtNode* node) {
     }
 
     // 3. Fall back to global variable (via _ENV)
-    size_t nameIndex = currentChunk()->addConstant(Value::string(internString(node->name())));
-    if (nameIndex > UINT8_MAX) {
-        throw CompileError("Too many constants in one chunk", currentLine_);
-    }
-
     int envSlot = resolveLocal("_ENV");
     if (envSlot != -1) {
         // _ENV is a local variable
         emitOpCode(OpCode::OP_GET_LOCAL);
         emitByte(static_cast<uint8_t>(envSlot));
         // Stack: [value, env]
-        emitOpCode(OpCode::OP_CONSTANT);
-        emitByte(static_cast<uint8_t>(nameIndex));
+        emitConstant(Value::string(internString(node->name())));
         // Stack: [value, env, key]
         emitOpCode(OpCode::OP_ROTATE);
         emitByte(3); 
@@ -384,9 +371,8 @@ void CodeGenerator::visitAssignmentStmt(AssignmentStmtNode* node) {
         envUpvalue = 0;
     }
     
-    emitOpCode(OpCode::OP_SET_TABUP);
-    emitByte(static_cast<uint8_t>(envUpvalue));
-    emitByte(static_cast<uint8_t>(nameIndex));
+    size_t nameIndex = currentChunk()->addConstant(Value::string(internString(node->name())));
+    emitSetTabUp(static_cast<uint8_t>(envUpvalue), nameIndex);
 }
 
 void CodeGenerator::visitLocalDeclStmt(LocalDeclStmtNode* node) {
@@ -553,17 +539,11 @@ void CodeGenerator::visitMultipleAssignmentStmt(MultipleAssignmentStmtNode* node
             }
 
             // Global variable (via _ENV)
-            size_t nameIndex = currentChunk()->addConstant(Value::string(internString(name)));
-            if (nameIndex > UINT8_MAX) {
-                throw CompileError("Too many constants in one chunk", currentLine_);
-            }
-
             int envSlot = resolveLocal("_ENV");
             if (envSlot != -1) {
                 emitOpCode(OpCode::OP_GET_LOCAL);
                 emitByte(static_cast<uint8_t>(envSlot));
-                emitOpCode(OpCode::OP_CONSTANT);
-                emitByte(static_cast<uint8_t>(nameIndex));
+                emitConstant(Value::string(internString(name)));
                 emitOpCode(OpCode::OP_ROTATE);
                 emitByte(3);
                 emitOpCode(OpCode::OP_SET_TABLE);
@@ -573,9 +553,8 @@ void CodeGenerator::visitMultipleAssignmentStmt(MultipleAssignmentStmtNode* node
             int envUpvalue = resolveUpvalue("_ENV");
             if (envUpvalue == -1) envUpvalue = 0;
 
-            emitOpCode(OpCode::OP_SET_TABUP);
-            emitByte(static_cast<uint8_t>(envUpvalue));
-            emitByte(static_cast<uint8_t>(nameIndex));
+            size_t nameIndex = currentChunk()->addConstant(Value::string(internString(name)));
+            emitSetTabUp(static_cast<uint8_t>(envUpvalue), nameIndex);
         } else if (auto* indexExpr = dynamic_cast<IndexExprNode*>(target)) {
             // Stack: [..., value]
             // Evaluate table and key
@@ -687,6 +666,36 @@ void CodeGenerator::emitConstant(const Value& value) {
                   static_cast<uint8_t>(index & 0xFF),
                   static_cast<uint8_t>((index >> 8) & 0xFF),
                   static_cast<uint8_t>((index >> 16) & 0xFF));
+    } else {
+        throw CompileError("Too many constants in one chunk", currentLine_);
+    }
+}
+
+void CodeGenerator::emitGetTabUp(uint8_t upvalue, size_t nameIndex) {
+    if (nameIndex <= UINT8_MAX) {
+        emitBytes(static_cast<uint8_t>(OpCode::OP_GET_TABUP), upvalue);
+        emitByte(static_cast<uint8_t>(nameIndex));
+    } else if (nameIndex <= 0xFFFFFF) {
+        emitOpCode(OpCode::OP_GET_TABUP_LONG);
+        emitByte(upvalue);
+        emitByte(static_cast<uint8_t>(nameIndex & 0xFF));
+        emitByte(static_cast<uint8_t>((nameIndex >> 8) & 0xFF));
+        emitByte(static_cast<uint8_t>((nameIndex >> 16) & 0xFF));
+    } else {
+        throw CompileError("Too many constants in one chunk", currentLine_);
+    }
+}
+
+void CodeGenerator::emitSetTabUp(uint8_t upvalue, size_t nameIndex) {
+    if (nameIndex <= UINT8_MAX) {
+        emitBytes(static_cast<uint8_t>(OpCode::OP_SET_TABUP), upvalue);
+        emitByte(static_cast<uint8_t>(nameIndex));
+    } else if (nameIndex <= 0xFFFFFF) {
+        emitOpCode(OpCode::OP_SET_TABUP_LONG);
+        emitByte(upvalue);
+        emitByte(static_cast<uint8_t>(nameIndex & 0xFF));
+        emitByte(static_cast<uint8_t>((nameIndex >> 8) & 0xFF));
+        emitByte(static_cast<uint8_t>((nameIndex >> 16) & 0xFF));
     } else {
         throw CompileError("Too many constants in one chunk", currentLine_);
     }
@@ -1283,7 +1292,7 @@ void CodeGenerator::visitTableConstructor(TableConstructorNode* node) {
             bool isLast = (i == entries.size() - 1);
 
             // Array-style entry: use implicit numeric index
-            emitConstant(Value::number(arrayIndex));
+            emitConstant(Value::integer(arrayIndex));
             
             uint8_t oldRetCount = expectedRetCount_;
             if (isLast && canBeMultires) {
@@ -1374,19 +1383,13 @@ void CodeGenerator::visitFunctionDecl(FunctionDeclNode* node) {
     }
 
     // 3. Fall back to global variable (via _ENV)
-    size_t nameIndex = currentChunk()->addConstant(Value::string(internString(node->name())));
-    if (nameIndex > UINT8_MAX) {
-        throw CompileError("Too many constants in one chunk", currentLine_);
-    }
-
     int envSlot = resolveLocal("_ENV");
     if (envSlot != -1) {
         // _ENV is a local variable
         emitOpCode(OpCode::OP_GET_LOCAL);
         emitByte(static_cast<uint8_t>(envSlot));
         // Stack: [value, env]
-        emitOpCode(OpCode::OP_CONSTANT);
-        emitByte(static_cast<uint8_t>(nameIndex));
+        emitConstant(Value::string(internString(node->name())));
         // Stack: [value, env, key]
         emitOpCode(OpCode::OP_ROTATE);
         emitByte(3);
@@ -1401,9 +1404,8 @@ void CodeGenerator::visitFunctionDecl(FunctionDeclNode* node) {
         envUpvalue = 0; 
     }
 
-    emitOpCode(OpCode::OP_SET_TABUP);
-    emitByte(static_cast<uint8_t>(envUpvalue));
-    emitByte(static_cast<uint8_t>(nameIndex));
+    size_t nameIndex = currentChunk()->addConstant(Value::string(internString(node->name())));
+    emitSetTabUp(static_cast<uint8_t>(envUpvalue), nameIndex);
 }
 
 void CodeGenerator::visitFunctionExpr(FunctionExprNode* node) {

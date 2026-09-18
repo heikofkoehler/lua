@@ -104,14 +104,14 @@ const char* match_quant(MatchState* ms, const char* s, const char* p, const char
     switch (op) {
         case '?': {
             const char* res;
-            if ((res = match(ms, s + 1, ep + 1))) return res;
+            if (count > 0 && (res = match(ms, s + 1, ep + 1))) return res;
             return match(ms, s, ep + 1);
         }
         case '+':
             if (count == 0) return nullptr;
             [[fallthrough]];
         case '*':
-            while (count >= 0) {
+            while (count >= (op == '+' ? 1 : 0)) {
                 const char* res = match(ms, s + count, ep + 1);
                 if (res) return res;
                 count--;

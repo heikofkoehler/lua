@@ -281,6 +281,64 @@ JITFunc JITCompiler::compile(FunctionObject* function) {
                 a.add(local_reg, stack_reg, scratch, a64::lsl(3));
                 break;
             }
+            case OpCode::OP_GET_TABUP_LONG: {
+                uint8_t upIndex = bytecode[++i];
+                uint32_t keyIndex = bytecode[++i];
+                keyIndex |= (bytecode[++i] << 8);
+                keyIndex |= (bytecode[++i] << 16);
+                a.str(top_reg, a64::ptr(co_reg, offsetStack + 8));
+                a.mov(a64::x0, vm_reg);
+                a.mov(a64::x1, (uint32_t)upIndex);
+                a.mov(a64::x2, keyIndex);
+                a.mov(a64::x3, (uint32_t)(i + 1));
+                a.mov(scratch, (uint64_t)VM::jitGetTabUp);
+                a.blr(scratch);
+                a.ldr(top_reg, a64::ptr(co_reg, offsetStack + 8));
+                a.ldrb(scratch_w, a64::ptr(vm_reg, offsetHadError));
+                a.cbnz(scratch, frame_changed);
+                a.ldr(stack_reg, a64::ptr(co_reg, offsetStack));
+
+                a.ldr(scratch, a64::ptr(co_reg, offsetFrames + 8));
+                a.ldr(scratch2, a64::ptr(co_reg, offsetFrames));
+                a.sub(scratch, scratch, scratch2);
+                a.cmp(scratch, frames_size_reg);
+                a.b_ne(frame_changed); 
+
+                a.ldr(scratch, a64::ptr(co_reg, offsetFrames + 8));
+                a.sub(frame_reg, scratch, sizeof(CallFrame));
+                a.ldr(scratch, a64::ptr(frame_reg, offsetStackBase));
+                a.add(local_reg, stack_reg, scratch, a64::lsl(3));
+                break;
+            }
+            case OpCode::OP_SET_TABUP_LONG: {
+                uint8_t upIndex = bytecode[++i];
+                uint32_t keyIndex = bytecode[++i];
+                keyIndex |= (bytecode[++i] << 8);
+                keyIndex |= (bytecode[++i] << 16);
+                a.str(top_reg, a64::ptr(co_reg, offsetStack + 8));
+                a.mov(a64::x0, vm_reg);
+                a.mov(a64::x1, (uint32_t)upIndex);
+                a.mov(a64::x2, keyIndex);
+                a.mov(a64::x3, (uint32_t)(i + 1));
+                a.mov(scratch, (uint64_t)VM::jitSetTabUp);
+                a.blr(scratch);
+                a.ldr(top_reg, a64::ptr(co_reg, offsetStack + 8));
+                a.ldrb(scratch_w, a64::ptr(vm_reg, offsetHadError));
+                a.cbnz(scratch, frame_changed);
+                a.ldr(stack_reg, a64::ptr(co_reg, offsetStack));
+
+                a.ldr(scratch, a64::ptr(co_reg, offsetFrames + 8));
+                a.ldr(scratch2, a64::ptr(co_reg, offsetFrames));
+                a.sub(scratch, scratch, scratch2);
+                a.cmp(scratch, frames_size_reg);
+                a.b_ne(frame_changed); 
+
+                a.ldr(scratch, a64::ptr(co_reg, offsetFrames + 8));
+                a.sub(frame_reg, scratch, sizeof(CallFrame));
+                a.ldr(scratch, a64::ptr(frame_reg, offsetStackBase));
+                a.add(local_reg, stack_reg, scratch, a64::lsl(3));
+                break;
+            }
             case OpCode::OP_LEN: {
                 a.str(top_reg, a64::ptr(co_reg, offsetStack + 8));
                 a.mov(a64::x0, vm_reg);
@@ -456,6 +514,33 @@ JITFunc JITCompiler::compile(FunctionObject* function) {
                 a.str(top_reg, a64::ptr(co_reg, offsetStack + 8));
                 a.mov(a64::x0, vm_reg);
                 a.mov(a64::x1, (uint32_t)constantIndex);
+                a.mov(a64::x2, (uint32_t)bytecodeOffset);
+                a.mov(scratch, (uint64_t)VM::jitClosure);
+                a.blr(scratch);
+                a.ldr(top_reg, a64::ptr(co_reg, offsetStack + 8));
+                a.ldrb(scratch_w, a64::ptr(vm_reg, offsetHadError));
+                a.cbnz(scratch, frame_changed);
+                a.ldr(stack_reg, a64::ptr(co_reg, offsetStack));
+                a.ldr(scratch, a64::ptr(co_reg, offsetFrames + 8));
+                a.sub(frame_reg, scratch, sizeof(CallFrame));
+                a.ldr(scratch, a64::ptr(frame_reg, offsetStackBase));
+                a.add(local_reg, stack_reg, scratch, a64::lsl(3));
+                break;
+            }
+            case OpCode::OP_CLOSURE_LONG: {
+                uint32_t constantIndex = bytecode[++i];
+                constantIndex |= (bytecode[++i] << 8);
+                constantIndex |= (bytecode[++i] << 16);
+                size_t bytecodeOffset = i + 1;
+                
+                // Skip the upvalue capture bytes
+                Value funcValue = chunk->constants()[constantIndex];
+                FunctionObject* innerFunc = chunk->getFunction(funcValue.asFunctionIndex());
+                i += 2 * innerFunc->upvalueCount();
+
+                a.str(top_reg, a64::ptr(co_reg, offsetStack + 8));
+                a.mov(a64::x0, vm_reg);
+                a.mov(a64::x1, constantIndex);
                 a.mov(a64::x2, (uint32_t)bytecodeOffset);
                 a.mov(scratch, (uint64_t)VM::jitClosure);
                 a.blr(scratch);

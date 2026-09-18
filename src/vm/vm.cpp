@@ -555,6 +555,8 @@ const CallFrame& VM::currentFrame() const {
 }
 
 void VM::internConstants(const FunctionObject& function) {
+    bool oldGC = gcEnabled_;
+    gcEnabled_ = false;
     for (size_t i = 0; i < function.chunk()->constants().size(); i++) {
         Value& val = const_cast<std::vector<Value>&>(function.chunk()->constants())[i];
         if (val.isString() && !val.isRuntimeString()) {
@@ -570,6 +572,7 @@ void VM::internConstants(const FunctionObject& function) {
             if (nested) internConstants(*nested);
         }
     }
+    gcEnabled_ = oldGC;
 }
 
 bool VM::run(const FunctionObject& function) {
@@ -867,22 +870,31 @@ uint8_t VM::readByte() {
     return currentFrame().chunk->at(currentFrame().ip++);
 }
 
-Value VM::readConstant() {
-    uint8_t index = readByte();
+Value VM::getConstant(size_t index) {
     Value constant = currentFrame().chunk->constants()[index];
     
     if (constant.isString() && !constant.isRuntimeString()) {
         StringObject* str = currentFrame().chunk->getString(constant.asStringIndex());
-        StringObject* runtimeStr = internString(str->chars(), str->length());
-        return Value::runtimeString(runtimeStr);
+        StringObject* runtimeStr = internString(str->chars(), str->length(), true);
+        constant = Value::runtimeString(runtimeStr);
+        const_cast<std::vector<Value>&>(currentFrame().chunk->constants())[index] = constant;
+        rootedConstants_.push_back(constant);
+        return constant;
     }
     if (constant.isInt64() && !constant.isRuntimeInt64()) {
         int64_t num = currentFrame().chunk->getInt64(constant.asInt64Index());
         Value intVal = makeInteger(num);
-        return intVal;
+        constant = intVal;
+        const_cast<std::vector<Value>&>(currentFrame().chunk->constants())[index] = constant;
+        rootedConstants_.push_back(constant);
+        return constant;
     }
     
     return constant;
+}
+
+Value VM::readConstant() {
+    return getConstant(readByte());
 }
 
 void VM::runtimeError(const std::string& message, int level) {

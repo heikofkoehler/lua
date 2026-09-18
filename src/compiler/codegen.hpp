@@ -133,6 +133,8 @@ private:
     void emitBytes(uint8_t byte1, uint8_t byte2, uint8_t byte3, uint8_t byte4);
     void emitOpCode(OpCode op);
     void emitConstant(const Value& value);
+    void emitGetTabUp(uint8_t upvalue, size_t nameIndex);
+    void emitSetTabUp(uint8_t upvalue, size_t nameIndex);
     void emitReturn();
 
     // Jump handling

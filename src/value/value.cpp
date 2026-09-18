@@ -201,8 +201,7 @@ size_t Value::hash() const {
         case Type::BOOL: return std::hash<bool>()(asBool());
         case Type::STRING: {
             if (isRuntimeString()) {
-                StringObject* obj = asStringObj();
-                return std::hash<std::string_view>()(std::string_view(obj->chars(), obj->length()));
+                return asStringObj()->hash();
             }
             return std::hash<size_t>()(asStringIndex());
         }

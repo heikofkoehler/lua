@@ -39,20 +39,13 @@ public:
         if (it != map_.end()) {
             return it->second;
         }
-        if (key.isString()) {
-            return getByString(key);
-        }
         return Value::nil();  // Key not found returns nil
     }
 
     Value get(const std::string& key) const;
 
     bool has(const Value& key) const {
-        if (map_.find(key) != map_.end()) return true;
-        if (key.isString()) {
-            return !getByString(key).isNil();
-        }
-        return false;
+        return map_.find(key) != map_.end();
     }
 
     size_t length() const {

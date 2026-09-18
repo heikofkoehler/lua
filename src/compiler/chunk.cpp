@@ -21,13 +21,14 @@ void Chunk::write(uint8_t byte, int line) {
 }
 
 size_t Chunk::addConstant(const Value& value) {
-    for (size_t i = 0; i < constants_.size(); i++) {
-        if (constants_[i].type() == value.type() && constants_[i] == value) {
-            return i;
-        }
+    auto it = constantMap_.find(value.bits());
+    if (it != constantMap_.end()) {
+        return it->second;
     }
+    size_t index = constants_.size();
     constants_.push_back(value);
-    return constants_.size() - 1;
+    constantMap_[value.bits()] = index;
+    return index;
 }
 
 size_t Chunk::addIdentifier(const std::string& name) {
@@ -243,6 +244,14 @@ size_t Chunk::disassembleInstruction(size_t offset) const {
             return twoByteInstruction("OP_GET_TABUP", offset);
         case OpCode::OP_SET_TABUP:
             return twoByteInstruction("OP_SET_TABUP", offset);
+        case OpCode::OP_GET_TABUP_LONG:
+        case OpCode::OP_SET_TABUP_LONG: {
+            uint8_t upIndex = code_[offset + 1];
+            uint32_t constIndex = code_[offset + 2] | (code_[offset + 3] << 8) | (code_[offset + 4] << 16);
+            std::cout << std::left << std::setw(16) << (op == OpCode::OP_GET_TABUP_LONG ? "OP_GET_TABUP_LONG" : "OP_SET_TABUP_LONG")
+                      << " up:" << (int)upIndex << " const:" << constIndex << "\n";
+            return offset + 5;
+        }
         case OpCode::OP_CLOSE_UPVALUE:
             return simpleInstruction("OP_CLOSE_UPVALUE", offset);
 

@@ -255,10 +255,13 @@ Each test file in `lua-5.5.0-tests/` was systematically evaluated against `./bui
 - *Milestone Check:* `main.lua`, `bitwise.lua`, `events.lua`, and `literals.lua` pass (All PASSED 100%).
 
 ### Phase 2: Compiler Constant Pool Expansion
-- [ ] Refactor `src/compiler/codegen.cpp`:
-  - Replace manual `addConstant()` + `UINT8_MAX` checks in `visitVariable()`, `visitAssignmentStmt()`, `visitMultipleAssignmentStmt()`, and `visitGlobalDeclStmt()` with `emitConstant()`.
-  - Ensure 24-bit indexing (`OP_CONSTANT_LONG`) is uniformly emitted across all expression and statement types.
-- *Milestone Check:* `api.lua`, `errors.lua`, `pm.lua`, and `verybig.lua` compile and execute without constant overflow.
+- [x] Refactor `src/compiler/codegen.cpp`:
+  - Replace manual `addConstant()` + `UINT8_MAX` checks in `visitVariable()`, `visitAssignmentStmt()`, `visitMultipleAssignmentStmt()`, and `visitGlobalDeclStmt()` with `emitConstant()` and `emitGetTabUp()` / `emitSetTabUp()`.
+  - Ensure 24-bit indexing (`OP_CONSTANT_LONG`, `OP_GET_TABUP_LONG`, `OP_SET_TABUP_LONG`, `OP_CLOSURE_LONG`) is uniformly emitted across all expression and statement types and supported in VM and JIT.
+  - Implement $O(1)$ constant deduplication via `constantMap_` on exact `Value::bits()`.
+  - Fix 64k constant limit in NaN-boxing representation using `FLAG_COMPILE_TIME` (bit 47) instead of `0x10000` heuristic.
+  - Optimize `TableObject::get` / `TableObject::has` and eliminate linear string scans on table misses.
+- *Milestone Check:* `api.lua`, `errors.lua`, `pm.lua`, and `verybig.lua` compile and execute without constant overflow (`api.lua` Clean PASS, `verybig.lua` Clean PASS in ~2s). Phase 1 milestone tests (`main.lua`, `bitwise.lua`, `events.lua`, `literals.lua`) and all 207 internal test suite tests pass 100%.
 
 ### Phase 3: Parser & Language Extensions for Lua 5.5
 - [ ] Implement Named Varargs (`...name`):

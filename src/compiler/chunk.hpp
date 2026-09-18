@@ -74,6 +74,7 @@ public:
 private:
     std::vector<uint8_t> code_;        // Bytecode instructions
     std::vector<Value> constants_;     // Constant pool
+    std::unordered_map<uint64_t, size_t> constantMap_; // For constant deduplication
     std::vector<std::string> identifiers_;  // Identifier pool (variable names)
     std::vector<FunctionObject*> functions_;  // Function pool (owned)
     std::vector<StringObject*> strings_;  // String pool (owned, interned)

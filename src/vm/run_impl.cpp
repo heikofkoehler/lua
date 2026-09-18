@@ -99,17 +99,7 @@ bool VM::run(size_t targetFrameCount) {
                 uint32_t index = readByte();
                 index |= (readByte() << 8);
                 index |= (readByte() << 16);
-                Value constant = currentFrame().chunk->constants()[index];
-                if (constant.isString() && !constant.isRuntimeString()) {
-                    StringObject* str = currentFrame().chunk->getString(constant.asStringIndex());
-                    StringObject* runtimeStr = internString(str->chars(), str->length());
-                    push(Value::runtimeString(runtimeStr));
-                } else if (constant.isInt64() && !constant.isRuntimeInt64()) {
-                    int64_t num = currentFrame().chunk->getInt64(constant.asInt64Index());
-                    push(makeInteger(num));
-                } else {
-                    push(constant);
-                }
+                push(getConstant(index));
                 break;
             }
 
@@ -206,9 +196,18 @@ bool VM::run(size_t targetFrameCount) {
                 break;
             }
 
-            case OpCode::OP_GET_TABUP: {
+            case OpCode::OP_GET_TABUP:
+            case OpCode::OP_GET_TABUP_LONG: {
                 uint8_t upIndex = readByte();
-                Value key = readConstant();
+                Value key;
+                if (op == OpCode::OP_GET_TABUP) {
+                    key = readConstant();
+                } else {
+                    uint32_t keyIndex = readByte();
+                    keyIndex |= (readByte() << 8);
+                    keyIndex |= (readByte() << 16);
+                    key = getConstant(keyIndex);
+                }
 
                 if (currentCoroutine_->frames.empty() || currentFrame().closure == nullptr) {
                     runtimeError("Upvalue access outside of closure");
@@ -268,9 +267,18 @@ bool VM::run(size_t targetFrameCount) {
                 }
                 break;
             }
-            case OpCode::OP_SET_TABUP: {
+            case OpCode::OP_SET_TABUP:
+            case OpCode::OP_SET_TABUP_LONG: {
                 uint8_t upIndex = readByte();
-                Value key = readConstant();
+                Value key;
+                if (op == OpCode::OP_SET_TABUP) {
+                    key = readConstant();
+                } else {
+                    uint32_t keyIndex = readByte();
+                    keyIndex |= (readByte() << 8);
+                    keyIndex |= (readByte() << 16);
+                    key = getConstant(keyIndex);
+                }
                 Value value = peek(0); // Peek instead of pop to root it
 
                 if (currentCoroutine_->frames.empty() || currentFrame().closure == nullptr) {
@@ -977,7 +985,7 @@ bool VM::run(size_t targetFrameCount) {
                     if (t.isTable()) {
                         TableObject* table = t.asTableObj();
                         Value value = table->get(key);
-                        if (!value.isNil()) {
+                        if (!value.isNil() || table->getMetatable().isNil()) {
                             push(value);
                             done = true;
                             break;
@@ -1031,7 +1039,7 @@ bool VM::run(size_t targetFrameCount) {
                 for (int loop = 0; loop < 100; loop++) {
                     if (t.isTable()) {
                         TableObject* table = t.asTableObj();
-                        if (table->has(key)) {
+                        if (table->getMetatable().isNil() || table->has(key)) {
                             table->set(key, value);
                             pop(); pop(); pop();
                             done = true;

@@ -99,28 +99,30 @@ public:
         return Value(bits);
     }
 
+    static constexpr uint64_t FLAG_COMPILE_TIME = (1ULL << 47);
+
     static constexpr Value integer(int64_t value) {
         return Value(encodeTag(Type::INTEGER) | (static_cast<uint64_t>(value) & 0x0000FFFFFFFFFFFFULL));
     }
 
     static Value fromInt64(Int64Object* obj) {
-        return Value(encodeTag(Type::INT64) | reinterpret_cast<uint64_t>(obj));
+        return Value(encodeTag(Type::INT64) | (reinterpret_cast<uint64_t>(obj) & 0x00007FFFFFFFFFFFULL));
     }
 
     static constexpr Value compileTimeInt64(size_t index) {
-        return Value(encodeTag(Type::INT64) | static_cast<uint64_t>(index));
+        return Value(encodeTag(Type::INT64) | FLAG_COMPILE_TIME | (static_cast<uint64_t>(index) & 0x00007FFFFFFFFFFFULL));
     }
 
     static constexpr Value function(size_t funcIndex) {
-        return Value(encodeTag(Type::FUNCTION) | static_cast<uint64_t>(funcIndex));
+        return Value(encodeTag(Type::FUNCTION) | (static_cast<uint64_t>(funcIndex) & 0x00007FFFFFFFFFFFULL));
     }
 
     static constexpr Value string(size_t stringIndex) {
-        return Value(encodeTag(Type::STRING) | static_cast<uint64_t>(stringIndex));
+        return Value(encodeTag(Type::STRING) | FLAG_COMPILE_TIME | (static_cast<uint64_t>(stringIndex) & 0x00007FFFFFFFFFFFULL));
     }
 
     static Value runtimeString(StringObject* str) {
-        return Value(encodeTag(Type::STRING) | reinterpret_cast<uint64_t>(str));
+        return Value(encodeTag(Type::STRING) | (reinterpret_cast<uint64_t>(str) & 0x00007FFFFFFFFFFFULL));
     }
 
     static Value table(TableObject* table) {
@@ -172,7 +174,7 @@ public:
         return tag == encodeTag(Type::INTEGER) || tag == encodeTag(Type::INT64);
     }
     bool isInt64() const { return (bits_ & TAG_MASK) == encodeTag(Type::INT64); }
-    bool isRuntimeInt64() const { return isInt64() && (bits_ & 0xFFFFFFFFFFFFULL) > 0x10000; }
+    bool isRuntimeInt64() const { return isInt64() && !(bits_ & FLAG_COMPILE_TIME); }
     bool isString() const { return (bits_ & TAG_MASK) == encodeTag(Type::STRING); }
     bool isTable() const { return (bits_ & TAG_MASK) == encodeTag(Type::TABLE); }
     bool isClosure() const { return (bits_ & TAG_MASK) == encodeTag(Type::CLOSURE); }
@@ -183,7 +185,7 @@ public:
     bool isNativeFunction() const { return (bits_ & TAG_MASK) == encodeTag(Type::NATIVE_FUNCTION); }
     bool isCFunction() const { return (bits_ & TAG_MASK) == encodeTag(Type::C_FUNCTION); }
     bool isFunctionObject() const { return (bits_ & TAG_MASK) == encodeTag(Type::FUNCTION); }
-    bool isRuntimeString() const { return isString() && (bits_ & 0xFFFFFFFFFFFFULL) > 0x10000; }
+    bool isRuntimeString() const { return isString() && !(bits_ & FLAG_COMPILE_TIME); }
 
     bool isFunction() const {
         return isFunctionObject() || isClosure() || isNativeFunction() || isCFunction();
@@ -230,15 +232,15 @@ public:
         return static_cast<int64_t>(asNumber());
     }
 
-    size_t asInt64Index() const { return static_cast<size_t>(bits_ & 0xFFFFFFFFFFFFULL); }
-    Int64Object* asInt64Obj() const { return reinterpret_cast<Int64Object*>(bits_ & 0xFFFFFFFFFFFFULL); }
+    size_t asInt64Index() const { return static_cast<size_t>(bits_ & 0x00007FFFFFFFFFFFULL); }
+    Int64Object* asInt64Obj() const { return reinterpret_cast<Int64Object*>(bits_ & 0x00007FFFFFFFFFFFULL); }
 
-    size_t asFunctionIndex() const { return static_cast<size_t>(bits_ & 0xFFFFFFFFFFFFULL); }
-    size_t asStringIndex() const { return static_cast<size_t>(bits_ & 0xFFFFFFFFFFFFULL); }
-    size_t asNativeFunctionIndex() const { return static_cast<size_t>(bits_ & 0xFFFFFFFFFFFFULL); }
-    void* asCFunction() const { return reinterpret_cast<void*>(bits_ & 0xFFFFFFFFFFFFULL); }
+    size_t asFunctionIndex() const { return static_cast<size_t>(bits_ & 0x00007FFFFFFFFFFFULL); }
+    size_t asStringIndex() const { return static_cast<size_t>(bits_ & 0x00007FFFFFFFFFFFULL); }
+    size_t asNativeFunctionIndex() const { return static_cast<size_t>(bits_ & 0x00007FFFFFFFFFFFULL); }
+    void* asCFunction() const { return reinterpret_cast<void*>(bits_ & 0x00007FFFFFFFFFFFULL); }
 
-    GCObject* asObj() const { return reinterpret_cast<GCObject*>(bits_ & 0xFFFFFFFFFFFFULL); }
+    GCObject* asObj() const { return reinterpret_cast<GCObject*>(bits_ & 0x00007FFFFFFFFFFFULL); }
     TableObject* asTableObj() const { return reinterpret_cast<TableObject*>(asObj()); }
     ClosureObject* asClosureObj() const { return reinterpret_cast<ClosureObject*>(asObj()); }
     UserdataObject* asUserdataObj() const { return reinterpret_cast<UserdataObject*>(asObj()); }
@@ -263,9 +265,20 @@ public:
     static Value deserialize(std::istream& is, Chunk* chunk);
 };
 
+static_assert(sizeof(Value) == 8, "sizeof(Value) must be 8 bytes");
+
 inline std::ostream& operator<<(std::ostream& os, const Value& value) {
     value.print(os);
     return os;
+}
+
+namespace std {
+template <>
+struct hash<Value> {
+    size_t operator()(const Value& v) const noexcept {
+        return v.hash();
+    }
+};
 }
 
 #endif // LUA_VALUE_HPP

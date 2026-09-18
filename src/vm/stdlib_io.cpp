@@ -232,6 +232,14 @@ bool native_io_close(VM* vm, int argCount) {
         if (fileVal.isFile()) {
             file = fileVal.asFileObj();
         }
+    } else {
+        Value ioTableVal = vm->getGlobal("io");
+        if (ioTableVal.isTable()) {
+            Value stdoutVal = ioTableVal.asTableObj()->get("stdout");
+            if (stdoutVal.isFile()) {
+                file = stdoutVal.asFileObj();
+            }
+        }
     }
     
     for(int i=0; i<argCount; i++) vm->pop();

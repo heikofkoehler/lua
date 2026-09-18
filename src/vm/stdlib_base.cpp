@@ -771,10 +771,12 @@ bool native_loadfile(VM* vm, int argCount) {
         FunctionObject* funcPtr = function.get();
         vm->registerFunction(function.release());
         vm->setSourceName(sourceName);
+        vm->internConstants(*funcPtr);
         ClosureObject* closure = vm->createClosure(funcPtr);
         vm->setupRootUpvalues(closure, env);
         for(int i=0; i<argCount; i++) vm->pop();
         vm->push(Value::closure(closure));
+        vm->currentCoroutine()->lastResultCount = 1;
         return true;
 
     } catch (const CompileError& e) {
@@ -878,6 +880,7 @@ bool native_load(VM* vm, int argCount) {
         FunctionObject* funcPtr = function.get();
         vm->registerFunction(function.release());
         vm->setSourceName(sourceName);
+        vm->internConstants(*funcPtr);
         ClosureObject* closure = vm->createClosure(funcPtr);
         vm->setupRootUpvalues(closure, env);
         for(int i=0; i<argCount; i++) vm->pop();
@@ -921,6 +924,7 @@ bool native_load(VM* vm, int argCount) {
         FunctionObject* funcPtr = function.get();
         vm->registerFunction(function.release());
         vm->setSourceName(sourceName);
+        vm->internConstants(*funcPtr);
         ClosureObject* closure = vm->createClosure(funcPtr);
         vm->setupRootUpvalues(closure, env);
         for(int i=0; i<argCount; i++) vm->pop();

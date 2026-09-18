@@ -36,6 +36,7 @@ public:
     bool equals(const StringObject* other) const {
         if (this == other) return true;
         if (length_ != other->length_) return false;
+        if (hash_ != other->hash_) return false;
         return std::memcmp(chars_, other->chars_, length_) == 0;
     }
 

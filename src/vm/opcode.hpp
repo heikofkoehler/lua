@@ -23,6 +23,8 @@ enum class OpCode : uint8_t {
     OP_SET_UPVALUE, // Set upvalue [index: uint8_t]
     OP_GET_TABUP,   // Get table from upvalue [upIndex: uint8_t, constIndex: uint8_t]
     OP_SET_TABUP,   // Set table from upvalue [upIndex: uint8_t, constIndex: uint8_t]
+    OP_GET_TABUP_LONG, // Get table from upvalue [upIndex: uint8_t, constIndex: 24-bit integer]
+    OP_SET_TABUP_LONG, // Set table from upvalue [upIndex: uint8_t, constIndex: 24-bit integer]
     OP_CLOSE_UPVALUE, // Close upvalue at top of stack
     OP_TBC,           // Mark local at [index] as to-be-closed
 
@@ -109,6 +111,8 @@ inline const char* opcodeName(OpCode op) {
         case OpCode::OP_SET_UPVALUE:   return "OP_SET_UPVALUE";
         case OpCode::OP_GET_TABUP:     return "OP_GET_TABUP";
         case OpCode::OP_SET_TABUP:     return "OP_SET_TABUP";
+        case OpCode::OP_GET_TABUP_LONG: return "OP_GET_TABUP_LONG";
+        case OpCode::OP_SET_TABUP_LONG: return "OP_SET_TABUP_LONG";
         case OpCode::OP_CLOSE_UPVALUE: return "OP_CLOSE_UPVALUE";
         case OpCode::OP_TBC:           return "OP_TBC";
         case OpCode::OP_ADD:           return "OP_ADD";
