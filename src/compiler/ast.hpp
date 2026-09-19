@@ -220,20 +220,31 @@ public:
     FunctionExprNode(std::vector<std::string> params,
                     std::vector<std::unique_ptr<class StmtNode>> body,
                     bool hasVarargs,
-                    int line)
+                    int line,
+                    std::string varargName = "",
+                    int lastLine = 0)
         : ExprNode(line), params_(std::move(params)),
-          body_(std::move(body)), hasVarargs_(hasVarargs) {}
+          body_(std::move(body)), hasVarargs_(hasVarargs),
+          varargName_(std::move(varargName)),
+          lineDefined_(line), lastLineDefined_(lastLine ? lastLine : line) {}
 
     void accept(ASTVisitor& visitor) override;
 
     const std::vector<std::string>& params() const { return params_; }
     const std::vector<std::unique_ptr<class StmtNode>>& body() const { return body_; }
     bool hasVarargs() const { return hasVarargs_; }
+    const std::string& varargName() const { return varargName_; }
+    bool hasNamedVarargs() const { return !varargName_.empty(); }
+    int lineDefined() const { return lineDefined_; }
+    int lastLineDefined() const { return lastLineDefined_; }
 
 private:
     std::vector<std::string> params_;
     std::vector<std::unique_ptr<class StmtNode>> body_;
     bool hasVarargs_;
+    std::string varargName_;
+    int lineDefined_;
+    int lastLineDefined_;
 };
 
 // Group expression: (expr)
@@ -359,17 +370,24 @@ private:
 // Global declaration: global a, b, c
 class GlobalDeclStmtNode : public StmtNode {
 public:
-    GlobalDeclStmtNode(const std::string& name, bool isConstant, int line)
-        : StmtNode(line), name_(name), isConstant_(isConstant) {}
+    GlobalDeclStmtNode(const std::string& name, bool isConstant, int line,
+                       std::unique_ptr<ExprNode> initializer = nullptr,
+                       bool isFunction = false)
+        : StmtNode(line), name_(name), isConstant_(isConstant),
+          initializer_(std::move(initializer)), isFunction_(isFunction) {}
 
     void accept(ASTVisitor& visitor) override;
 
     const std::string& name() const { return name_; }
     bool isConstant() const { return isConstant_; }
+    ExprNode* initializer() const { return initializer_.get(); }
+    bool isFunction() const { return isFunction_; }
 
 private:
     std::string name_;
     bool isConstant_;
+    std::unique_ptr<ExprNode> initializer_;
+    bool isFunction_;
 };
 
 class MultipleGlobalDeclStmtNode : public StmtNode {
@@ -379,15 +397,19 @@ public:
         bool isConstant;
     };
 
-    MultipleGlobalDeclStmtNode(std::vector<VarInfo> vars, int line)
-        : StmtNode(line), vars_(std::move(vars)) {}
+    MultipleGlobalDeclStmtNode(std::vector<VarInfo> vars, int line,
+                               std::vector<std::unique_ptr<ExprNode>> initializers = {})
+        : StmtNode(line), vars_(std::move(vars)),
+          initializers_(std::move(initializers)) {}
 
     void accept(ASTVisitor& visitor) override;
 
     const std::vector<VarInfo>& vars() const { return vars_; }
+    const std::vector<std::unique_ptr<ExprNode>>& initializers() const { return initializers_; }
 
 private:
     std::vector<VarInfo> vars_;
+    std::vector<std::unique_ptr<ExprNode>> initializers_;
 };
 
 // Multiple assignment: x, y, z = 1, 2, 3
@@ -509,25 +531,26 @@ private:
     std::vector<std::unique_ptr<StmtNode>> body_;
 };
 
-// Generic for loop: for var1, var2 in iterator do body end
+// Generic for loop: for var1, var2 in iterators do body end
 class ForInStmtNode : public StmtNode {
 public:
     ForInStmtNode(std::vector<std::string> varNames,
-                  std::unique_ptr<ExprNode> iterator,
+                  std::vector<std::unique_ptr<ExprNode>> iterators,
                   std::vector<std::unique_ptr<StmtNode>> body,
                   int line)
-        : StmtNode(line), varNames_(std::move(varNames)), iterator_(std::move(iterator)),
+        : StmtNode(line), varNames_(std::move(varNames)), iterators_(std::move(iterators)),
           body_(std::move(body)) {}
 
     void accept(ASTVisitor& visitor) override;
 
     const std::vector<std::string>& varNames() const { return varNames_; }
-    ExprNode* iterator() const { return iterator_.get(); }
+    const std::vector<std::unique_ptr<ExprNode>>& iterators() const { return iterators_; }
+    ExprNode* iterator() const { return iterators_.empty() ? nullptr : iterators_[0].get(); }
     const std::vector<std::unique_ptr<StmtNode>>& body() const { return body_; }
 
 private:
     std::vector<std::string> varNames_;
-    std::unique_ptr<ExprNode> iterator_;
+    std::vector<std::unique_ptr<ExprNode>> iterators_;
     std::vector<std::unique_ptr<StmtNode>> body_;
 };
 
@@ -538,9 +561,11 @@ public:
                      std::vector<std::string> params,
                      std::vector<std::unique_ptr<StmtNode>> body,
                      bool hasVarargs,
-                     int line)
+                     int line,
+                     std::string varargName = "")
         : StmtNode(line), name_(name), params_(std::move(params)),
-          body_(std::move(body)), hasVarargs_(hasVarargs) {}
+          body_(std::move(body)), hasVarargs_(hasVarargs),
+          varargName_(std::move(varargName)) {}
 
     void accept(ASTVisitor& visitor) override;
 
@@ -548,12 +573,15 @@ public:
     const std::vector<std::string>& params() const { return params_; }
     const std::vector<std::unique_ptr<StmtNode>>& body() const { return body_; }
     bool hasVarargs() const { return hasVarargs_; }
+    const std::string& varargName() const { return varargName_; }
+    bool hasNamedVarargs() const { return !varargName_.empty(); }
 
 private:
     std::string name_;
     std::vector<std::string> params_;
     std::vector<std::unique_ptr<StmtNode>> body_;
     bool hasVarargs_;
+    std::string varargName_;
 };
 
 // Return statement: return expr1, expr2, ...

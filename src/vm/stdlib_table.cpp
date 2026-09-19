@@ -9,8 +9,8 @@
 namespace {
 
 bool native_table_insert(VM* vm, int argCount) {
-    if (argCount < 2 || argCount > 3) {
-        vm->runtimeError("table.insert expects 2 or 3 arguments");
+    if (argCount < 2) {
+        vm->runtimeError("table.insert expects at least 2 arguments");
         return false;
     }
 
@@ -20,14 +20,14 @@ bool native_table_insert(VM* vm, int argCount) {
 
     if (argCount == 2) {
         // table.insert(t, value)
-        valueVal = vm->peek(0);
-        tableVal = vm->peek(1);
+        tableVal = vm->peek(argCount - 1);
+        valueVal = vm->peek(argCount - 2);
         posVal = Value::nil();
     } else {
         // table.insert(t, pos, value)
-        valueVal = vm->peek(0);
-        posVal = vm->peek(1);
-        tableVal = vm->peek(2);
+        tableVal = vm->peek(argCount - 1);
+        posVal = vm->peek(argCount - 2);
+        valueVal = vm->peek(argCount - 3);
     }
 
     if (!tableVal.isTable()) {
@@ -73,12 +73,12 @@ bool native_table_insert(VM* vm, int argCount) {
 }
 
 bool native_table_remove(VM* vm, int argCount) {
-    if (argCount < 1 || argCount > 2) {
-        vm->runtimeError("table.remove expects 1 or 2 arguments");
+    if (argCount < 1) {
+        vm->runtimeError("table.remove expects at least 1 argument");
         return false;
     }
 
-    Value posVal = (argCount == 2) ? vm->peek(0) : Value::nil();
+    Value posVal = (argCount >= 2) ? vm->peek(argCount - 2) : Value::nil();
     Value tableVal = vm->peek(argCount - 1);
 
     if (!tableVal.isTable()) {
@@ -117,36 +117,64 @@ bool native_table_remove(VM* vm, int argCount) {
 }
 
 bool native_table_concat(VM* vm, int argCount) {
-    if (argCount < 1 || argCount > 2) {
-        vm->runtimeError("table.concat expects 1 or 2 arguments");
+    if (argCount < 1) {
+        vm->runtimeError("table.concat expects at least 1 argument");
         return false;
     }
 
-    Value sepVal = (argCount == 2) ? vm->peek(0) : Value::nil();
     Value tableVal = vm->peek(argCount - 1);
-
     if (!tableVal.isTable()) {
-        vm->runtimeError("table.concat expects table as first argument");
+        vm->runtimeError("bad argument #1 to 'concat' (table expected, got " + tableVal.typeToString() + ")");
         return false;
     }
-
     TableObject* table = tableVal.asTableObj();
-    std::string sep = sepVal.isNil() ? "" : vm->getStringValue(sepVal);
+
+    std::string sep = "";
+    if (argCount >= 2) {
+        Value sepVal = vm->peek(argCount - 2);
+        if (!sepVal.isNil()) {
+            sep = vm->getStringValue(sepVal);
+        }
+    }
+
+    int64_t startIdx = 1;
+    if (argCount >= 3) {
+        Value startVal = vm->peek(argCount - 3);
+        if (!startVal.isNil()) {
+            if (!startVal.isInteger() && !startVal.isNumber()) {
+                vm->runtimeError("bad argument #3 to 'concat' (number expected)");
+                return false;
+            }
+            startIdx = startVal.isInteger() ? startVal.asInteger() : static_cast<int64_t>(startVal.asNumber());
+        }
+    }
+
+    int64_t endIdx = static_cast<int64_t>(table->length());
+    if (argCount >= 4) {
+        Value endVal = vm->peek(argCount - 4);
+        if (!endVal.isNil()) {
+            if (!endVal.isInteger() && !endVal.isNumber()) {
+                vm->runtimeError("bad argument #4 to 'concat' (number expected)");
+                return false;
+            }
+            endIdx = endVal.isInteger() ? endVal.asInteger() : static_cast<int64_t>(endVal.asNumber());
+        }
+    }
 
     std::string result;
-    int i = 1;
-    while (true) {
-        Value val = table->get(Value::number(i));
-        if (val.isNil()) break;
-
-        if (!val.isString() && !val.isNumber()) {
-            vm->runtimeError("invalid value ( " + val.typeToString() + ") at index " + std::to_string(i) + " in table for 'concat'");
-            return false;
+    if (startIdx <= endIdx) {
+        int64_t i = startIdx;
+        while (true) {
+            Value val = table->get(vm->makeInteger(i));
+            if (!val.isString() && !val.isNumber() && !val.isInteger()) {
+                vm->runtimeError("invalid value (" + val.typeToString() + ") at index " + std::to_string(i) + " in table for 'concat'");
+                return false;
+            }
+            if (i > startIdx) result += sep;
+            result += vm->getStringValue(val);
+            if (i == endIdx) break;
+            i++;
         }
-
-        if (i > 1) result += sep;
-        result += vm->getStringValue(val);
-        i++;
     }
 
     for (int i = 0; i < argCount; i++) vm->pop();
@@ -172,12 +200,12 @@ bool native_table_pack(VM* vm, int argCount) {
 }
 
 bool native_table_unpack(VM* vm, int argCount) {
-    if (argCount < 1 || argCount > 3) {
-        vm->runtimeError("table.unpack expects 1 to 3 arguments");
+    if (argCount < 1) {
+        vm->runtimeError("table.unpack expects at least 1 argument");
         return false;
     }
     
-    Value endVal = (argCount >= 3) ? vm->peek(0) : Value::nil();
+    Value endVal = (argCount >= 3) ? vm->peek(argCount - 3) : Value::nil();
     Value startVal = (argCount >= 2) ? vm->peek(argCount - 2) : Value::number(1);
     Value tableVal = vm->peek(argCount - 1);
     
@@ -200,6 +228,12 @@ bool native_table_unpack(VM* vm, int argCount) {
         j = static_cast<int>(endVal.asNumber());
     }
     
+    int64_t n = static_cast<int64_t>(j) - static_cast<int64_t>(i) + 1;
+    if (n > 0 && vm->currentCoroutine()->stack.size() + static_cast<size_t>(n) > VM::STACK_LIMIT) {
+        vm->runtimeError("too many results to unpack");
+        return false;
+    }
+
     std::vector<Value> results;
     for (int k = i; k <= j; k++) {
         results.push_back(table->get(Value::number(k)));
@@ -216,12 +250,12 @@ bool native_table_unpack(VM* vm, int argCount) {
 }
 
 bool native_table_sort(VM* vm, int argCount) {
-    if (argCount < 1 || argCount > 2) {
-        vm->runtimeError("table.sort expects 1 or 2 arguments");
+    if (argCount < 1) {
+        vm->runtimeError("table.sort expects at least 1 argument");
         return false;
     }
 
-    Value compVal = (argCount == 2) ? vm->peek(0) : Value::nil();
+    Value compVal = (argCount >= 2) ? vm->peek(argCount - 2) : Value::nil();
     Value tableVal = vm->peek(argCount - 1);
 
     if (!tableVal.isTable()) {
@@ -250,6 +284,12 @@ bool native_table_sort(VM* vm, int argCount) {
     }
 
     bool sortError = false;
+    struct NonYieldableGuard {
+        CoroutineObject* co;
+        NonYieldableGuard(CoroutineObject* c) : co(c) { if (co) co->nonYieldableCount++; }
+        ~NonYieldableGuard() { if (co) co->nonYieldableCount--; }
+    } nyGuard(vm->currentCoroutine());
+
     std::sort(elements.begin(), elements.end(), [&](const Value& a, const Value& b) {
         if (sortError) return false;
 
@@ -299,8 +339,8 @@ bool native_table_sort(VM* vm, int argCount) {
 }
 
 bool native_table_move(VM* vm, int argCount) {
-    if (argCount < 4 || argCount > 5) {
-        vm->runtimeError("table.move expects 4 or 5 arguments");
+    if (argCount < 4) {
+        vm->runtimeError("table.move expects at least 4 arguments");
         return false;
     }
     
@@ -308,7 +348,7 @@ bool native_table_move(VM* vm, int argCount) {
     int f = static_cast<int>(vm->peek(argCount - 2).asNumber());
     int e = static_cast<int>(vm->peek(argCount - 3).asNumber());
     int t = static_cast<int>(vm->peek(argCount - 4).asNumber());
-    Value a2Val = (argCount == 5) ? vm->peek(0) : a1Val;
+    Value a2Val = (argCount >= 5) ? vm->peek(argCount - 5) : a1Val;
     
     if (!a1Val.isTable() || !a2Val.isTable()) {
         vm->runtimeError("table.move expects table arguments");

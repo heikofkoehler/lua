@@ -368,10 +368,24 @@ bool native_string_byte(VM* vm, int argCount) {
 }
 
 bool native_string_char(VM* vm, int argCount) {
-    std::string result = "";
+    std::string result;
+    result.reserve(argCount);
     for (int i = 0; i < argCount; i++) {
         Value v = vm->peek(argCount - 1 - i);
-        result += static_cast<char>(static_cast<int>(v.asNumber()));
+        int64_t c;
+        if (!vm->toInteger(v, c)) {
+            if (v.isNumber()) {
+                vm->runtimeError("bad argument #" + std::to_string(i + 1) + " to 'char' (number has no integer representation)");
+            } else {
+                vm->runtimeError("bad argument #" + std::to_string(i + 1) + " to 'char' (number expected, got " + v.typeToString() + ")");
+            }
+            return false;
+        }
+        if (c < 0 || c > 255) {
+            vm->runtimeError("bad argument #" + std::to_string(i + 1) + " to 'char' (value out of range)");
+            return false;
+        }
+        result.push_back(static_cast<char>(static_cast<unsigned char>(c)));
     }
     for (int i = 0; i < argCount; i++) vm->pop();
     vm->push(Value::runtimeString(vm->internString(result)));
@@ -642,6 +656,12 @@ bool native_string_gsub(VM* vm, int argCount) {
                 }
                 
                 size_t baseFrames = vm->currentCoroutine()->frames.size();
+                struct NonYieldableGuard {
+                    CoroutineObject* co;
+                    NonYieldableGuard(CoroutineObject* c) : co(c) { if (co) co->nonYieldableCount++; }
+                    ~NonYieldableGuard() { if (co) co->nonYieldableCount--; }
+                } nyGuard(vm->currentCoroutine());
+
                 if (vm->callValue(ncaps, 2)) {
                     if (vm->currentCoroutine()->frames.size() > baseFrames) {
                         vm->run(baseFrames);
@@ -687,37 +707,134 @@ bool native_string_format(VM* vm, int argCount) {
 
             // Parse format specifier: %[flags][width][.precision]specifier
             size_t start = i;
-            i++;
-            // Flags
-            while (i < fmt.length() && strchr("-+ #0", fmt[i])) i++;
-            // Width
-            while (i < fmt.length() && isdigit((unsigned char)fmt[i])) i++;
-            // Precision
-            if (i < fmt.length() && fmt[i] == '.') {
-                i++;
-                while (i < fmt.length() && isdigit((unsigned char)fmt[i])) i++;
+            size_t p = i + 1;
+
+            // Collect all characters of the specifier until an alphabetic character or invalid character
+            while (p < fmt.length() && (strchr("-+ #0.", fmt[p]) || isdigit((unsigned char)fmt[p]))) {
+                p++;
+                if (p - start > 50) {
+                    vm->runtimeError("invalid format (too long)");
+                    return false;
+                }
             }
-            
-            if (i >= fmt.length()) {
-                vm->runtimeError("invalid format string");
+            if (p < fmt.length() && isalpha((unsigned char)fmt[p])) {
+                p++;
+            }
+            if (p - start > 50) {
+                vm->runtimeError("invalid format (too long)");
                 return false;
             }
 
-            char spec = fmt[i];
-            std::string sub_fmt = fmt.substr(start, i - start + 1);
-            
+            std::string sub_fmt = fmt.substr(start, p - start);
+            i = p - 1; // update i to point to the end of the specifier
+
+            size_t idx = 1;
+            std::string flags;
+            while (idx < sub_fmt.length() && strchr("-+ #0", sub_fmt[idx])) {
+                flags += sub_fmt[idx++];
+            }
+
+            // Check for repeated flags
+            bool repeated_flags = false;
+            for (size_t f1 = 0; f1 < flags.length(); f1++) {
+                for (size_t f2 = f1 + 1; f2 < flags.length(); f2++) {
+                    if (flags[f1] == flags[f2]) repeated_flags = true;
+                }
+            }
+            if (repeated_flags) {
+                vm->runtimeError("invalid format (repeated flags)");
+                return false;
+            }
+
+            // Width: at most 2 digits
+            int width_digits = 0;
+            while (idx < sub_fmt.length() && isdigit((unsigned char)sub_fmt[idx])) {
+                width_digits++;
+                idx++;
+            }
+            if (width_digits > 2) {
+                vm->runtimeError("invalid conversion specification: '" + sub_fmt + "'");
+                return false;
+            }
+
+            // Precision: optional dot followed by at most 2 digits
+            bool has_precision = false;
+            int prec_digits = 0;
+            if (idx < sub_fmt.length() && sub_fmt[idx] == '.') {
+                has_precision = true;
+                idx++;
+                while (idx < sub_fmt.length() && isdigit((unsigned char)sub_fmt[idx])) {
+                    prec_digits++;
+                    idx++;
+                }
+                if (prec_digits > 2) {
+                    vm->runtimeError("invalid conversion specification: '" + sub_fmt + "'");
+                    return false;
+                }
+            }
+
+            // The next character must be the specifier, and must be the last character of sub_fmt
+            if (idx != sub_fmt.length() - 1) {
+                vm->runtimeError("invalid conversion specification: '" + sub_fmt + "'");
+                return false;
+            }
+
+            char spec = sub_fmt[idx];
+            const char* valid_specs = "cdiouxXfeEgGaApsq";
+            if (strchr(valid_specs, spec) == nullptr) {
+                vm->runtimeError("invalid conversion specification: '" + sub_fmt + "'");
+                return false;
+            }
+
+            if (spec == 'q') {
+                if (!flags.empty() || width_digits > 0 || has_precision) {
+                    vm->runtimeError("specifier '%q' cannot have modifiers");
+                    return false;
+                }
+            } else if (spec == 'c') {
+                if (has_precision || flags.find_first_not_of('-') != std::string::npos) {
+                    vm->runtimeError("invalid conversion specification: '" + sub_fmt + "'");
+                    return false;
+                }
+            } else if (spec == 's') {
+                if (flags.find_first_not_of('-') != std::string::npos) {
+                    vm->runtimeError("invalid conversion specification: '" + sub_fmt + "'");
+                    return false;
+                }
+            } else if (spec == 'p') {
+                if (has_precision || flags.find_first_not_of('-') != std::string::npos) {
+                    vm->runtimeError("invalid conversion specification: '" + sub_fmt + "'");
+                    return false;
+                }
+            } else if (spec == 'd' || spec == 'i' || spec == 'u') {
+                if (flags.find('#') != std::string::npos) {
+                    vm->runtimeError("invalid conversion specification: '" + sub_fmt + "'");
+                    return false;
+                }
+            } else if (spec == 'o' || spec == 'x' || spec == 'X') {
+                if (flags.find('+') != std::string::npos || flags.find(' ') != std::string::npos) {
+                    vm->runtimeError("invalid conversion specification: '" + sub_fmt + "'");
+                    return false;
+                }
+            }
+
             if (argIndex >= argCount) {
-                vm->runtimeError("bad argument to 'format' (no value)");
+                vm->runtimeError("bad argument #" + std::to_string(argIndex + 1) + " to 'format' (no value)");
                 return false;
             }
             Value arg = vm->peek(argCount - 1 - argIndex);
             char buf[1024]; // Large enough for most formatting
 
             if (spec == 's') {
-                std::string s = vm->getStringValue(arg);
+                std::string s;
+                if (!vm->toLString(arg, s)) return false;
                 if (sub_fmt == "%s") {
                     result += s;
                 } else {
+                    if (s.length() != strlen(s.c_str())) {
+                        vm->runtimeError("bad argument #" + std::to_string(argIndex + 1) + " to 'format' (string contains zeros)");
+                        return false;
+                    }
                     int needed = snprintf(nullptr, 0, sub_fmt.c_str(), s.c_str());
                     if (needed >= 0) {
                         std::vector<char> dynBuf(needed + 1);
@@ -730,46 +847,53 @@ bool native_string_format(VM* vm, int argCount) {
                     result += "nil";
                 } else if (arg.isBool()) {
                     result += arg.asBool() ? "true" : "false";
-                } else if (arg.isNumber()) {
-                    if (arg.isInteger()) {
-                        snprintf(buf, sizeof(buf), "%lld", (long long)arg.asInteger());
-                        result += buf;
+                } else if (arg.isInteger()) {
+                    int64_t n = arg.asInteger();
+                    if (n == std::numeric_limits<int64_t>::min()) {
+                        snprintf(buf, sizeof(buf), "0x%llx", (unsigned long long)(uint64_t)n);
                     } else {
-                        snprintf(buf, sizeof(buf), "%.14g", arg.asNumber());
-                        char dec = '.';
-                        struct lconv* lc = localeconv();
-                        if (lc && lc->decimal_point && lc->decimal_point[0] != '\0') {
-                            dec = lc->decimal_point[0];
-                        }
-                        if (dec != '.') {
-                            for (char* p = buf; *p; ++p) {
-                                if (*p == dec) *p = '.';
-                            }
-                        }
-                        if (std::strchr(buf, '.') == nullptr && std::strchr(buf, 'e') == nullptr && std::strchr(buf, 'E') == nullptr) {
-                            result += buf;
-                            result += ".0";
-                        } else {
-                            result += buf;
-                        }
+                        snprintf(buf, sizeof(buf), "%lld", (long long)n);
                     }
-                } else {
+                    result += buf;
+                } else if (arg.isFloat()) {
+                    double d = arg.asNumber();
+                    if (std::isnan(d)) {
+                        result += "(0/0)";
+                    } else if (std::isinf(d)) {
+                        if (d > 0) result += "1e9999";
+                        else result += "-1e9999";
+                    } else {
+                        snprintf(buf, sizeof(buf), "%a", d);
+                        for (char* p = buf; *p; ++p) {
+                            if (*p == ',') *p = '.';
+                        }
+                        result += buf;
+                    }
+                } else if (arg.isString()) {
                     std::string s = vm->getStringValue(arg);
                     result += '"';
-                    for (char c : s) {
+                    size_t len = s.length();
+                    for (size_t k = 0; k < len; k++) {
+                        char c = s[k];
                         if (c == '"' || c == '\\' || c == '\n') {
                             result += '\\';
-                            if (c == '\n') result += 'n';
-                            else result += c;
+                            result += c;
                         } else if (iscntrl((unsigned char)c)) {
-                            char b2[5];
-                            snprintf(b2, sizeof(b2), "\\%03d", (unsigned char)c);
+                            char b2[10];
+                            if (k + 1 < len && isdigit((unsigned char)s[k + 1])) {
+                                snprintf(b2, sizeof(b2), "\\%03d", (unsigned char)c);
+                            } else {
+                                snprintf(b2, sizeof(b2), "\\%d", (unsigned char)c);
+                            }
                             result += b2;
                         } else {
                             result += c;
                         }
                     }
                     result += '"';
+                } else {
+                    vm->runtimeError("bad argument #" + std::to_string(argIndex) + " to 'format' (value has no literal form)");
+                    return false;
                 }
             } else if (spec == 'd' || spec == 'i' || spec == 'o' || spec == 'u' || spec == 'x' || spec == 'X') {
                 if (!arg.isNumber()) { vm->runtimeError("number expected for %" + std::string(1, spec)); return false; }
@@ -786,12 +910,16 @@ bool native_string_format(VM* vm, int argCount) {
                 snprintf(buf, sizeof(buf), sub_fmt.c_str(), (int)arg.asInteger());
                 result += buf;
             } else if (spec == 'p') {
-                if (arg.isNil()) {
-                    snprintf(buf, sizeof(buf), "(null)");
-                } else if (arg.isObj()) {
-                    snprintf(buf, sizeof(buf), "0x%llx", (unsigned long long)reinterpret_cast<uintptr_t>(arg.asObj()));
+                const void* ptr = vm->valueToPointer(arg);
+                if (ptr == nullptr) {
+                    std::string null_fmt = sub_fmt;
+                    size_t p_pos = null_fmt.rfind('p');
+                    if (p_pos != std::string::npos) {
+                        null_fmt[p_pos] = 's';
+                    }
+                    snprintf(buf, sizeof(buf), null_fmt.c_str(), "(null)");
                 } else {
-                    snprintf(buf, sizeof(buf), "0x%llx", (unsigned long long)arg.asInteger());
+                    snprintf(buf, sizeof(buf), sub_fmt.c_str(), ptr);
                 }
                 result += buf;
             } else {
@@ -812,6 +940,14 @@ bool native_string_format(VM* vm, int argCount) {
 // Helper for string.pack/unpack
 static size_t get_spec_size(const std::string& fmt, size_t& i, char spec, int& size) {
     size = 0;
+    if (spec == 'c') {
+        size = 0;
+        while (i + 1 < fmt.length() && isdigit((unsigned char)fmt[i+1])) {
+            size = size * 10 + (fmt[++i] - '0');
+        }
+        return size;
+    }
+
     if (spec == 'i' || spec == 'I') {
         if (i + 1 < fmt.length() && isdigit((unsigned char)fmt[i+1])) {
             size = 0;
@@ -819,7 +955,7 @@ static size_t get_spec_size(const std::string& fmt, size_t& i, char spec, int& s
                 size = size * 10 + (fmt[++i] - '0');
             }
         } else {
-            size = sizeof(int64_t); // 8 bytes (lua_Integer)
+            size = sizeof(int); // 4 bytes (native int)
         }
         return size;
     }
@@ -876,7 +1012,7 @@ bool native_string_packsize(VM* vm, int argCount) {
         int size;
         size_t specSize = get_spec_size(fmt, i, spec, size);
         if (specSize > 0 && spec != 'x') {
-            size_t align = std::min(specSize, currentAlignment);
+            size_t align = (spec == 'c') ? 1 : std::min(specSize, currentAlignment);
             maxAlignment = std::max(maxAlignment, align);
             apply_alignment(total, align);
             total += specSize;
@@ -965,13 +1101,23 @@ bool native_string_pack(VM* vm, int argCount) {
             Value val = vm->peek(argCount - 1 - argIdx);
             
             if (specSize > 0) {
-                size_t align = std::min(specSize, currentAlignment);
+                size_t align = (spec == 'c') ? 1 : std::min(specSize, currentAlignment);
                 maxAlignment = std::max(maxAlignment, align);
                 size_t offset = result.length();
                 apply_alignment(offset, align, &result);
                 
                 size_t start = result.length();
-                if (spec == 'b') {
+                if (spec == 'c') {
+                    std::string s = vm->getStringValue(val);
+                    if (s.length() > specSize) {
+                        vm->runtimeError("string longer than given size");
+                        return false;
+                    }
+                    result.append(s);
+                    for (size_t p = s.length(); p < specSize; p++) {
+                        result.push_back('\0');
+                    }
+                } else if (spec == 'b') {
                     int8_t v = static_cast<int8_t>(val.asNumber());
                     result.append(reinterpret_cast<char*>(&v), 1);
                 } else if (spec == 'B') {
@@ -1107,32 +1253,40 @@ bool native_string_unpack(VM* vm, int argCount) {
         int size;
         size_t specSize = get_spec_size(fmt, i, spec, size);
         if (specSize > 0) {
-            size_t align = std::min(specSize, currentAlignment);
+            size_t align = (spec == 'c') ? 1 : std::min(specSize, currentAlignment);
             maxAlignment = std::max(maxAlignment, align);
             apply_alignment(current, align);
             
             if (current + specSize > data.length()) { vm->runtimeError("data string too short"); return false; }
-            
+
+            if (spec == 'c') {
+                std::string s = data.substr(current, specSize);
+                vm->push(Value::runtimeString(vm->internString(s)));
+                current += specSize;
+                results++;
+                continue;
+            }
+
             char buf[8];
             std::memcpy(buf, &data[current], specSize);
             if (!littleEndian && specSize > 1) swap_endian(buf, specSize);
 
             if (spec == 'b') {
-                vm->push(Value::number(static_cast<signed char>(buf[0])));
+                vm->push(Value::integer(static_cast<int64_t>(static_cast<signed char>(buf[0]))));
             } else if (spec == 'B') {
-                vm->push(Value::number(static_cast<unsigned char>(buf[0])));
+                vm->push(Value::integer(static_cast<int64_t>(static_cast<unsigned char>(buf[0]))));
             } else if (spec == 'h') {
                 int16_t v; std::memcpy(&v, buf, 2);
-                vm->push(Value::number(v));
+                vm->push(Value::integer(v));
             } else if (spec == 'H') {
                 uint16_t v; std::memcpy(&v, buf, 2);
-                vm->push(Value::number(v));
+                vm->push(Value::integer(v));
             } else if (spec == 'l') {
                 int32_t v; std::memcpy(&v, buf, sizeof(int32_t));
                 vm->push(Value::integer(v));
             } else if (spec == 'L') {
                 uint32_t v; std::memcpy(&v, buf, sizeof(uint32_t));
-                vm->push(Value::number(static_cast<double>(v)));
+                vm->push(Value::integer(v));
             } else if (spec == 'i') {
                 if (size == 1) {
                     vm->push(Value::integer(static_cast<int8_t>(buf[0])));
@@ -1154,7 +1308,7 @@ bool native_string_unpack(VM* vm, int argCount) {
                     vm->push(Value::integer(v));
                 } else if (size == 4) {
                     uint32_t v; std::memcpy(&v, buf, 4);
-                    vm->push(Value::number(v));
+                    vm->push(Value::integer(static_cast<int64_t>(v)));
                 } else {
                     uint64_t v; std::memcpy(&v, buf, 8);
                     vm->push(Value::number(static_cast<double>(v)));
@@ -1240,7 +1394,11 @@ bool native_string_dump(VM* vm, int argCount) {
 bool native_string_rep(VM* vm, int argCount) {
     if (argCount < 2) { vm->runtimeError("string.rep expects at least 2 arguments"); return false; }
     std::string s = vm->getStringValue(vm->peek(argCount - 1));
-    int n = static_cast<int>(vm->peek(argCount - 2).asNumber());
+    int64_t n;
+    if (!vm->toInteger(vm->peek(argCount - 2), n)) {
+        vm->runtimeError("bad argument #2 to 'rep' (number has no integer representation)");
+        return false;
+    }
     std::string sep = (argCount >= 3) ? vm->getStringValue(vm->peek(argCount - 3)) : "";
 
     if (n <= 0) {
@@ -1249,11 +1407,30 @@ bool native_string_rep(VM* vm, int argCount) {
         return true;
     }
 
-    std::string result;
-    size_t totalLen = (s.length() * n) + (sep.length() * (n - 1));
-    result.reserve(totalLen);
+    size_t l = s.length();
+    size_t lsep = sep.length();
+    if (l + lsep == 0) {
+        for (int i = 0; i < argCount; i++) vm->pop();
+        vm->push(Value::runtimeString(vm->internString("")));
+        return true;
+    }
 
-    for (int i = 0; i < n; i++) {
+    constexpr size_t MAX_SIZE = (size_t)(~((size_t)0)) / 2;
+    if (l + lsep < l || (size_t)n > (MAX_SIZE - lsep) / (l + lsep)) {
+        vm->runtimeError("resulting string too large");
+        return false;
+    }
+
+    size_t totalLen = (l * n) + (lsep * (n - 1));
+    std::string result;
+    try {
+        result.reserve(totalLen);
+    } catch (const std::exception&) {
+        vm->runtimeError("resulting string too large");
+        return false;
+    }
+
+    for (int64_t i = 0; i < n; i++) {
         result += s;
         if (i < n - 1) result += sep;
     }

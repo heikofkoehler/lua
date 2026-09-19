@@ -6,6 +6,7 @@
 #include "value/userdata.hpp"
 #include <cstring>
 #include <algorithm>
+#include <cmath>
 
 // State manipulation
 lua_State *lua_newstate(void) {
@@ -285,6 +286,14 @@ void lua_settable(lua_State *L, int idx) {
     int abs_idx = to_abs_idx(L, idx);
     Value val = L->vm->pop();
     Value key = L->vm->pop();
+    if (key.isNil()) {
+        L->vm->runtimeError("table index is nil");
+        return;
+    }
+    if (key.isFloat() && std::isnan(key.asNumber())) {
+        L->vm->runtimeError("table index is NaN");
+        return;
+    }
     Value* t_ptr = get_val(L, abs_idx);
     if (t_ptr && t_ptr->isTable()) {
         t_ptr->asTableObj()->set(key, val);

@@ -221,7 +221,13 @@ bool native_debug_getupvalue(VM* vm, int argCount) {
     
     if (index >= 1 && index <= static_cast<int>(closure->upvalueCount())) {
         UpvalueObject* upvalue = closure->getUpvalueObj(index - 1);
-        std::string name = (index == 1) ? "_ENV" : ("upvalue_" + std::to_string(index));
+        std::string name;
+        if (closure->function() && static_cast<size_t>(index - 1) < closure->function()->upvalueNames().size()) {
+            name = closure->function()->getUpvalueName(index - 1);
+        }
+        if (name.empty()) {
+            name = (index == 1) ? "_ENV" : ("upvalue_" + std::to_string(index));
+        }
         
         vm->pop(); vm->pop();
         vm->push(Value::runtimeString(vm->internString(name)));
@@ -251,7 +257,13 @@ bool native_debug_setupvalue(VM* vm, int argCount) {
     
     if (index >= 1 && index <= static_cast<int>(closure->upvalueCount())) {
         UpvalueObject* upvalue = closure->getUpvalueObj(index - 1);
-        std::string name = (index == 1) ? "_ENV" : ("upvalue_" + std::to_string(index));
+        std::string name;
+        if (closure->function() && static_cast<size_t>(index - 1) < closure->function()->upvalueNames().size()) {
+            name = closure->function()->getUpvalueName(index - 1);
+        }
+        if (name.empty()) {
+            name = (index == 1) ? "_ENV" : ("upvalue_" + std::to_string(index));
+        }
         upvalue->set(vm->currentCoroutine()->stack, val);
         
         vm->pop(); vm->pop(); vm->pop();
@@ -459,8 +471,12 @@ void registerDebugLibrary(VM* vm, TableObject* debugTable) {
                     line = func->chunk()->getLine(frame.ip - 1);
                 }
 
-                result += source + ":" + (line != -1 ? std::to_string(line) : "?") + ": in function '";
-                result += func->name() + "'";
+                if (frame.isCloseMetamethod) {
+                    result += source + ":" + (line != -1 ? std::to_string(line) : "?") + ": in metamethod 'close'";
+                } else {
+                    result += source + ":" + (line != -1 ? std::to_string(line) : "?") + ": in function '";
+                    result += func->name() + "'";
+                }
             } else {
                 result += "[C function]: in ?";
             }
@@ -485,12 +501,14 @@ void registerDebugLibrary(VM* vm, TableObject* debugTable) {
         ClosureObject* closure = nullptr;
         int line = -1;
         std::string source = "=[C]";
+        CallFrame* targetFrame = nullptr;
 
         if (f.isNumber()) {
             int level = static_cast<int>(f.asNumber());
             // level 1 in Lua is the caller of getinfo, which is getFrame(level) in our VM
-            CallFrame* frame = vm->getFrame(level);
-            if (frame) {
+            targetFrame = vm->getFrame(level);
+            if (targetFrame) {
+                CallFrame* frame = targetFrame;
                 if (frame->isC) {
                     info->set("what", Value::runtimeString(vm->internString("C")));
                     info->set("source", Value::runtimeString(vm->internString("=[C]")));
@@ -503,8 +521,27 @@ void registerDebugLibrary(VM* vm, TableObject* debugTable) {
                     info->set("isvararg", Value::boolean(true));
                     if (!frame->cFunc.isNil()) {
                         info->set("func", frame->cFunc);
+                        std::string cname = "?";
+                        if (frame->cFunc.isNativeFunction()) {
+                            std::string n = vm->getNativeFunctionName(frame->cFunc.asNativeFunctionIndex());
+                            if (!n.empty()) cname = n;
+                        }
+                        if (cname == "?") {
+                            for (const auto& [gname, gval] : vm->globals()) {
+                                if (gval == frame->cFunc) {
+                                    cname = gname;
+                                    break;
+                                }
+                            }
+                        }
+                        info->set("name", Value::runtimeString(vm->internString(cname)));
+                    } else {
+                        info->set("name", Value::runtimeString(vm->internString("?")));
                     }
-                    info->set("name", Value::runtimeString(vm->internString("?")));
+                    if (what.find('t') != std::string::npos) {
+                        info->set("istailcall", Value::boolean(frame->isTailCall));
+                        info->set("extraargs", Value::integer(frame->extraargs));
+                    }
                     for(int i=0; i<argCount; i++) vm->pop();
                     vm->push(Value::table(info));
                     vm->currentCoroutine()->lastResultCount = 1;
@@ -529,6 +566,10 @@ void registerDebugLibrary(VM* vm, TableObject* debugTable) {
             info->set("what", Value::runtimeString(vm->internString("C")));
             info->set("source", Value::runtimeString(vm->internString("=[C]")));
             info->set("short_src", Value::runtimeString(vm->internString("[C]")));
+            if (what.find('t') != std::string::npos) {
+                info->set("istailcall", Value::boolean(false));
+                info->set("extraargs", Value::integer(0));
+            }
             for(int i=0; i<argCount; i++) vm->pop();
             vm->push(Value::table(info));
             vm->currentCoroutine()->lastResultCount = 1;
@@ -537,7 +578,12 @@ void registerDebugLibrary(VM* vm, TableObject* debugTable) {
 
         if (closure) {
             FunctionObject* func = closure->function();
-            info->set("name", Value::runtimeString(vm->internString(func->name())));
+            std::string fname = func->name();
+            if (targetFrame && targetFrame->isCloseMetamethod) {
+                fname = "close";
+                info->set("namewhat", Value::runtimeString(vm->internString("metamethod")));
+            }
+            info->set("name", Value::runtimeString(vm->internString(fname)));
             info->set("what", Value::runtimeString(vm->internString("Lua")));
             info->set("source", Value::runtimeString(vm->internString(source)));
 
@@ -556,12 +602,15 @@ void registerDebugLibrary(VM* vm, TableObject* debugTable) {
                 info->set("currentline", Value::integer(line));
             }
 
-            // For now, our FunctionObject doesn't store linedefined/lastlinedefined.
-            // We'll set them to -1 or use the first instruction's line.
-            info->set("linedefined", Value::integer(1)); // Placeholder
-            info->set("lastlinedefined", Value::integer(-1));
+            info->set("linedefined", Value::integer(func->lineDefined()));
+            info->set("lastlinedefined", Value::integer(func->lastLineDefined()));
 
             info->set("func", Value::closure(closure));
+        }
+
+        if (what.find('t') != std::string::npos) {
+            info->set("istailcall", Value::boolean(targetFrame ? targetFrame->isTailCall : false));
+            info->set("extraargs", Value::integer(targetFrame ? targetFrame->extraargs : 0));
         }
 
         for(int i=0; i<argCount; i++) vm->pop();

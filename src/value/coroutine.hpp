@@ -22,6 +22,16 @@ struct CallFrame {
     bool isHook = false;        // TRUE if this frame is a debug hook
     bool isC = false;           // TRUE if this frame is a C/native function
     Value cFunc = Value::nil(); // The C function value
+    Value errorHandler = Value::nil(); // Error handler for xpcall
+    bool isCloseMetamethod = false;
+    bool isReturning = false;
+    bool isErrorUnwinding = false;
+    bool isTailCall = false;
+    int extraargs = 0;
+};
+
+struct CoroutineCloseSelfException {
+    Value errorObj = Value::nil();
 };
 
 class CoroutineObject : public GCObject {
@@ -36,10 +46,13 @@ public:
     CoroutineObject()
         : GCObject(GCObject::Type::COROUTINE), 
           chunk(nullptr), rootChunk(nullptr), 
-          status(Status::SUSPENDED), yieldCount(0), retCount(0), lastResultCount(0), caller(nullptr) {
+          status(Status::SUSPENDED), yieldCount(0), retCount(0), lastResultCount(0),
+          initialFunc(Value::nil()), nonYieldableCount(0), caller(nullptr),
+          isClosing(false) {
         stack.reserve(256);
         frames.reserve(64);
     }
+    ~CoroutineObject();
 
     // Coroutine state
     std::vector<Value> stack;
@@ -53,7 +66,13 @@ public:
     uint8_t retCount; // Number of values expected to be returned by yield
     size_t lastResultCount; // Number of results from last multires call
     std::vector<Value> yieldedValues;
+    std::vector<std::vector<Value>> pendingReturns;
+    Value closeError = Value::nil();
+    Value initialFunc = Value::nil();
+    int nonYieldableCount = 0;
+    int nCcalls = 0; // Number of nested C/native calls
     CoroutineObject* caller; // The coroutine that resumed this one
+    bool isClosing = false;
 
     // Hooking support
     Value hook = Value::nil();

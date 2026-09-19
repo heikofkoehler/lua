@@ -15,7 +15,7 @@ assert_eq(string.format("%x", 255), "ff")
 assert_eq(string.format("%X", 255), "FF")
 
 print("=== Testing string.format %q corner cases ===")
-assert_eq(string.format("%q", "a\nb"), [["a\nb"]])
+assert_eq(string.format("%q", "a\nb"), "\"a\\\nb\"")
 assert_eq(string.format("%q", 'a"b'), [["a\"b"]])
 assert_eq(string.format("%q", "a\\b"), [["a\\b"]])
 -- Lua 5.4 %q handles nil, booleans, and numbers

@@ -154,7 +154,12 @@ std::unique_ptr<StmtNode> Parser::statement() {
         }
         return localDeclaration();
     }
-    if (match(TokenType::GLOBAL)) {
+    if (check(TokenType::GLOBAL)) {
+        TokenType next = peekNext().type;
+        if (next == TokenType::EQUAL || next == TokenType::COMMA) {
+            return assignmentOrExpression();
+        }
+        advance();
         return globalDeclaration();
     }
     if (match(TokenType::IF)) {
@@ -269,6 +274,14 @@ std::unique_ptr<StmtNode> Parser::assignmentOrExpression() {
             values.push_back(expression());
         } while (match(TokenType::COMMA));
 
+        if (values.size() == 1) {
+            if (auto* var = dynamic_cast<VariableExprNode*>(targets[0].get())) {
+                return std::make_unique<AssignmentStmtNode>(var->name(), std::move(values[0]), line);
+            } else if (auto* idx = dynamic_cast<IndexExprNode*>(targets[0].get())) {
+                return std::make_unique<IndexAssignmentStmtNode>(idx->releaseTable(), idx->releaseKey(), std::move(values[0]), line);
+            }
+        }
+
         return std::make_unique<MultipleAssignmentStmtNode>(
             std::move(targets), std::move(values), line
         );
@@ -304,19 +317,33 @@ Parser::Attribute Parser::attribute() {
 std::unique_ptr<StmtNode> Parser::localDeclaration() {
     int line = previous_.line;
 
+    // Check for optional default attribute after 'local', e.g. local <const> a, b
+    Attribute defaultAttr = attribute();
+
     // Parse variable list: local a <attr>, b <attr>, c
     std::vector<MultipleLocalDeclStmtNode::VarInfo> vars;
+    int closeCount = 0;
 
     do {
-        if (!check(TokenType::IDENTIFIER)) {
+        if (!check(TokenType::IDENTIFIER) && !check(TokenType::GLOBAL)) {
             errorAtCurrent("Expected variable name");
             return nullptr;
         }
         std::string name = current_.lexeme;
         advance();
         Attribute attr = attribute();
-        vars.push_back({name, attr.isConstant, attr.isClose});
+        bool isClose = defaultAttr.isClose || attr.isClose;
+        bool isConstant = defaultAttr.isConstant || attr.isConstant || isClose;
+        if (isClose) {
+            closeCount++;
+        }
+        vars.push_back({name, isConstant, isClose});
     } while (match(TokenType::COMMA));
+
+    if (closeCount > 1) {
+        error("multiple to-be-closed variables in a declaration");
+        return nullptr;
+    }
 
     // Parse initializer list (if present)
     std::vector<std::unique_ptr<ExprNode>> initializers;
@@ -345,27 +372,32 @@ std::unique_ptr<StmtNode> Parser::localDeclaration() {
 std::unique_ptr<StmtNode> Parser::globalDeclaration() {
     int line = previous_.line;
 
-    // Allow `global function name ...` syntax which simply declares a global function
-    if (match(TokenType::FUNCTION)) {
-        // Now previous_ is the FUNCTION token; delegate to standard function parser
-        return functionDeclaration();
-    }
-
-    // Check for global <const> *
+    // Check for leading attribute: global <const> ...
+    bool defaultConst = false;
     if (match(TokenType::LESS)) {
         consume(TokenType::IDENTIFIER, "Expected attribute name");
-        bool isConstant = (previous_.lexeme == "const");
-        consume(TokenType::GREATER, "Expected '>' after attribute");
-        
-        if (match(TokenType::STAR)) {
-            // global <attr> *
-            return std::make_unique<GlobalDeclStmtNode>("*", isConstant, line);
-        } else {
-            // This was probably meant for a variable but we don't allow it yet 
-            // without a name before the attribute in this simple implementation
-            error("Expected '*' or variable name before attribute");
+        if (previous_.lexeme == "close") {
+            error("global variables cannot be to-be-closed");
             return nullptr;
         }
+        defaultConst = (previous_.lexeme == "const");
+        consume(TokenType::GREATER, "Expected '>' after attribute");
+    }
+
+    // Check for global [*] or global <const> *
+    if (match(TokenType::STAR)) {
+        return std::make_unique<GlobalDeclStmtNode>("*", defaultConst, line);
+    }
+
+    // Check for global none
+    if (check(TokenType::IDENTIFIER) && current_.lexeme == "none") {
+        advance();
+        return std::make_unique<GlobalDeclStmtNode>("none", false, line);
+    }
+
+    // Allow `global function name ...` syntax which declares a global function
+    if (match(TokenType::FUNCTION)) {
+        return functionDeclaration(true /* isGlobal */);
     }
 
     // Parse variable list: global a <attr>, b <attr>, c
@@ -373,24 +405,38 @@ std::unique_ptr<StmtNode> Parser::globalDeclaration() {
 
     do {
         if (match(TokenType::STAR)) {
-            vars.push_back({"*", false});
+            vars.push_back({"*", defaultConst});
         } else {
-            if (!check(TokenType::IDENTIFIER)) {
+            if (!check(TokenType::IDENTIFIER) && !check(TokenType::GLOBAL)) {
                 errorAtCurrent("Expected variable name");
                 return nullptr;
             }
             std::string name = current_.lexeme;
             advance();
             Attribute attr = attribute();
-            vars.push_back({name, attr.isConstant});
+            if (attr.isClose) {
+                error("global variables cannot be to-be-closed");
+                return nullptr;
+            }
+            bool isConstant = defaultConst || attr.isConstant;
+            vars.push_back({name, isConstant});
         }
     } while (match(TokenType::COMMA));
 
-    if (vars.size() == 1) {
-        return std::make_unique<GlobalDeclStmtNode>(vars[0].name, vars[0].isConstant, line);
+    // Parse initializer list (if present): global a, b = 1, 2
+    std::vector<std::unique_ptr<ExprNode>> initializers;
+    if (match(TokenType::EQUAL)) {
+        do {
+            initializers.push_back(expression());
+        } while (match(TokenType::COMMA));
     }
 
-    return std::make_unique<MultipleGlobalDeclStmtNode>(std::move(vars), line);
+    if (vars.size() == 1) {
+        auto init = initializers.empty() ? nullptr : std::move(initializers[0]);
+        return std::make_unique<GlobalDeclStmtNode>(vars[0].name, vars[0].isConstant, line, std::move(init));
+    }
+
+    return std::make_unique<MultipleGlobalDeclStmtNode>(std::move(vars), line, std::move(initializers));
 }
 
 std::unique_ptr<StmtNode> Parser::localFunctionDeclaration() {
@@ -404,7 +450,7 @@ std::unique_ptr<StmtNode> Parser::localFunctionDeclaration() {
     advance();
 
     FunctionBody fb = parseFunctionBody("after function name");
-    auto funcExpr = std::make_unique<FunctionExprNode>(std::move(fb.params), std::move(fb.body), fb.hasVarargs, line);
+    auto funcExpr = std::make_unique<FunctionExprNode>(std::move(fb.params), std::move(fb.body), fb.hasVarargs, line, std::move(fb.varargName), fb.lastLineDefined);
 
     return std::make_unique<LocalDeclStmtNode>(name, std::move(funcExpr), line, true);
 }
@@ -549,8 +595,13 @@ std::unique_ptr<StmtNode> Parser::forStatement() {
              return nullptr;
         }
 
-        // Parse iterator expression
-        auto iterator = expression();
+        // Parse iterator expression list (explist)
+        std::vector<std::unique_ptr<ExprNode>> iterators;
+        do {
+            auto expr = expression();
+            if (!expr) return nullptr;
+            iterators.push_back(std::move(expr));
+        } while (match(TokenType::COMMA));
 
         // Expect 'do'
         consume(TokenType::DO, "Expected 'do' after iterator expression");
@@ -563,16 +614,16 @@ std::unique_ptr<StmtNode> Parser::forStatement() {
 
         consume(TokenType::END, "Expected 'end' after for body");
 
-        return std::make_unique<ForInStmtNode>(std::move(vars), std::move(iterator),
+        return std::make_unique<ForInStmtNode>(std::move(vars), std::move(iterators),
                                                std::move(body), line);
     }
 }
 
-std::unique_ptr<StmtNode> Parser::functionDeclaration() {
+std::unique_ptr<StmtNode> Parser::functionDeclaration(bool isGlobal) {
     int line = previous_.line;
 
     // Parse function name: ID {'.' ID} [':' ID]
-    if (!match(TokenType::IDENTIFIER)) {
+    if (!match(TokenType::IDENTIFIER) && !match(TokenType::GLOBAL)) {
         errorAtCurrent("Expected function name");
         return nullptr;
     }
@@ -586,7 +637,10 @@ std::unique_ptr<StmtNode> Parser::functionDeclaration() {
             table = std::make_unique<IndexExprNode>(std::move(table),
                         std::make_unique<StringLiteralNode>(field, line), line);
         }
-        consume(TokenType::IDENTIFIER, "<name> expected");
+        if (!match(TokenType::IDENTIFIER) && !match(TokenType::GLOBAL)) {
+            errorAtCurrent("<name> expected");
+            return nullptr;
+        }
         field = previous_.lexeme;
     }
 
@@ -598,7 +652,10 @@ std::unique_ptr<StmtNode> Parser::functionDeclaration() {
             table = std::make_unique<IndexExprNode>(std::move(table),
                         std::make_unique<StringLiteralNode>(field, line), line);
         }
-        consume(TokenType::IDENTIFIER, "<name> expected");
+        if (!match(TokenType::IDENTIFIER) && !match(TokenType::GLOBAL)) {
+            errorAtCurrent("<name> expected");
+            return nullptr;
+        }
         field = previous_.lexeme;
         isMethod = true;
     }
@@ -608,12 +665,14 @@ std::unique_ptr<StmtNode> Parser::functionDeclaration() {
         fb.params.insert(fb.params.begin(), "self");
     }
 
-    auto funcExpr = std::make_unique<FunctionExprNode>(std::move(fb.params), std::move(fb.body), fb.hasVarargs, line);
+    auto funcExpr = std::make_unique<FunctionExprNode>(std::move(fb.params), std::move(fb.body), fb.hasVarargs, line, std::move(fb.varargName), fb.lastLineDefined);
 
     if (table) {
         return std::make_unique<IndexAssignmentStmtNode>(std::move(table),
                     std::make_unique<StringLiteralNode>(field, line),
                     std::move(funcExpr), line);
+    } else if (isGlobal) {
+        return std::make_unique<GlobalDeclStmtNode>(field, false, line, std::move(funcExpr), true /* isFunction */);
     } else {
         return std::make_unique<AssignmentStmtNode>(field, std::move(funcExpr), line);
     }
@@ -625,12 +684,17 @@ Parser::FunctionBody Parser::parseFunctionBody(const std::string& context) {
 
     FunctionBody fb;
     fb.hasVarargs = false;
+    fb.varargName = "";
 
     if (!check(TokenType::RIGHT_PAREN)) {
         do {
             // Check for varargs (...)
             if (match(TokenType::DOT_DOT_DOT)) {
                 fb.hasVarargs = true;
+                if (check(TokenType::IDENTIFIER)) {
+                    fb.varargName = current_.lexeme;
+                    advance();
+                }
                 break;  // ... must be last parameter
             }
 
@@ -651,6 +715,7 @@ Parser::FunctionBody Parser::parseFunctionBody(const std::string& context) {
     }
 
     consume(TokenType::END, "Expected 'end' after function body");
+    fb.lastLineDefined = previous_.line;
 
     return fb;
 }
@@ -672,6 +737,9 @@ std::unique_ptr<StmtNode> Parser::returnStatement() {
         // Parse additional comma-separated expressions
         while (match(TokenType::COMMA)) {
             values.push_back(expression());
+            if (values.size() > 254) {
+                error("too many returns");
+            }
         }
     }
 
@@ -874,6 +942,11 @@ std::unique_ptr<ExprNode> Parser::power() {
 std::unique_ptr<ExprNode> Parser::postfix() {
     auto expr = primary();
 
+    if (!dynamic_cast<VariableExprNode*>(expr.get()) && 
+        !dynamic_cast<GroupExprNode*>(expr.get())) {
+        return expr;
+    }
+
     // Handle postfix operations: function calls, table indexing, and field access
     while (true) {
         int line = current_.line;
@@ -909,16 +982,20 @@ std::unique_ptr<ExprNode> Parser::postfix() {
         }
         // Field access with dot notation: expr.field
         else if (match(TokenType::DOT)) {
-            consume(TokenType::IDENTIFIER, "<name> expected");
-            if (hadError_) return expr;
+            if (!match(TokenType::IDENTIFIER) && !match(TokenType::GLOBAL)) {
+                errorAtCurrent("<name> expected");
+                return expr;
+            }
             std::string fieldName = previous_.lexeme;
             auto key = std::make_unique<StringLiteralNode>(fieldName, line);
             expr = std::make_unique<IndexExprNode>(std::move(expr), std::move(key), line);
         }
         // Method call: expr:method(args), expr:method{table}, expr:method"string"
         else if (match(TokenType::COLON)) {
-            consume(TokenType::IDENTIFIER, "<name> expected");
-            if (hadError_) return expr;
+            if (!match(TokenType::IDENTIFIER) && !match(TokenType::GLOBAL)) {
+                errorAtCurrent("<name> expected");
+                return expr;
+            }
             std::string methodName = previous_.lexeme;
             
             std::vector<std::unique_ptr<ExprNode>> args;
@@ -984,17 +1061,27 @@ std::unique_ptr<ExprNode> Parser::primary() {
         } else {
             try {
                 if (isHex) {
-                    char* end = nullptr;
-                    unsigned long long uval = std::strtoull(lexeme.c_str(), &end, 16);
-                    if (end && *end == '\0') {
-                        int64_t ival = static_cast<int64_t>(uval);
+                    const char* cur = lexeme.c_str() + 2;
+                    uint64_t a = 0;
+                    bool valid = true;
+                    while (*cur) {
+                        char c = *cur++;
+                        int digit = 0;
+                        if (c >= '0' && c <= '9') digit = c - '0';
+                        else if (c >= 'a' && c <= 'f') digit = c - 'a' + 10;
+                        else if (c >= 'A' && c <= 'F') digit = c - 'A' + 10;
+                        else { valid = false; break; }
+                        a = (a << 4) | static_cast<uint64_t>(digit);
+                    }
+                    if (valid) {
+                        int64_t ival = static_cast<int64_t>(a);
                         return std::make_unique<LiteralNode>(ival, line);
                     }
                 }
                 char* end = nullptr;
                 errno = 0;
                 unsigned long long uval = std::strtoull(lexeme.c_str(), &end, 10);
-                if (end && *end == '\0' && errno != ERANGE) {
+                if (end && *end == '\0' && errno != ERANGE && uval <= 9223372036854775807ULL) {
                     int64_t ival = static_cast<int64_t>(uval);
                     return std::make_unique<LiteralNode>(ival, line);
                 }
@@ -1038,7 +1125,7 @@ std::unique_ptr<ExprNode> Parser::primary() {
                     entries.push_back(std::move(entry));
                 }
                 // Check for key = value syntax (identifier followed by =)
-                else if (check(TokenType::IDENTIFIER) && peekNext().type == TokenType::EQUAL) {
+                else if ((check(TokenType::IDENTIFIER) || check(TokenType::GLOBAL)) && peekNext().type == TokenType::EQUAL) {
                     // Record-style entry: key = value
                     Token keyToken = current_;
                     advance();  // consume identifier
@@ -1064,7 +1151,7 @@ std::unique_ptr<ExprNode> Parser::primary() {
     }
 
     // Variable reference (function calls handled in postfix())
-    if (match(TokenType::IDENTIFIER)) {
+    if (match(TokenType::IDENTIFIER) || match(TokenType::GLOBAL)) {
         std::string name = previous_.lexeme;
         return std::make_unique<VariableExprNode>(name, line);
     }
@@ -1072,7 +1159,7 @@ std::unique_ptr<ExprNode> Parser::primary() {
     // Anonymous function
     if (match(TokenType::FUNCTION)) {
         FunctionBody fb = parseFunctionBody("for anonymous function");
-        return std::make_unique<FunctionExprNode>(std::move(fb.params), std::move(fb.body), fb.hasVarargs, line);
+        return std::make_unique<FunctionExprNode>(std::move(fb.params), std::move(fb.body), fb.hasVarargs, line, std::move(fb.varargName), fb.lastLineDefined);
     }
 
     // Grouping
@@ -1082,6 +1169,6 @@ std::unique_ptr<ExprNode> Parser::primary() {
         return std::make_unique<GroupExprNode>(std::move(expr), line);
     }
 
-    errorAtCurrent("Expected expression");
+    errorAtCurrent("unexpected symbol");
     return nullptr;
 }

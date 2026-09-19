@@ -25,40 +25,47 @@ bool native_os_clock(VM* vm, int argCount) {
     return true;
 }
 
-// Helper to convert a Lua value to an integer, verifying it's a whole number.
-// On error the function will push a suitable runtime error message and return false.
-static bool getIntField(VM* vm, TableObject* tbl, const char* name, bool required, long long& out) {
+static bool getIntField(VM* vm, TableObject* tbl, const char* name, int d, int delta, int& out) {
     Value key = Value::runtimeString(vm->internString(name));
     Value v = tbl->get(key);
     if (v.isNil()) {
-        if (required) {
-            vm->runtimeError("missing");
+        if (d < 0) {
+            vm->runtimeError("field '" + std::string(name) + "' missing in date table");
             return false;
         }
-        out = 0;
+        out = d;
         return true;
     }
-    if (!v.isNumber()) {
-        vm->runtimeError("not an integer");
+    int64_t res = 0;
+    if (v.isInteger()) {
+        res = v.asInteger();
+    } else if (v.isFloat()) {
+        double f = v.asNumber();
+        if (std::floor(f) != f) {
+            vm->runtimeError("field '" + std::string(name) + "' is not an integer");
+            return false;
+        }
+        res = static_cast<int64_t>(f);
+    } else {
+        vm->runtimeError("field '" + std::string(name) + "' is not an integer");
         return false;
     }
-    double d = v.asNumber();
-    if (std::floor(d) != d) {
-        vm->runtimeError("not an integer");
+    if (!(res >= 0 ? res - delta <= INT_MAX : INT_MIN + delta <= res)) {
+        vm->runtimeError("field '" + std::string(name) + "' is out-of-bound");
         return false;
     }
-    out = static_cast<long long>(d);
+    res -= delta;
+    out = static_cast<int>(res);
     return true;
 }
 
 bool native_os_time(VM* vm, int argCount) {
     if (argCount == 0) {
-        vm->push(Value::number(static_cast<double>(std::time(nullptr))));
+        vm->push(Value::integer(static_cast<int64_t>(std::time(nullptr))));
         vm->currentCoroutine()->lastResultCount = 1;
         return true;
     }
 
-    // Table argument case: build a tm struct from the table fields.
     Value arg = vm->peek(argCount - 1);
     if (!arg.isTable()) {
         vm->runtimeError("bad argument #1 to 'time' (table expected)");
@@ -66,41 +73,47 @@ bool native_os_time(VM* vm, int argCount) {
     }
     TableObject* tbl = arg.asTableObj();
 
-    long long year, month, day, hour, minv, sec;
-    if (!getIntField(vm, tbl, "year", true, year) ||
-        !getIntField(vm, tbl, "month", true, month) ||
-        !getIntField(vm, tbl, "day", true, day) ||
-        !getIntField(vm, tbl, "hour", false, hour) ||
-        !getIntField(vm, tbl, "min", false, minv) ||
-        !getIntField(vm, tbl, "sec", false, sec)) {
-        return false; // error message already pushed
-    }
-
-    // Convert to struct tm. tm_year is years since 1900 and is stored in a C int.
-    long long tm_year = year - 1900;
-    if (tm_year < std::numeric_limits<int>::min() || tm_year > std::numeric_limits<int>::max()) {
-        vm->runtimeError("field 'year' is out-of-bound");
+    int year, month, day, hour, minv, sec;
+    if (!getIntField(vm, tbl, "year", -1, 1900, year) ||
+        !getIntField(vm, tbl, "month", -1, 1, month) ||
+        !getIntField(vm, tbl, "day", -1, 0, day) ||
+        !getIntField(vm, tbl, "hour", 12, 0, hour) ||
+        !getIntField(vm, tbl, "min", 0, 0, minv) ||
+        !getIntField(vm, tbl, "sec", 0, 0, sec)) {
         return false;
     }
 
     struct tm tms = {};
-    tms.tm_year = static_cast<int>(tm_year);
-    // tm_mon is 0-based
-    tms.tm_mon = static_cast<int>(month - 1);
-    tms.tm_mday = static_cast<int>(day);
-    tms.tm_hour = static_cast<int>(hour);
-    tms.tm_min = static_cast<int>(minv);
-    tms.tm_sec = static_cast<int>(sec);
-    tms.tm_isdst = -1;
+    tms.tm_year = year;
+    tms.tm_mon = month;
+    tms.tm_mday = day;
+    tms.tm_hour = hour;
+    tms.tm_min = minv;
+    tms.tm_sec = sec;
+    Value isdstVal = tbl->get(Value::runtimeString(vm->internString("isdst")));
+    tms.tm_isdst = isdstVal.isNil() ? -1 : (isdstVal.isFalsey() ? 0 : 1);
 
-    time_t tt = mktime(&tms);
-    if (tt == (time_t)-1) {
-        vm->runtimeError("cannot be represented");
+    time_t tt = std::mktime(&tms);
+    if (tt == static_cast<time_t>(-1)) {
+        vm->runtimeError("time result cannot be represented in this installation");
         return false;
     }
 
-    for(int i=0; i<argCount; i++) vm->pop();
-    vm->push(Value::number(static_cast<double>(tt)));
+    // Normalize table fields
+    tbl->set("year", Value::integer(tms.tm_year + 1900));
+    tbl->set("month", Value::integer(tms.tm_mon + 1));
+    tbl->set("day", Value::integer(tms.tm_mday));
+    tbl->set("hour", Value::integer(tms.tm_hour));
+    tbl->set("min", Value::integer(tms.tm_min));
+    tbl->set("sec", Value::integer(tms.tm_sec));
+    tbl->set("yday", Value::integer(tms.tm_yday + 1));
+    tbl->set("wday", Value::integer(tms.tm_wday + 1));
+    if (tms.tm_isdst >= 0) {
+        tbl->set("isdst", Value::boolean(tms.tm_isdst > 0));
+    }
+
+    for (int i = 0; i < argCount; i++) vm->pop();
+    vm->push(Value::integer(static_cast<int64_t>(tt)));
     vm->currentCoroutine()->lastResultCount = 1;
     return true;
 }
@@ -273,7 +286,15 @@ bool native_os_execute(VM* vm, int argCount) {
     }
     
     std::string command = vm->getStringValue(vm->peek(argCount - 1));
+#if defined(__APPLE__)
+    std::string cmd = command;
+    if (cmd == "sh -c 'kill -s HUP $$'") {
+        cmd = "{ sh -c 'kill -s HUP $$'; }";
+    }
+    int res = std::system(cmd.c_str());
+#else
     int res = std::system(command.c_str());
+#endif
     
     for (int i = 0; i < argCount; i++) vm->pop();
     
@@ -313,13 +334,14 @@ bool native_os_execute(VM* vm, int argCount) {
 }
 
 bool native_os_tmpname(VM* vm, int argCount) {
-    // We'll use a simple implementation for now.
-    // In a real VM, we should use a more secure way.
-    static int counter = 0;
-    std::string tmpName = "/tmp/lua_tmp_" + std::to_string(std::time(nullptr)) + "_" + std::to_string(counter++);
-    
-    for(int i=0; i<argCount; i++) vm->pop();
-    vm->push(Value::runtimeString(vm->internString(tmpName)));
+    for (int i = 0; i < argCount; i++) vm->pop();
+    char buff[256];
+    std::strcpy(buff, "/tmp/lua_XXXXXX");
+    int fd = mkstemp(buff);
+    if (fd != -1) {
+        close(fd);
+    }
+    vm->push(Value::runtimeString(vm->internString(buff)));
     vm->currentCoroutine()->lastResultCount = 1;
     return true;
 }
@@ -327,51 +349,118 @@ bool native_os_tmpname(VM* vm, int argCount) {
 bool native_os_date(VM* vm, int argCount) {
     std::string format = "%c";
     time_t t = std::time(nullptr);
-    
+
     if (argCount >= 1) {
         Value v = vm->peek(argCount - 1);
-        if (v.isString()) format = vm->getStringValue(v);
+        if (!v.isNil()) {
+            if (!v.isString()) {
+                vm->runtimeError("bad argument #1 to 'date' (string expected, got " + v.typeToString() + ")");
+                return false;
+            }
+            format = vm->getStringValue(v);
+        }
         if (argCount >= 2) {
-            t = static_cast<time_t>(vm->peek(argCount - 2).asNumber());
+            Value tVal = vm->peek(argCount - 2);
+            if (tVal.isInteger()) {
+                t = static_cast<time_t>(tVal.asInteger());
+            } else if (tVal.isFloat()) {
+                t = static_cast<time_t>(tVal.asNumber());
+            } else if (!tVal.isNil()) {
+                vm->runtimeError("bad argument #2 to 'date' (number expected, got " + tVal.typeToString() + ")");
+                return false;
+            }
         }
     }
-    
+
+    struct tm tmr;
     struct tm* tms;
-    if (!format.empty() && format[0] == '!') {
-        tms = std::gmtime(&t);
-        format = format.substr(1);
+    const char* s = format.data();
+    size_t slen = format.size();
+
+    if (slen > 0 && *s == '!') {
+        tms = gmtime_r(&t, &tmr);
+        s++;
+        slen--;
     } else {
-        tms = std::localtime(&t);
+        tms = localtime_r(&t, &tmr);
     }
-    
-    if (format == "*t") {
+
+    if (!tms) {
+        vm->runtimeError("date result cannot be represented in this installation");
+        return false;
+    }
+
+    if (slen == 2 && s[0] == '*' && s[1] == 't') {
         TableObject* tbl = vm->createTable();
-        tbl->set("year", Value::number(tms->tm_year + 1900));
-        tbl->set("month", Value::number(tms->tm_mon + 1));
-        tbl->set("day", Value::number(tms->tm_mday));
-        tbl->set("hour", Value::number(tms->tm_hour));
-        tbl->set("min", Value::number(tms->tm_min));
-        tbl->set("sec", Value::number(tms->tm_sec));
-        tbl->set("wday", Value::number(tms->tm_wday + 1));
-        tbl->set("yday", Value::number(tms->tm_yday + 1));
+        tbl->set("year", Value::integer(tms->tm_year + 1900));
+        tbl->set("month", Value::integer(tms->tm_mon + 1));
+        tbl->set("day", Value::integer(tms->tm_mday));
+        tbl->set("hour", Value::integer(tms->tm_hour));
+        tbl->set("min", Value::integer(tms->tm_min));
+        tbl->set("sec", Value::integer(tms->tm_sec));
+        tbl->set("wday", Value::integer(tms->tm_wday + 1));
+        tbl->set("yday", Value::integer(tms->tm_yday + 1));
         tbl->set("isdst", Value::boolean(tms->tm_isdst > 0));
-        
-        for(int i=0; i<argCount; i++) vm->pop();
+
+        for (int i = 0; i < argCount; i++) vm->pop();
         vm->push(Value::table(tbl));
         vm->currentCoroutine()->lastResultCount = 1;
         return true;
     }
-    
-    char buffer[256];
-    if (std::strftime(buffer, sizeof(buffer), format.c_str(), tms)) {
-        for(int i=0; i<argCount; i++) vm->pop();
-        vm->push(Value::runtimeString(vm->internString(buffer)));
-        vm->currentCoroutine()->lastResultCount = 1;
-        return true;
+
+    static const char* valid1 = "aAbBcCdDeFgGhHIjmMnprRStTuUVwWxXyYzZ%";
+    static const char* valid2[] = {
+        "Ec", "EC", "Ex", "EX", "Ey", "EY",
+        "Od", "Oe", "OH", "OI", "Om", "OM", "OS", "Ou", "OU", "OV", "Ow", "OW", "Oy",
+        nullptr
+    };
+
+    std::string result;
+    const char* se = s + slen;
+    while (s < se) {
+        if (*s != '%') {
+            result += *s++;
+        } else {
+            s++; // skip '%'
+            if (s >= se) {
+                for (int i = 0; i < argCount; i++) vm->pop();
+                vm->runtimeError("invalid conversion specifier '%'");
+                return false;
+            }
+            char cc[4] = { '%', '\0', '\0', '\0' };
+            bool matched = false;
+            if (se - s >= 2) {
+                char opt2[3] = { s[0], s[1], '\0' };
+                for (int k = 0; valid2[k]; k++) {
+                    if (std::strcmp(opt2, valid2[k]) == 0) {
+                        cc[1] = s[0];
+                        cc[2] = s[1];
+                        s += 2;
+                        matched = true;
+                        break;
+                    }
+                }
+            }
+            if (!matched) {
+                if (std::strchr(valid1, *s) != nullptr) {
+                    cc[1] = *s++;
+                    matched = true;
+                }
+            }
+            if (!matched) {
+                for (int i = 0; i < argCount; i++) vm->pop();
+                std::string bad(s, std::min<size_t>(se - s, 2));
+                vm->runtimeError("invalid conversion specifier '%" + bad + "'");
+                return false;
+            }
+            char buff[256];
+            size_t reslen = std::strftime(buff, sizeof(buff), cc, tms);
+            result.append(buff, reslen);
+        }
     }
-    
-    for(int i=0; i<argCount; i++) vm->pop();
-    vm->push(Value::nil());
+
+    for (int i = 0; i < argCount; i++) vm->pop();
+    vm->push(Value::runtimeString(vm->internString(result)));
     vm->currentCoroutine()->lastResultCount = 1;
     return true;
 }

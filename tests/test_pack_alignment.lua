@@ -3,16 +3,18 @@ print("Testing pack alignment...")
 
 -- 1. Default alignment (1)
 assert(string.packsize("bb") == 2)
-assert(string.packsize("bi") == 9) -- 1 + 8
+assert(string.packsize("bj") == 9) -- 1 + 8
+assert(string.packsize("bi") == 5) -- 1 + 4
 
 -- 2. Explicit alignment !4
 assert(string.packsize("!4bb") == 4) -- 1+1 + 2(tail padding)
-assert(string.packsize("!4bi") == 12) -- 1 + 3 (padding) + 8
+assert(string.packsize("!4bj") == 12) -- 1 + 3 (padding) + 8
+assert(string.packsize("!4bi") == 8)  -- 1 + 3 (padding) + 4
 
 -- 3. pack/unpack with alignment
-local data = string.pack("!4bi", 0x01, 0x02)
+local data = string.pack("!4bj", 0x01, 0x02)
 assert(#data == 12)
-local v1, v2, pos = string.unpack("!4bi", data)
+local v1, v2, pos = string.unpack("!4bj", data)
 assert(v1 == 0x01)
 assert(v2 == 0x02)
 assert(pos == 13)

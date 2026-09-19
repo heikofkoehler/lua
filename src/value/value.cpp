@@ -11,6 +11,8 @@
 #include <sstream>
 #include <iomanip>
 #include <iostream>
+#include <cstdio>
+#include <cstdlib>
 
 Value Value::fromObj(GCObject* obj) {
     if (!obj) return nil();
@@ -75,10 +77,13 @@ void Value::print(std::ostream& os) const {
             } else if (std::isnan(num)) {
                 os << "nan";
             } else {
-                std::ostringstream ss;
-                ss << std::setprecision(14) << num;
-                std::string res = ss.str();
-                if (res.find('.') == std::string::npos && res.find('e') == std::string::npos) {
+                char buf[64];
+                std::snprintf(buf, sizeof(buf), "%.15g", num);
+                if (std::strtod(buf, nullptr) != num) {
+                    std::snprintf(buf, sizeof(buf), "%.17g", num);
+                }
+                std::string res(buf);
+                if (res.find('.') == std::string::npos && res.find('e') == std::string::npos && res.find('E') == std::string::npos) {
                     res += ".0";
                 }
                 os << res;
@@ -97,8 +102,12 @@ void Value::print(std::ostream& os) const {
         case Type::CLOSURE: os << "function: " << asClosureObj(); break;
         case Type::FILE: os << "file: " << asFileObj(); break;
         case Type::SOCKET: os << "socket: " << asSocketObj(); break;
-        case Type::NATIVE_FUNCTION: os << "<native function>"; break;
-        case Type::C_FUNCTION: os << "<C function>"; break;
+        case Type::NATIVE_FUNCTION: 
+            os << "function: 0x" << std::hex << (0x10000000ULL | asNativeFunctionIndex()) << std::dec; 
+            break;
+        case Type::C_FUNCTION: 
+            os << "function: " << asCFunction(); 
+            break;
         case Type::THREAD: os << "thread: " << asThreadObj(); break;
         case Type::USERDATA: os << "userdata: " << asUserdataObj(); break;
         case Type::UPVALUE: os << "upvalue: " << asObj(); break;
@@ -110,13 +119,11 @@ bool Value::isFalsey() const {
 }
 
 bool Value::operator==(const Value& other) const {
-    if (isInt64() || other.isInt64()) {
-        if (!isRuntimeInt64() && !other.isRuntimeInt64()) {
-            return bits_ == other.bits_;
-        }
-        if (!isRuntimeInt64() || !other.isRuntimeInt64()) {
-            return false;
-        }
+    if (isInt64() && !isRuntimeInt64()) {
+        return other.isInt64() && !other.isRuntimeInt64() && bits_ == other.bits_;
+    }
+    if (other.isInt64() && !other.isRuntimeInt64()) {
+        return false;
     }
     if (isInteger() && other.isInteger()) {
         return asInteger() == other.asInteger();
@@ -213,7 +220,7 @@ size_t Value::hash() const {
     }
 }
 
-void Value::serialize(std::ostream& os, const Chunk* chunk) const {
+void Value::serialize(std::ostream& os, const Chunk* chunk, const std::string& parentSource) const {
     uint16_t t = static_cast<uint16_t>(type());
     os.write(reinterpret_cast<const char*>(&t), sizeof(t));
     
@@ -253,7 +260,7 @@ void Value::serialize(std::ostream& os, const Chunk* chunk) const {
         }
         case Type::FUNCTION: {
             FunctionObject* func = chunk->getFunction(asFunctionIndex());
-            func->serialize(os);
+            func->serialize(os, parentSource);
             break;
         }
         default:
@@ -261,27 +268,35 @@ void Value::serialize(std::ostream& os, const Chunk* chunk) const {
     }
 }
 
-Value Value::deserialize(std::istream& is, Chunk* chunk) {
-    uint16_t t;
-    if (!is.read(reinterpret_cast<char*>(&t), sizeof(t))) return Value::nil();
+Value Value::deserialize(std::istream& is, Chunk* chunk, const std::string& parentSource) {
+    uint16_t t = 0;
+    if (!is.read(reinterpret_cast<char*>(&t), sizeof(t)) || is.gcount() < static_cast<std::streamsize>(sizeof(t))) {
+        throw TruncatedError("bad binary format (truncated chunk)");
+    }
     Type type = static_cast<Type>(t);
     
     switch (type) {
         case Type::NIL: return Value::nil();
         case Type::BOOL: {
-            uint8_t b;
-            is.read(reinterpret_cast<char*>(&b), sizeof(b));
+            uint8_t b = 0;
+            if (!is.read(reinterpret_cast<char*>(&b), sizeof(b)) || is.gcount() < 1) {
+                throw TruncatedError("bad binary format (truncated chunk)");
+            }
             return Value::boolean(b != 0);
         }
         case Type::NUMBER: {
-            double n;
-            is.read(reinterpret_cast<char*>(&n), sizeof(n));
+            double n = 0;
+            if (!is.read(reinterpret_cast<char*>(&n), sizeof(n)) || is.gcount() < static_cast<std::streamsize>(sizeof(n))) {
+                throw TruncatedError("bad binary format (truncated chunk)");
+            }
             return Value::number(n);
         }
         case Type::INTEGER:
         case Type::INT64: {
-            int64_t n;
-            is.read(reinterpret_cast<char*>(&n), sizeof(n));
+            int64_t n = 0;
+            if (!is.read(reinterpret_cast<char*>(&n), sizeof(n)) || is.gcount() < static_cast<std::streamsize>(sizeof(n))) {
+                throw TruncatedError("bad binary format (truncated chunk)");
+            }
             if (n >= -(1LL << 47) && n < (1LL << 47)) {
                 return Value::integer(n);
             }
@@ -289,15 +304,19 @@ Value Value::deserialize(std::istream& is, Chunk* chunk) {
             return Value::compileTimeInt64(idx);
         }
         case Type::STRING: {
-            uint32_t len;
-            is.read(reinterpret_cast<char*>(&len), sizeof(len));
+            uint32_t len = 0;
+            if (!is.read(reinterpret_cast<char*>(&len), sizeof(len)) || is.gcount() < static_cast<std::streamsize>(sizeof(len))) {
+                throw TruncatedError("bad binary format (truncated chunk)");
+            }
             std::string s(len, '\0');
-            is.read(&s[0], len);
+            if (len > 0 && (!is.read(&s[0], len) || is.gcount() < static_cast<std::streamsize>(len))) {
+                throw TruncatedError("bad binary format (truncated chunk)");
+            }
             size_t idx = chunk->addString(s);
             return Value::string(idx);
         }
         case Type::FUNCTION: {
-            auto func = FunctionObject::deserialize(is);
+            auto func = FunctionObject::deserialize(is, parentSource);
             size_t idx = chunk->addFunction(func.release());
             return Value::function(idx);
         }

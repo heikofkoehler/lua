@@ -261,8 +261,8 @@ public:
     std::string typeToString() const;
     void print(std::ostream& os) const;
 
-    void serialize(std::ostream& os, const Chunk* chunk) const;
-    static Value deserialize(std::istream& is, Chunk* chunk);
+    void serialize(std::ostream& os, const Chunk* chunk, const std::string& parentSource = "") const;
+    static Value deserialize(std::istream& is, Chunk* chunk, const std::string& parentSource = "");
 };
 
 static_assert(sizeof(Value) == 8, "sizeof(Value) must be 8 bytes");

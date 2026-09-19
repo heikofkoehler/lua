@@ -7,6 +7,12 @@
 #include <vector>
 #include <unordered_map>
 
+class TruncatedError : public std::runtime_error {
+public:
+    explicit TruncatedError(const std::string& msg = "bad binary format (truncated chunk)")
+        : std::runtime_error(msg) {}
+};
+
 // Forward declarations
 class FunctionObject;
 class StringObject;
@@ -66,10 +72,11 @@ public:
     // Disassemble for debugging
     void disassemble(const std::string& name) const;
     size_t disassembleInstruction(size_t offset) const;
+    size_t instructionLength(size_t offset) const;
 
     // Serialization
-    void serialize(std::ostream& os) const;
-    static std::unique_ptr<Chunk> deserialize(std::istream& is);
+    void serialize(std::ostream& os, const std::string& parentSource = "") const;
+    static std::unique_ptr<Chunk> deserialize(std::istream& is, const std::string& parentSource = "");
 
 private:
     std::vector<uint8_t> code_;        // Bytecode instructions

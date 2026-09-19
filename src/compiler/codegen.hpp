@@ -7,6 +7,8 @@
 #include "value/function.hpp"
 #include <deque>
 #include <memory>
+#include <unordered_set>
+#include <unordered_map>
 
 // CodeGenerator: Walks AST and generates bytecode
 // Implements visitor pattern to traverse AST nodes
@@ -63,6 +65,7 @@ private:
         bool isConstant;
         bool isClose;
         size_t startPC;   // Instruction offset where local enters scope
+        uint32_t seq = 0; // Declaration sequence
     };
 
     // Upvalue tracking
@@ -73,19 +76,51 @@ private:
         std::string name = "";   // For debugging
     };
 
+    struct ActiveVar {
+        std::string name;
+        bool isGlobal;
+        int depth;
+    };
+
     // Label and Goto tracking for Lua 5.2+
     struct Label {
+        std::string name;
         size_t offset;
         int localCount;
-        int scopeDepth;
+        int activeVarCount;
+        std::vector<ActiveVar> activeVars;
+        int blockDepth;
     };
 
     struct Goto {
         std::string name;
         size_t instructionOffset;
         int localCount;
-        int scopeDepth;
+        int activeVarCount;
+        std::vector<ActiveVar> activeVars;
+        int blockDepth;
         int line;
+    };
+
+    struct BlockScope {
+        size_t firstLabel;
+        size_t firstGoto;
+        size_t firstActiveVar;
+        int entryLocalCount;
+        std::vector<ActiveVar> entryActiveVars;
+    };
+
+    enum class GlobalMode {
+        ALL,
+        NONE,
+        CONST_ALL
+    };
+
+    struct DeclaredGlobal {
+        std::string name;
+        bool isConstant;
+        int scopeDepth;
+        uint32_t seq = 0;
     };
 
     // Compiler state for nested function compilation
@@ -98,8 +133,19 @@ private:
         int localCount;
         uint8_t expectedRetCount;
         CompilerState* enclosing;  // Parent compiler (not owned)
-        std::unordered_map<std::string, Label> labels;
-        std::vector<Goto> unresolvedGotos;
+        std::vector<Label> visibleLabels;
+        std::vector<Goto> pendingGotos;
+        std::vector<ActiveVar> activeVars;
+        std::vector<BlockScope> blockScopes;
+        std::vector<std::pair<Goto, Label>> gotosNeedingStubs;
+        std::string varargName;
+        int namedVarargSlot = -1;
+        bool isVarargOptimized = false;
+        GlobalMode globalMode = GlobalMode::ALL;
+        std::vector<DeclaredGlobal> declaredGlobals;
+        std::unordered_set<std::string> shadowedLocals;
+        bool envDeclaredGlobal = false;
+        uint32_t varSequence = 0;
     };
 
     std::unique_ptr<Chunk> chunk_;
@@ -112,8 +158,20 @@ private:
     std::deque<CompilerState> compilerStack_;
     CompilerState* enclosingCompiler_;  // Parent compiler for upvalue resolution
     
-    std::unordered_map<std::string, Label> labels_;
-    std::vector<Goto> unresolvedGotos_;
+    std::vector<Label> visibleLabels_;
+    std::vector<Goto> pendingGotos_;
+    std::vector<ActiveVar> activeVars_;
+    std::vector<BlockScope> blockScopes_;
+    std::vector<std::pair<Goto, Label>> gotosNeedingStubs_;
+
+    std::string currentVarargName_;
+    int namedVarargSlot_ = -1;
+    bool isVarargOptimized_ = false;
+    GlobalMode globalMode_ = GlobalMode::ALL;
+    std::vector<DeclaredGlobal> declaredGlobals_;
+    std::unordered_set<std::string> shadowedLocals_;
+    bool envDeclaredGlobal_ = false;
+    uint32_t varSequence_ = 0;
 
     // Context for expression return values
     uint8_t expectedRetCount_; // 0=all (multires), 1=single (default), >1=specific count
@@ -141,11 +199,17 @@ private:
     size_t emitJump(OpCode op);
     void patchJump(size_t offset);
     void emitLoop(size_t loopStart);
+    void compileBlock(const std::vector<std::unique_ptr<StmtNode>>& stmts, bool hasEndScope = true);
+    void resolveBlockGotos(size_t firstGoto, size_t firstLabel);
+    void checkGotoScoping(const Goto& g, const Label& lbl);
+    void emitGotoStubs();
 
     // Variable handling
     void addLocal(const std::string& name, bool isConstant = false, bool isClose = false);
     int resolveLocal(const std::string& name);
     void checkConstantAssign(const std::string& name, int line);
+    bool isDeclaredGlobal(const std::string& name) const;
+    bool isDeclaredGlobalConst(const std::string& name) const;
     int resolveUpvalue(const std::string& name);
     int resolveUpvalueHelper(CompilerState* compiler, const std::string& name);
     int addUpvalue(const std::string& name, uint8_t index, bool isLocal, bool isConstant);
@@ -158,7 +222,8 @@ private:
 
     // Helper for function compilation (shared by named and anonymous functions)
     void compileFunction(const std::string& name, const std::vector<std::string>& params,
-                        const std::vector<std::unique_ptr<StmtNode>>& body, bool hasVarargs);
+                        const std::vector<std::unique_ptr<StmtNode>>& body, bool hasVarargs,
+                        const std::string& varargName = "", int lineDefined = 0, int lastLineDefined = 0);
 
     // Loop context management for break statements
     void beginLoop();

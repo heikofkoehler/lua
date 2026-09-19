@@ -26,20 +26,21 @@ assert(string.format("num: %d, hex: %x", 42, 42) == "num: 42, hex: 2a")
 assert(string.format("%q", nil) == "nil")
 assert(string.format("%q", true) == "true")
 assert(string.format("%q", 42) == "42")
-assert(string.format("%q", "a\nb") == "\"a\\nb\"")
+assert(string.format("%q", "a\nb") == "\"a\\\nb\"")
 
 -- Repetition
 assert(string.rep("a", 3) == "aaa")
 assert(string.rep("b", 3, "-") == "b-b-b")
 
 -- Packing
-local data = string.pack("bi", 0x41, 12345)
+local data = string.pack("bj", 0x41, 12345)
 assert(#data == 9)
-local b, i, next_pos = string.unpack("bi", data)
+local b, i, next_pos = string.unpack("bj", data)
 assert(b == 0x41)
 assert(i == 12345)
 assert(next_pos == 10)
-assert(string.packsize("bi") == 9)
+assert(string.packsize("bj") == 9)
+assert(string.packsize("bi") == 5)
 
 -- Advanced Packing
 local ps_adv = string.packsize("!4xbT")

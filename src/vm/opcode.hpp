@@ -27,6 +27,7 @@ enum class OpCode : uint8_t {
     OP_SET_TABUP_LONG, // Set table from upvalue [upIndex: uint8_t, constIndex: 24-bit integer]
     OP_CLOSE_UPVALUE, // Close upvalue at top of stack
     OP_TBC,           // Mark local at [index] as to-be-closed
+    OP_CLOSE,         // Close upvalues and TBC variables down to slot [index], and pop to [index]
 
     // Arithmetic operations (binary)
     OP_ADD,         // Addition: pop b, pop a, push a + b
@@ -89,8 +90,17 @@ enum class OpCode : uint8_t {
 
     // Varargs
     OP_GET_VARARG,  // Push varargs onto stack [ret_count: uint8_t] (0 means all)
+    OP_PACK_VARARG_TABLE, // Pack caller varargs into table with 'n', push to stack [slot: uint8_t]
+    OP_GET_VARARG_ITEM,   // Pop key from stack, read from varargs or 'n', push result
+    OP_GET_VARARG_COUNT,  // Push caller varargs count (int) onto stack
+
+    // Globals
+    OP_DEF_GLOBAL,        // [upvalue: uint8_t, const_index: uint8_t] Check defined, else set
+    OP_DEF_GLOBAL_LONG,   // [upvalue: uint8_t, const_index: 24-bit] Check defined, else set
+    OP_DEF_GLOBAL_TABLE,  // Stack: [value, env_table, key_name]. Check defined, else set
 
     OP_YIELD,       // Yield from coroutine [args: uint8_t, returns: uint8_t]
+    OP_YIELD_MULTI, // Yield with multires from coroutine [fixed_args: uint8_t, returns: uint8_t]
 
     OP_RETURN,      // Return from current chunk
 };
@@ -115,6 +125,7 @@ inline const char* opcodeName(OpCode op) {
         case OpCode::OP_SET_TABUP_LONG: return "OP_SET_TABUP_LONG";
         case OpCode::OP_CLOSE_UPVALUE: return "OP_CLOSE_UPVALUE";
         case OpCode::OP_TBC:           return "OP_TBC";
+        case OpCode::OP_CLOSE:         return "OP_CLOSE";
         case OpCode::OP_ADD:           return "OP_ADD";
         case OpCode::OP_SUB:         return "OP_SUB";
         case OpCode::OP_MUL:         return "OP_MUL";
@@ -162,7 +173,14 @@ inline const char* opcodeName(OpCode op) {
         case OpCode::OP_IO_READ:       return "OP_IO_READ";
         case OpCode::OP_IO_CLOSE:      return "OP_IO_CLOSE";
         case OpCode::OP_GET_VARARG:    return "OP_GET_VARARG";
+        case OpCode::OP_PACK_VARARG_TABLE: return "OP_PACK_VARARG_TABLE";
+        case OpCode::OP_GET_VARARG_ITEM:   return "OP_GET_VARARG_ITEM";
+        case OpCode::OP_GET_VARARG_COUNT:  return "OP_GET_VARARG_COUNT";
+        case OpCode::OP_DEF_GLOBAL:        return "OP_DEF_GLOBAL";
+        case OpCode::OP_DEF_GLOBAL_LONG:   return "OP_DEF_GLOBAL_LONG";
+        case OpCode::OP_DEF_GLOBAL_TABLE:  return "OP_DEF_GLOBAL_TABLE";
         case OpCode::OP_YIELD:         return "OP_YIELD";
+        case OpCode::OP_YIELD_MULTI:   return "OP_YIELD_MULTI";
         case OpCode::OP_RETURN:        return "OP_RETURN";
         default:                     return "UNKNOWN";
     }

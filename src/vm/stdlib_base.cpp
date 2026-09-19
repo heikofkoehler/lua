@@ -114,7 +114,7 @@ bool native_collectgarbage(VM* vm, int argCount) {
     // Default: full collect
     vm->collectGarbage();
     for(int i=0; i<argCount; i++) vm->pop();
-    vm->push(Value::nil());
+    vm->push(Value::integer(0));
     vm->currentCoroutine()->lastResultCount = 1;
     return true;
 }
@@ -193,28 +193,8 @@ bool native_tostring(VM* vm, int argCount) {
         return false;
     }
     Value val = vm->peek(argCount - 1);
-    
-    Value mm = vm->getMetamethod(val, "__tostring");
-    if (!mm.isNil()) {
-        // Pop all arguments first so they don't get counted as a result
-        for (int i = 0; i < argCount; i++) vm->pop();
-        
-        vm->push(mm);
-        vm->push(val);
-        
-        size_t prevFrames = vm->currentCoroutine()->frames.size();
-        if (vm->callValue(1, 2)) {
-            if (vm->currentCoroutine()->frames.size() > prevFrames) {
-                if (!vm->run(prevFrames)) return false;
-            }
-            // Result is now on top of the stack
-            vm->currentCoroutine()->lastResultCount = 1;
-            return true;
-        }
-        return false;
-    }
-
-    std::string str = vm->getStringValue(val);
+    std::string str;
+    if (!vm->toLString(val, str)) return false;
     for (int i = 0; i < argCount; i++) vm->pop();
     vm->push(Value::runtimeString(vm->internString(str)));
     vm->currentCoroutine()->lastResultCount = 1;
@@ -347,12 +327,12 @@ bool native_sleep(VM* vm, int argCount) {
 }
 
 bool native_next(VM* vm, int argCount) {
-    if (argCount < 1 || argCount > 2) {
-        vm->runtimeError("next expects 1 or 2 arguments");
+    if (argCount < 1) {
+        vm->runtimeError("bad argument #1 to 'next' (value expected)");
         return false;
     }
-    Value key = (argCount == 2) ? vm->peek(0) : Value::nil();
     Value tableVal = vm->peek(argCount - 1);
+    Value key = (argCount >= 2) ? vm->peek(argCount - 2) : Value::nil();
 
     if (!tableVal.isTable()) {
         vm->runtimeError("bad argument #1 to 'next' (table expected)");
@@ -455,48 +435,16 @@ bool native_ipairs(VM* vm, int argCount) {
 }
 
 bool native_error(VM* vm, int argCount) {
-    std::string msg = "nil";
-    int level = 1;
     if (argCount >= 1) {
         Value val = vm->peek(argCount - 1);
+        int level = 1;
         if (argCount >= 2 && vm->peek(argCount - 2).isNumber()) {
             level = static_cast<int>(vm->peek(argCount - 2).asNumber());
         }
-        if (val.isString()) {
-            msg = vm->getStringValue(val);
-        } else if (val.isNumber()) {
-            msg = val.toString();
-        } else if (val.isBool()) {
-            msg = val.asBool() ? "true" : "false";
-        } else if (val.isNil()) {
-            msg = "nil";
-        } else {
-            // Check for __tostring metamethod
-            Value tostringFunc = vm->getGlobal("tostring");
-            bool converted = false;
-            Value mm = vm->getMetamethod(val, "__tostring");
-            if (!mm.isNil()) {
-                vm->push(tostringFunc);
-                vm->push(val);
-                if (vm->callValue(1, 2)) {
-                    Value res = vm->pop();
-                    if (res.isString()) {
-                        msg = vm->getStringValue(res);
-                        converted = true;
-                    }
-                }
-            }
-            if (!converted) {
-                const char* typeName = "userdata";
-                if (val.isTable()) typeName = "table";
-                else if (val.isFunction() || val.isNativeFunction() || val.isCFunction()) typeName = "function";
-                else if (val.isThread()) typeName = "thread";
-                msg = std::string("(error object is a ") + typeName + " value)";
-            }
-            level = 0; // Do not prepend file/line for non-string error objects
-        }
+        vm->runtimeError(val, level);
+    } else {
+        vm->runtimeError(Value::nil(), 1);
     }
-    vm->runtimeError(msg, level);
     return false;
 }
 
@@ -543,6 +491,14 @@ bool native_rawset(VM* vm, int argCount) {
     Value val = vm->peek(argCount - 3);
     if (!table.isTable()) {
         vm->runtimeError("bad argument #1 to 'rawset' (table expected)");
+        return false;
+    }
+    if (key.isNil()) {
+        vm->runtimeError("table index is nil");
+        return false;
+    }
+    if (key.isFloat() && std::isnan(key.asNumber())) {
+        vm->runtimeError("table index is NaN");
         return false;
     }
     table.asTableObj()->set(key, val);
@@ -653,96 +609,127 @@ bool native_warn(VM* vm, int argCount) {
 }
 
 bool native_loadfile(VM* vm, int argCount) {
-    if (argCount < 1) {
-        vm->runtimeError("loadfile expects at least 1 argument");
-        return false;
+    std::string path;
+    bool hasPath = false;
+    if (argCount >= 1) {
+        Value pathVal = vm->peek(argCount - 1);
+        if (!pathVal.isNil()) {
+            if (!pathVal.isString()) {
+                vm->runtimeError("bad argument #1 to 'loadfile' (string expected, got " + pathVal.typeToString() + ")");
+                return false;
+            }
+            path = vm->getStringValue(pathVal);
+            hasPath = true;
+        }
     }
-    Value pathVal = vm->peek(argCount - 1);
-    std::string path = vm->getStringValue(pathVal);
     
     Value env = Value::nil();
+    bool hasEnv = false;
     if (argCount >= 3) {
         env = vm->peek(argCount - 3);
+        hasEnv = true;
     }
 
     std::string mode = "bt";
     if (argCount >= 2) {
         Value modeVal = vm->peek(argCount - 2);
-        if (!modeVal.isNil()) mode = vm->getStringValue(modeVal);
+        if (!modeVal.isNil()) {
+            if (!modeVal.isString()) {
+                vm->runtimeError("bad argument #2 to 'loadfile' (string expected, got " + modeVal.typeToString() + ")");
+                return false;
+            }
+            mode = vm->getStringValue(modeVal);
+            if (mode.find('B') != std::string::npos) {
+                vm->runtimeError("bad argument #2 to 'loadfile' (invalid mode)");
+                return false;
+            }
+        }
     }
 
-    std::string sourceName = "@" + path;
-
-    std::ifstream file(path, std::ios::binary);
-    if (!file.is_open()) {
-        for(int i=0; i<argCount; i++) vm->pop();
-        vm->push(Value::nil());
-        StringObject* errStr = vm->internString("Could not open file: " + path);
-        vm->push(Value::runtimeString(errStr));
-        vm->currentCoroutine()->lastResultCount = 2;
-        return true;
+    std::string sourceName = hasPath ? ("@" + path) : "=stdin";
+    std::string source;
+    if (hasPath) {
+        std::ifstream file(path, std::ios::binary);
+        if (!file.is_open()) {
+            for (int i = 0; i < argCount; i++) vm->pop();
+            vm->push(Value::nil());
+            StringObject* errStr = vm->internString("cannot open " + path + ": " + std::strerror(errno));
+            vm->push(Value::runtimeString(errStr));
+            vm->currentCoroutine()->lastResultCount = 2;
+            return true;
+        }
+        std::stringstream buffer;
+        buffer << file.rdbuf();
+        source = buffer.str();
+    } else {
+        std::stringstream buffer;
+        buffer << std::cin.rdbuf();
+        source = buffer.str();
     }
 
-    std::streampos startPos = 0;
-    int firstChar = file.peek();
-    if (firstChar == '#') {
-        std::string commentLine;
-        std::getline(file, commentLine);
-        startPos = file.tellg();
+    if (source.size() >= 3 && (unsigned char)source[0] == 0xEF && (unsigned char)source[1] == 0xBB && (unsigned char)source[2] == 0xBF) {
+        source = source.substr(3);
+    }
+    if (!source.empty() && source[0] == '#') {
+        size_t nl = source.find('\n');
+        if (nl != std::string::npos) {
+            size_t nextPos = nl + 1;
+            if (nextPos < source.size() && source[nextPos] == '\x1b') {
+                source = source.substr(nextPos);
+            } else {
+                source = source.substr(nl);
+            }
+        } else {
+            source.clear();
+        }
     }
 
-    // Check for signature
-    char sig[4];
-    file.read(sig, 4);
-    bool isBinary = (file.gcount() == 4 && std::memcmp(sig, "\x1bLua", 4) == 0);
+    bool isBinary = (!source.empty() && source[0] == '\x1b');
 
     if (isBinary) {
         if (mode.find('b') == std::string::npos) {
-            for(int i=0; i<argCount; i++) vm->pop();
+            for (int i = 0; i < argCount; i++) vm->pop();
             vm->push(Value::nil());
             vm->push(Value::runtimeString(vm->internString("attempt to load a binary chunk (mode is '" + mode + "')")));
             vm->currentCoroutine()->lastResultCount = 2;
             return true;
         }
-        file.clear();
-        file.seekg(startPos);
-        auto function = FunctionObject::deserialize(file);
-        if (!function) {
-            for(int i=0; i<argCount; i++) vm->pop();
+        try {
+            std::istringstream is(source, std::ios::binary);
+            auto function = FunctionObject::deserialize(is);
+            if (!function) {
+                for (int i = 0; i < argCount; i++) vm->pop();
+                vm->push(Value::nil());
+                vm->push(Value::runtimeString(vm->internString("bad binary format (truncated chunk)")));
+                vm->currentCoroutine()->lastResultCount = 2;
+                return true;
+            }
+            FunctionObject* funcPtr = function.get();
+            vm->registerFunction(function.release());
+            vm->setSourceName(sourceName);
+            vm->internConstants(*funcPtr);
+            ClosureObject* closure = vm->createClosure(funcPtr);
+            vm->setupRootUpvalues(closure, env, hasEnv);
+            for (int i = 0; i < argCount; i++) vm->pop();
+            vm->push(Value::closure(closure));
+            vm->currentCoroutine()->lastResultCount = 1;
+            return true;
+        } catch (const std::exception& e) {
+            for (int i = 0; i < argCount; i++) vm->pop();
             vm->push(Value::nil());
-            vm->push(Value::runtimeString(vm->internString("Could not deserialize bytecode in " + path)));
+            vm->push(Value::runtimeString(vm->internString(e.what())));
+            vm->currentCoroutine()->lastResultCount = 2;
             return true;
         }
-        FunctionObject* funcPtr = function.get();
-        vm->registerFunction(function.release());
-        vm->setSourceName(sourceName);
-        ClosureObject* closure = vm->createClosure(funcPtr);
-        vm->setupRootUpvalues(closure, env);
-        for(int i=0; i<argCount; i++) vm->pop();
-        vm->push(Value::closure(closure));
-        vm->currentCoroutine()->lastResultCount = 1;
-        return true;
     }
 
     // Text chunk
     if (mode.find('t') == std::string::npos) {
-        for(int i=0; i<argCount; i++) vm->pop();
+        for (int i = 0; i < argCount; i++) vm->pop();
         vm->push(Value::nil());
         vm->push(Value::runtimeString(vm->internString("attempt to load a text chunk (mode is '" + mode + "')")));
         vm->currentCoroutine()->lastResultCount = 2;
         return true;
-    }
-
-    // Not bytecode, read as source
-    file.clear();
-    file.seekg(0);
-    std::stringstream buffer;
-    buffer << file.rdbuf();
-    std::string source = buffer.str();
-    if (!source.empty() && source[0] == '#') {
-        size_t nl = source.find('\n');
-        if (nl != std::string::npos) source = source.substr(nl);
-        else source.clear();
     }
 
     try {
@@ -751,20 +738,22 @@ bool native_loadfile(VM* vm, int argCount) {
         Parser parser(lexer);
         auto program = parser.parse();
         if (!program) {
-            for(int i=0; i<argCount; i++) vm->pop();
+            for (int i = 0; i < argCount; i++) vm->pop();
             vm->push(Value::nil());
-            StringObject* errStr = vm->internString("Parse error in " + path);
+            StringObject* errStr = vm->internString("Parse error in " + (hasPath ? path : "stdin"));
             vm->push(Value::runtimeString(errStr));
+            vm->currentCoroutine()->lastResultCount = 2;
             return true;
         }
 
         CodeGenerator codegen;
         auto function = codegen.generate(program.get(), sourceName);
         if (!function) {
-            for(int i=0; i<argCount; i++) vm->pop();
+            for (int i = 0; i < argCount; i++) vm->pop();
             vm->push(Value::nil());
-            StringObject* errStr = vm->internString("Code generation error in " + path);
+            StringObject* errStr = vm->internString("Code generation error in " + (hasPath ? path : "stdin"));
             vm->push(Value::runtimeString(errStr));
+            vm->currentCoroutine()->lastResultCount = 2;
             return true;
         }
 
@@ -773,49 +762,41 @@ bool native_loadfile(VM* vm, int argCount) {
         vm->setSourceName(sourceName);
         vm->internConstants(*funcPtr);
         ClosureObject* closure = vm->createClosure(funcPtr);
-        vm->setupRootUpvalues(closure, env);
-        for(int i=0; i<argCount; i++) vm->pop();
+        vm->setupRootUpvalues(closure, env, hasEnv);
+        for (int i = 0; i < argCount; i++) vm->pop();
         vm->push(Value::closure(closure));
         vm->currentCoroutine()->lastResultCount = 1;
         return true;
 
     } catch (const CompileError& e) {
-        for(int i=0; i<argCount; i++) vm->pop();
+        for (int i = 0; i < argCount; i++) vm->pop();
         vm->push(Value::nil());
         StringObject* errStr = vm->internString(e.what());
         vm->push(Value::runtimeString(errStr));
         vm->currentCoroutine()->lastResultCount = 2;
         return true;
     } catch (const std::exception& e) {
-        for(int i=0; i<argCount; i++) vm->pop();
+        for (int i = 0; i < argCount; i++) vm->pop();
         vm->push(Value::nil());
         StringObject* errStr = vm->internString(e.what());
         vm->push(Value::runtimeString(errStr));
+        vm->currentCoroutine()->lastResultCount = 2;
         return true;
     }
 }
 
 bool native_dofile(VM* vm, int argCount) {
-    if (argCount < 1) {
-        // Lua dofile(nil) reads from stdin, but for now we require a filename
-        vm->runtimeError("dofile expects a filename");
-        return false;
-    }
-    
-    // Use loadfile logic
     if (!native_loadfile(vm, argCount)) return false;
     
-    // loadfile returns (function) or (nil, error)
-    Value res = vm->peek(0);
-    if (res.isNil()) {
-        Value err = vm->peek(1);
-        vm->runtimeError(vm->getStringValue(err));
+    // If native_loadfile returned nil, error
+    if (vm->currentCoroutine()->lastResultCount == 2) {
+        Value err = vm->peek(0);
+        std::string errMsg = err.isString() ? vm->getStringValue(err) : "error";
+        vm->pop();
+        vm->pop();
+        vm->runtimeError(errMsg);
         return false;
     }
-    
-    // Pop the nil and error if they exist, or just the function?
-    // native_loadfile pops arguments and pushes 1 or 2 values.
-    // If successful, it pushes only 1 value (the closure).
     
     // Call the closure
     size_t prevFrames = vm->currentCoroutine()->frames.size();
@@ -835,7 +816,6 @@ bool native_load(VM* vm, int argCount) {
         return false;
     }
     Value sourceVal = vm->peek(argCount - 1);
-    std::string source = vm->getStringValue(sourceVal);
     
     std::string sourceName = "[string \"load\"]";
     if (argCount >= 2) {
@@ -844,22 +824,108 @@ bool native_load(VM* vm, int argCount) {
     }
 
     Value env = Value::nil();
+    bool hasEnv = false;
     if (argCount >= 4) {
         env = vm->peek(argCount - 4);
+        hasEnv = true;
     }
 
     std::string mode = "bt";
     if (argCount >= 3) {
         Value modeVal = vm->peek(argCount - 3);
-        if (!modeVal.isNil()) mode = vm->getStringValue(modeVal);
+        if (!modeVal.isNil()) {
+            if (!modeVal.isString()) {
+                vm->runtimeError("bad argument #3 to 'load' (string expected, got " + modeVal.typeToString() + ")");
+                return false;
+            }
+            mode = vm->getStringValue(modeVal);
+            if (mode.find('B') != std::string::npos) {
+                vm->runtimeError("bad argument #3 to 'load' (invalid mode)");
+                return false;
+            }
+        }
     }
-    size_t offset = 0;
+
+    std::string source;
+    if (sourceVal.isString()) {
+        source = vm->getStringValue(sourceVal);
+        if (argCount < 2) {
+            sourceName = source;
+        }
+    } else if (sourceVal.isClosure() || sourceVal.isNativeFunction() || sourceVal.isCFunction() ||
+               !vm->getMetamethod(sourceVal, "__call").isNil()) {
+        if (argCount < 2) {
+            sourceName = "=(load)";
+        }
+        while (true) {
+            vm->push(sourceVal);
+            if (!vm->pcall(1)) {
+                std::string err = vm->lastErrorMessage();
+                for (int i = 0; i < argCount; i++) vm->pop();
+                vm->push(Value::nil());
+                vm->push(Value::runtimeString(vm->internString(err)));
+                vm->currentCoroutine()->lastResultCount = 2;
+                return true;
+            }
+            size_t pcallResCount = vm->currentCoroutine()->lastResultCount;
+            std::vector<Value> pcallResults;
+            pcallResults.reserve(pcallResCount);
+            for (size_t i = 0; i < pcallResCount; i++) {
+                pcallResults.push_back(vm->pop());
+            }
+            std::reverse(pcallResults.begin(), pcallResults.end());
+            if (pcallResults.empty() || !pcallResults[0].isTruthy()) {
+                Value errVal = (pcallResults.size() > 1) ? pcallResults[1] : Value::nil();
+                std::string err = errVal.isString() ? vm->getStringValue(errVal) : errVal.toString();
+                for (int i = 0; i < argCount; i++) vm->pop();
+                vm->push(Value::nil());
+                vm->push(Value::runtimeString(vm->internString(err)));
+                vm->currentCoroutine()->lastResultCount = 2;
+                return true;
+            }
+            Value piece = (pcallResults.size() > 1) ? pcallResults[1] : Value::nil();
+            if (piece.isNil()) {
+                break;
+            }
+            if (!piece.isString()) {
+                for (int i = 0; i < argCount; i++) vm->pop();
+                vm->push(Value::nil());
+                vm->push(Value::runtimeString(vm->internString("reader function must return a string")));
+                vm->currentCoroutine()->lastResultCount = 2;
+                return true;
+            }
+            std::string s = vm->getStringValue(piece);
+            if (s.empty()) {
+                break;
+            }
+            source += s;
+        }
+    } else {
+        std::string err = "bad argument #1 to 'load' (string or function expected, got " + sourceVal.typeToString() + ")";
+        for (int i = 0; i < argCount; i++) vm->pop();
+        vm->push(Value::nil());
+        vm->push(Value::runtimeString(vm->internString(err)));
+        vm->currentCoroutine()->lastResultCount = 2;
+        return true;
+    }
+
+    if (source.size() >= 3 && (unsigned char)source[0] == 0xEF && (unsigned char)source[1] == 0xBB && (unsigned char)source[2] == 0xBF) {
+        source = source.substr(3);
+    }
     if (!source.empty() && source[0] == '#') {
         size_t nl = source.find('\n');
-        if (nl != std::string::npos) offset = nl + 1;
-        else offset = source.length();
+        if (nl != std::string::npos) {
+            size_t nextPos = nl + 1;
+            if (nextPos < source.size() && source[nextPos] == '\x1b') {
+                source = source.substr(nextPos);
+            } else {
+                source = source.substr(nl);
+            }
+        } else {
+            source.clear();
+        }
     }
-    bool isBinary = (source.length() >= offset + 4 && std::memcmp(source.data() + offset, "\x1bLua", 4) == 0);
+    bool isBinary = (!source.empty() && source[0] == '\x1b');
 
     if (isBinary) {
         if (mode.find('b') == std::string::npos) {
@@ -869,24 +935,33 @@ bool native_load(VM* vm, int argCount) {
             vm->currentCoroutine()->lastResultCount = 2;
             return true;
         }
-        std::istringstream is(source.substr(offset), std::ios::binary);
-        auto function = FunctionObject::deserialize(is);
-        if (!function) {
+        try {
+            std::istringstream is(source, std::ios::binary);
+            auto function = FunctionObject::deserialize(is);
+            if (!function) {
+                for(int i=0; i<argCount; i++) vm->pop();
+                vm->push(Value::nil());
+                vm->push(Value::runtimeString(vm->internString("bad binary format (truncated chunk)")));
+                vm->currentCoroutine()->lastResultCount = 2;
+                return true;
+            }
+            FunctionObject* funcPtr = function.get();
+            vm->registerFunction(function.release());
+            vm->setSourceName(sourceName);
+            vm->internConstants(*funcPtr);
+            ClosureObject* closure = vm->createClosure(funcPtr);
+            vm->setupRootUpvalues(closure, env, hasEnv);
+            for(int i=0; i<argCount; i++) vm->pop();
+            vm->push(Value::closure(closure));
+            vm->currentCoroutine()->lastResultCount = 1;
+            return true;
+        } catch (const std::exception& e) {
             for(int i=0; i<argCount; i++) vm->pop();
             vm->push(Value::nil());
-            vm->push(Value::runtimeString(vm->internString("Could not deserialize bytecode")));
+            vm->push(Value::runtimeString(vm->internString(e.what())));
+            vm->currentCoroutine()->lastResultCount = 2;
             return true;
         }
-        FunctionObject* funcPtr = function.get();
-        vm->registerFunction(function.release());
-        vm->setSourceName(sourceName);
-        vm->internConstants(*funcPtr);
-        ClosureObject* closure = vm->createClosure(funcPtr);
-        vm->setupRootUpvalues(closure, env);
-        for(int i=0; i<argCount; i++) vm->pop();
-        vm->push(Value::closure(closure));
-        vm->currentCoroutine()->lastResultCount = 1;
-        return true;
     }
 
     // Text chunk
@@ -926,7 +1001,7 @@ bool native_load(VM* vm, int argCount) {
         vm->setSourceName(sourceName);
         vm->internConstants(*funcPtr);
         ClosureObject* closure = vm->createClosure(funcPtr);
-        vm->setupRootUpvalues(closure, env);
+        vm->setupRootUpvalues(closure, env, hasEnv && !env.isNil());
         for(int i=0; i<argCount; i++) vm->pop();
         vm->push(Value::closure(closure));
         vm->currentCoroutine()->lastResultCount = 1;

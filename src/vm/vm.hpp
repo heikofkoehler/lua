@@ -38,6 +38,12 @@ public:
 
     static VM* currentVM;
 
+    // Stack size limits
+    static constexpr size_t STACK_LIMIT = 1000000;
+    static constexpr size_t STACK_MAX = 1000000 + 2000;
+    static constexpr size_t FRAMES_LIMIT = 20000;
+    static constexpr size_t FRAMES_MAX = 20000 + 200;
+
     // Execute a chunk of bytecode
     // Returns true if execution succeeded, false on error
     bool run(const FunctionObject& function);
@@ -82,6 +88,7 @@ public:
 
     // Coroutine operations
     CoroutineObject* createCoroutine(ClosureObject* closure);
+    CoroutineObject* createCoroutine(const Value& func);
     bool resumeCoroutine(CoroutineObject* co);
     void closeCoroutine(CoroutineObject* co);
 
@@ -89,7 +96,7 @@ public:
     UpvalueObject* captureUpvalue(size_t stackIndex);
     void closeUpvalues(size_t lastStackIndex, CoroutineObject* co = nullptr, const Value& error = Value::nil());
     void closeTBCVariables(size_t lastStackIndex, CoroutineObject* co = nullptr, const Value& error = Value::nil());
-    void setupRootUpvalues(ClosureObject* closure, const Value& env = Value::nil());
+    void setupRootUpvalues(ClosureObject* closure, const Value& env = Value::nil(), bool hasEnv = false);
 
     // File operations
     FileObject* openFile(const std::string& filename, const std::string& mode);
@@ -104,6 +111,8 @@ public:
     // Native function operations
     size_t registerNativeFunction(const std::string& name, NativeFunction func);
     NativeFunction getNativeFunction(size_t index);
+    const std::string& getNativeFunctionName(size_t index) const;
+    const void* getNativeFunctionPointer(size_t index) const;
     void addNativeToTable(TableObject* table, const char* name, NativeFunction func);
     void initStandardLibrary();
     void runInitializationFrames();
@@ -123,6 +132,8 @@ public:
     Value pop();
     Value peek(size_t distance = 0) const;
     void runtimeError(const std::string& message, int level = 1);
+    void runtimeError(const Value& errorObj, int level = 1);
+    std::string getVarInfo(size_t opIp, int operandIndex);
 
     // Access to globals (for base library)
     std::unordered_map<std::string, Value>& globals() { return globals_; }
@@ -148,6 +159,7 @@ public:
     static void jitClosure(VM* vm, uint32_t constantIndex, uint32_t bytecodeOffset);
     static void jitCall(VM* vm, uint32_t argCount, uint32_t retCount, uint32_t nextIp);
     static void jitReturnValue(VM* vm, uint32_t count);
+    static void jitEnsureStack(VM* vm, uint32_t needed);
 
     static void jitGetGlobal(VM* vm, uint32_t nameIndex);
     static void jitSetGlobal(VM* vm, uint32_t nameIndex);
@@ -215,6 +227,8 @@ public:
     bool isClosing() const { return isClosing_; }
     void setupSigintHandler();
     const std::string& lastErrorMessage() const { return lastErrorMessage_; }
+    const Value& lastErrorObject() const { return lastErrorObject_; }
+    void setLastErrorObject(const Value& val) { lastErrorObject_ = val; }
     void markRoots();
     void markValue(const Value& value);
     void markObject(GCObject* object);
@@ -234,13 +248,17 @@ public:
     // Metamethod helper
     Value getMetamethod(const Value& obj, const std::string& method);
     bool callBinaryMetamethod(const Value& a, const Value& b, const std::string& method);
-    bool callValue(int argCount, int retCount, bool isTailCall = false);
+    bool callValue(int argCount, int retCount, bool isTailCall = false, const char* metamethodName = nullptr, int extraArgs = 0);
     void callHook(const char* event, int line = -1);
     std::string getStringValue(const Value& value);
+    const void* valueToPointer(const Value& val) const;
+    bool toLString(const Value& val, std::string& out);
 
     // Global metatables
     void setTypeMetatable(Value::Type type, const Value& mt);
     Value getTypeMetatable(Value::Type type) const;
+
+    uint64_t* rngState() { return rngState_; }
 
     lua_State* currentL() const { return currentL_; }
     void setCurrentL(lua_State* L) { currentL_ = L; }
@@ -251,6 +269,8 @@ public:
     static bool stringToInteger(const std::string& str, int64_t& outInt);
     static bool stringToNumber(const std::string& str, double& outNum, bool& isInt);
     static bool stringToNumber(const std::string& str, double& outNum, int64_t& outInt, bool& isInt);
+    Value less(const Value& a, const Value& b);
+    Value lessEqual(const Value& a, const Value& b);
 
 private:
     lua_State* currentL_ = nullptr;
@@ -300,8 +320,6 @@ private:
 
     // Comparison operations
     Value equal(const Value& a, const Value& b);
-    Value less(const Value& a, const Value& b);
-    Value lessEqual(const Value& a, const Value& b);
 
     // Logical operations
     Value logicalNot(const Value& a);
@@ -315,8 +333,12 @@ private:
     bool hadError_;               // Error flag
     bool inPcall_;                // Whether we are inside a protected call
     bool isHandlingError_;        // TRUE if we're currently processing an error
+    bool isRunningErrorHandler_ = false; // TRUE if we are currently executing a message handler
     std::string lastErrorMessage_; // Last runtime error message
+    Value lastErrorObject_ = Value::nil();
+    std::vector<Value> errorHandlers_; // Active error handlers for xpcall / lua_pcall
     bool stdlibInitialized_;      // Whether standard library has been initialized
+    uint64_t rngState_[4] = {0, 0, 0, 0};
 
     // JIT related
     std::unique_ptr<JITCompiler> jit_;
@@ -348,11 +370,11 @@ private:
     std::vector<StringObject*> strings_;  // Compile-time string pool (owned)
     std::vector<Value> rootedConstants_;  // Interned constants rooted for GC
     std::unordered_map<std::string, StringObject*> runtimeStrings_; // Runtime string interning
-    std::vector<NativeFunction> nativeFunctions_;  // Native function table
-
-    // Stack size limits
-    static constexpr size_t STACK_MAX = 256;
-    static constexpr size_t FRAMES_MAX = 64;
+    struct NativeFunctionInfo {
+        std::string name;
+        NativeFunction func;
+    };
+    std::vector<NativeFunctionInfo> nativeFunctions_;  // Native function table
 
     // Get current call frame
     CallFrame& currentFrame();

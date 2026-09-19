@@ -2,8 +2,8 @@
 #include "vm/vm.hpp"
 
 void TableObject::set(const Value& key, const Value& value) {
-    if (key.isNil()) {
-        // Cannot use nil as a key in Lua
+    if (key.isNil() || (key.isFloat() && std::isnan(key.asNumber()))) {
+        // Cannot use nil or NaN as a key in Lua
         return;
     }
     

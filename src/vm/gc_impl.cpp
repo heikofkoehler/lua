@@ -42,14 +42,26 @@ void VM::markRoots() {
     for (const auto& pair : globals_) markValue(pair.second);
     for (const auto& pair : registry_) markValue(pair.second);
     for (int i = 0; i < Value::NUM_TYPES; i++) markValue(typeMetatables_[i]);
+    markValue(lastErrorObject_);
+    for (const auto& h : errorHandlers_) markValue(h);
 
     // Mark interned constants
     for (const auto& val : rootedConstants_) {
         markValue(val);
     }
 
-    if (mainCoroutine_) markObject(mainCoroutine_);
-    if (currentCoroutine_) markObject(currentCoroutine_);
+    if (mainCoroutine_) {
+        markObject(mainCoroutine_);
+        for (const auto& vec : mainCoroutine_->pendingReturns) {
+            for (const auto& val : vec) markValue(val);
+        }
+    }
+    if (currentCoroutine_) {
+        markObject(currentCoroutine_);
+        for (const auto& vec : currentCoroutine_->pendingReturns) {
+            for (const auto& val : vec) markValue(val);
+        }
+    }
 }
 
 void VM::processWeakTables() {
@@ -215,10 +227,18 @@ static void blackenObject(VM* vm, GCObject* object) {
             TableObject* table = static_cast<TableObject*>(object);
             vm->markValue(table->getMetatable());
             
-            // For tables, we mark all keys and values
+            Value modeVal = vm->getMetamethod(Value::table(table), "__mode");
+            bool weakKeys = false;
+            bool weakValues = false;
+            if (modeVal.isString()) {
+                std::string mode = vm->getStringValue(modeVal);
+                if (mode.find('k') != std::string::npos) weakKeys = true;
+                if (mode.find('v') != std::string::npos) weakValues = true;
+            }
+
             for (const auto& pair : table->data()) {
-                vm->markValue(pair.first);
-                vm->markValue(pair.second);
+                if (!weakKeys) vm->markValue(pair.first);
+                if (!weakValues) vm->markValue(pair.second);
             }
             break;
         }
@@ -235,6 +255,8 @@ static void blackenObject(VM* vm, GCObject* object) {
             UpvalueObject* uv = static_cast<UpvalueObject*>(object);
             if (uv->isClosed()) {
                 vm->markValue(uv->closedValue());
+            } else if (uv->owner()) {
+                vm->markObject(uv->owner());
             }
             break;
         }
@@ -245,10 +267,17 @@ static void blackenObject(VM* vm, GCObject* object) {
             for (const auto& val : co->yieldedValues) vm->markValue(val);
             for (const auto& frame : co->frames) {
                 if (frame.closure) vm->markObject(frame.closure);
+                vm->markValue(frame.cFunc);
+                vm->markValue(frame.errorHandler);
             }
             for (auto* uv : co->openUpvalues) vm->markObject(uv);
+            for (const auto& vec : co->pendingReturns) {
+                for (const auto& val : vec) vm->markValue(val);
+            }
             if (co->caller) vm->markObject(co->caller);
             vm->markValue(co->hook);
+            vm->markValue(co->closeError);
+            vm->markValue(co->initialFunc);
             break;
         }
 
@@ -364,6 +393,11 @@ void VM::gcStep() {
             }
 
             processWeakTables();
+            while (!grayStack_.empty()) {
+                GCObject* object = grayStack_.back();
+                grayStack_.pop_back();
+                blackenObject(this, object);
+            }
             removeUnmarkedWeakEntries();
 
             // 3. Find objects to be finalized

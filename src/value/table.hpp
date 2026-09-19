@@ -5,6 +5,7 @@
 #include "value/value.hpp"
 #include <unordered_map>
 #include <functional>
+#include <cmath>
 
 // Forward declaration
 class TableObject;
@@ -35,6 +36,9 @@ public:
     void set(const std::string& key, const Value& value);
 
     Value get(const Value& key) const {
+        if (key.isNil() || (key.isFloat() && std::isnan(key.asNumber()))) {
+            return Value::nil();
+        }
         auto it = map_.find(key);
         if (it != map_.end()) {
             return it->second;
@@ -45,6 +49,9 @@ public:
     Value get(const std::string& key) const;
 
     bool has(const Value& key) const {
+        if (key.isNil() || (key.isFloat() && std::isnan(key.asNumber()))) {
+            return false;
+        }
         return map_.find(key) != map_.end();
     }
 

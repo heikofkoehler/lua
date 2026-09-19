@@ -9,6 +9,275 @@
 #include <iostream>
 #include <algorithm>
 
+std::string VM::getVarInfo(size_t opIp, int operandIndex) {
+    if (currentCoroutine_->frames.empty() || !currentFrame().closure || !currentFrame().chunk) {
+        return "";
+    }
+    FunctionObject* func = currentFrame().closure->function();
+    const Chunk* chunk = currentFrame().chunk;
+    const auto& code = chunk->code();
+    if (opIp >= code.size()) return "";
+
+    struct AbstractVal {
+        enum Source { UNKNOWN, GLOBAL, LOCAL, UPVALUE, FIELD };
+        Source source = UNKNOWN;
+        std::string name;
+        bool isConstStr = false;
+        std::string constStr;
+    };
+
+    std::vector<AbstractVal> astack;
+    size_t cur = 0;
+    while (cur < opIp && cur < code.size()) {
+        size_t len = chunk->instructionLength(cur);
+        if (len == 0) break;
+        OpCode op = static_cast<OpCode>(code[cur]);
+        switch (op) {
+            case OpCode::OP_CONSTANT: {
+                uint8_t c = code[cur + 1];
+                if (c < chunk->constants().size() && chunk->constants()[c].isString()) {
+                    astack.push_back({AbstractVal::UNKNOWN, "", true, getStringValue(chunk->constants()[c])});
+                } else {
+                    astack.push_back({AbstractVal::UNKNOWN, "", false, ""});
+                }
+                break;
+            }
+            case OpCode::OP_CONSTANT_LONG: {
+                uint32_t c = code[cur + 1] | (code[cur + 2] << 8) | (code[cur + 3] << 16);
+                if (c < chunk->constants().size() && chunk->constants()[c].isString()) {
+                    astack.push_back({AbstractVal::UNKNOWN, "", true, getStringValue(chunk->constants()[c])});
+                } else {
+                    astack.push_back({AbstractVal::UNKNOWN, "", false, ""});
+                }
+                break;
+            }
+            case OpCode::OP_NIL:
+            case OpCode::OP_TRUE:
+            case OpCode::OP_FALSE: {
+                astack.push_back({AbstractVal::UNKNOWN, "", false, ""});
+                break;
+            }
+            case OpCode::OP_GET_GLOBAL: {
+                uint8_t nameIndex = code[cur + 1];
+                std::string gname = chunk->getIdentifier(nameIndex);
+                astack.push_back({AbstractVal::GLOBAL, gname, false, ""});
+                break;
+            }
+            case OpCode::OP_SET_GLOBAL: {
+                if (!astack.empty()) astack.pop_back();
+                break;
+            }
+            case OpCode::OP_GET_LOCAL: {
+                uint8_t slot = code[cur + 1];
+                std::string lname;
+                for (const auto& l : func->localVars()) {
+                    if (l.slot == slot && cur >= l.startPC && cur <= l.endPC) {
+                        lname = l.name;
+                        break;
+                    }
+                }
+                if (lname.empty()) {
+                    for (const auto& l : func->localVars()) {
+                        if (l.slot == slot) {
+                            lname = l.name;
+                        }
+                    }
+                }
+                astack.push_back({AbstractVal::LOCAL, lname, false, ""});
+                break;
+            }
+            case OpCode::OP_SET_LOCAL: {
+                if (!astack.empty()) astack.pop_back();
+                break;
+            }
+            case OpCode::OP_GET_UPVALUE: {
+                uint8_t idx = code[cur + 1];
+                std::string uname = func->getUpvalueName(idx);
+                astack.push_back({AbstractVal::UPVALUE, uname, false, ""});
+                break;
+            }
+            case OpCode::OP_SET_UPVALUE: {
+                if (!astack.empty()) astack.pop_back();
+                break;
+            }
+            case OpCode::OP_GET_TABUP: {
+                uint8_t upIndex = code[cur + 1];
+                uint8_t constIndex = code[cur + 2];
+                std::string kname;
+                if (constIndex < chunk->constants().size() && chunk->constants()[constIndex].isString()) {
+                    kname = getStringValue(chunk->constants()[constIndex]);
+                }
+                std::string upname = func->getUpvalueName(upIndex);
+                if (upIndex == 0 || upname == "_ENV") {
+                    astack.push_back({AbstractVal::GLOBAL, kname, false, ""});
+                } else {
+                    astack.push_back({AbstractVal::FIELD, kname, false, ""});
+                }
+                break;
+            }
+            case OpCode::OP_SET_TABUP: {
+                if (!astack.empty()) astack.pop_back();
+                break;
+            }
+            case OpCode::OP_GET_TABUP_LONG: {
+                uint8_t upIndex = code[cur + 1];
+                uint32_t constIndex = code[cur + 2] | (code[cur + 3] << 8) | (code[cur + 4] << 16);
+                std::string kname;
+                if (constIndex < chunk->constants().size() && chunk->constants()[constIndex].isString()) {
+                    kname = getStringValue(chunk->constants()[constIndex]);
+                }
+                std::string upname = func->getUpvalueName(upIndex);
+                if (upIndex == 0 || upname == "_ENV") {
+                    astack.push_back({AbstractVal::GLOBAL, kname, false, ""});
+                } else {
+                    astack.push_back({AbstractVal::FIELD, kname, false, ""});
+                }
+                break;
+            }
+            case OpCode::OP_SET_TABUP_LONG: {
+                if (!astack.empty()) astack.pop_back();
+                break;
+            }
+            case OpCode::OP_GET_TABLE: {
+                AbstractVal key = astack.empty() ? AbstractVal{} : astack.back();
+                if (!astack.empty()) astack.pop_back();
+                if (!astack.empty()) astack.pop_back();
+                if (key.isConstStr) {
+                    astack.push_back({AbstractVal::FIELD, key.constStr, false, ""});
+                } else {
+                    astack.push_back({AbstractVal::UNKNOWN, "", false, ""});
+                }
+                break;
+            }
+            case OpCode::OP_SET_TABLE: {
+                if (!astack.empty()) astack.pop_back();
+                if (!astack.empty()) astack.pop_back();
+                if (!astack.empty()) astack.pop_back();
+                break;
+            }
+            case OpCode::OP_POP: {
+                if (!astack.empty()) astack.pop_back();
+                break;
+            }
+            case OpCode::OP_DUP: {
+                if (!astack.empty()) astack.push_back(astack.back());
+                break;
+            }
+            case OpCode::OP_SWAP: {
+                if (astack.size() >= 2) std::swap(astack[astack.size() - 1], astack[astack.size() - 2]);
+                break;
+            }
+            case OpCode::OP_ROTATE: {
+                uint8_t n = code[cur + 1];
+                if (astack.size() >= n && n > 1) {
+                    AbstractVal top = astack.back();
+                    astack.erase(astack.end() - 1);
+                    astack.insert(astack.end() - (n - 1), top);
+                }
+                break;
+            }
+            case OpCode::OP_ADD:
+            case OpCode::OP_SUB:
+            case OpCode::OP_MUL:
+            case OpCode::OP_DIV:
+            case OpCode::OP_IDIV:
+            case OpCode::OP_MOD:
+            case OpCode::OP_POW:
+            case OpCode::OP_BAND:
+            case OpCode::OP_BOR:
+            case OpCode::OP_BXOR:
+            case OpCode::OP_SHL:
+            case OpCode::OP_SHR:
+            case OpCode::OP_CONCAT:
+            case OpCode::OP_EQUAL:
+            case OpCode::OP_LESS:
+            case OpCode::OP_LESS_EQUAL:
+            case OpCode::OP_GREATER:
+            case OpCode::OP_GREATER_EQUAL: {
+                if (!astack.empty()) astack.pop_back();
+                if (!astack.empty()) astack.pop_back();
+                astack.push_back({AbstractVal::UNKNOWN, "", false, ""});
+                break;
+            }
+            case OpCode::OP_NEG:
+            case OpCode::OP_NOT:
+            case OpCode::OP_BNOT:
+            case OpCode::OP_LEN: {
+                if (!astack.empty()) astack.pop_back();
+                astack.push_back({AbstractVal::UNKNOWN, "", false, ""});
+                break;
+            }
+            case OpCode::OP_NEW_TABLE: {
+                astack.push_back({AbstractVal::UNKNOWN, "", false, ""});
+                break;
+            }
+            case OpCode::OP_CALL:
+            case OpCode::OP_CALL_MULTI: {
+                uint8_t argCount = code[cur + 1];
+                uint8_t retCount = code[cur + 2];
+                for (size_t i = 0; i <= argCount && !astack.empty(); i++) {
+                    astack.pop_back();
+                }
+                if (retCount != 255) {
+                    for (size_t i = 0; i < retCount; i++) {
+                        astack.push_back({AbstractVal::UNKNOWN, "", false, ""});
+                    }
+                } else {
+                    astack.push_back({AbstractVal::UNKNOWN, "", false, ""});
+                }
+                break;
+            }
+            case OpCode::OP_CLOSURE:
+            case OpCode::OP_CLOSURE_LONG: {
+                astack.push_back({AbstractVal::UNKNOWN, "", false, ""});
+                break;
+            }
+            case OpCode::OP_DEF_GLOBAL:
+            case OpCode::OP_DEF_GLOBAL_LONG: {
+                if (!astack.empty()) astack.pop_back();
+                break;
+            }
+            case OpCode::OP_DEF_GLOBAL_TABLE: {
+                if (!astack.empty()) astack.pop_back();
+                if (!astack.empty()) astack.pop_back();
+                if (!astack.empty()) astack.pop_back();
+                break;
+            }
+            case OpCode::OP_CLOSE: {
+                uint8_t slot = code[cur + 1];
+                if (astack.size() > slot) astack.resize(slot);
+                break;
+            }
+            case OpCode::OP_CLOSE_UPVALUE: {
+                if (!astack.empty()) astack.pop_back();
+                break;
+            }
+            default:
+                break;
+        }
+        cur += len;
+    }
+
+    AbstractVal target;
+    if (operandIndex == 1) {
+        if (!astack.empty()) target = astack.back();
+    } else {
+        if (astack.size() >= 2) target = astack[astack.size() - 2];
+        else if (!astack.empty()) target = astack.back();
+    }
+
+    if (target.source == AbstractVal::GLOBAL && !target.name.empty()) {
+        return " (global '" + target.name + "')";
+    } else if (target.source == AbstractVal::LOCAL && !target.name.empty()) {
+        return " (local '" + target.name + "')";
+    } else if (target.source == AbstractVal::UPVALUE && !target.name.empty()) {
+        return " (upvalue '" + target.name + "')";
+    } else if (target.source == AbstractVal::FIELD && !target.name.empty()) {
+        return " (field '" + target.name + "')";
+    }
+    return "";
+}
+
 bool VM::run(size_t targetFrameCount) {
     // Main execution loop
     while (true) {
@@ -89,6 +358,7 @@ bool VM::run(size_t targetFrameCount) {
         uint8_t instruction = readByte();
         OpCode op = static_cast<OpCode>(instruction);
 
+        try {
         switch (op) {
             case OpCode::OP_CONSTANT: {
                 Value constant = readConstant();
@@ -343,16 +613,41 @@ bool VM::run(size_t targetFrameCount) {
             }
             case OpCode::OP_CLOSE_UPVALUE: {
                 // Close upvalue at top of stack (and TBC variables)
+                currentFrame().ip -= 1;
                 closeUpvalues(currentCoroutine_->stack.size() - 1);
                 if (currentCoroutine_->status == CoroutineObject::Status::SUSPENDED) return true;
+                currentFrame().ip += 1;
                 pop();
                 break;
             }
 
             case OpCode::OP_TBC: {
                 uint8_t slot = readByte();
+                uint8_t nameIdx = readByte();
                 size_t index = currentFrame().stackBase + slot;
+                Value val = currentCoroutine_->stack[index];
+                if (!val.isFalsey()) {
+                    Value mm = getMetamethod(val, "__close");
+                    if (mm.isNil()) {
+                        std::string varName = getStringValue(getConstant(nameIdx));
+                        runtimeError("variable '" + varName + "' got a non-closable value");
+                        break;
+                    }
+                }
                 currentCoroutine_->tbcVariables.push_back(index);
+                break;
+            }
+
+            case OpCode::OP_CLOSE: {
+                uint8_t slot = readByte();
+                size_t targetIndex = currentFrame().stackBase + slot;
+                currentFrame().ip -= 2;
+                closeUpvalues(targetIndex);
+                if (currentCoroutine_->status == CoroutineObject::Status::SUSPENDED) return true;
+                currentFrame().ip += 2;
+                while (currentCoroutine_->stack.size() > targetIndex) {
+                    pop();
+                }
                 break;
             }
 
@@ -444,11 +739,14 @@ bool VM::run(size_t targetFrameCount) {
                 Value b = pop();
                 Value a = pop();
                 int64_t ia, ib;
-                if (toIntegerNoString(a, ia) && toIntegerNoString(b, ib)) {
+                bool okA = toIntegerNoString(a, ia);
+                bool okB = toIntegerNoString(b, ib);
+                if (okA && okB) {
                     push(makeInteger(ia & ib));
                 } else if (!callBinaryMetamethod(a, b, "__band")) {
                     if (a.isNumber() && b.isNumber()) {
-                        runtimeError("number has no integer representation");
+                        int opIdx = !okA ? 0 : 1;
+                        runtimeError("number" + getVarInfo(currentFrame().ip - 1, opIdx) + " has no integer representation");
                     } else {
                         runtimeError("attempt to perform bitwise operation on " + a.typeToString() + " and " + b.typeToString());
                     }
@@ -460,11 +758,14 @@ bool VM::run(size_t targetFrameCount) {
                 Value b = pop();
                 Value a = pop();
                 int64_t ia, ib;
-                if (toIntegerNoString(a, ia) && toIntegerNoString(b, ib)) {
+                bool okA = toIntegerNoString(a, ia);
+                bool okB = toIntegerNoString(b, ib);
+                if (okA && okB) {
                     push(makeInteger(ia | ib));
                 } else if (!callBinaryMetamethod(a, b, "__bor")) {
                     if (a.isNumber() && b.isNumber()) {
-                        runtimeError("number has no integer representation");
+                        int opIdx = !okA ? 0 : 1;
+                        runtimeError("number" + getVarInfo(currentFrame().ip - 1, opIdx) + " has no integer representation");
                     } else {
                         runtimeError("attempt to perform bitwise operation on " + a.typeToString() + " and " + b.typeToString());
                     }
@@ -476,11 +777,14 @@ bool VM::run(size_t targetFrameCount) {
                 Value b = pop();
                 Value a = pop();
                 int64_t ia, ib;
-                if (toIntegerNoString(a, ia) && toIntegerNoString(b, ib)) {
+                bool okA = toIntegerNoString(a, ia);
+                bool okB = toIntegerNoString(b, ib);
+                if (okA && okB) {
                     push(makeInteger(ia ^ ib));
                 } else if (!callBinaryMetamethod(a, b, "__bxor")) {
                     if (a.isNumber() && b.isNumber()) {
-                        runtimeError("number has no integer representation");
+                        int opIdx = !okA ? 0 : 1;
+                        runtimeError("number" + getVarInfo(currentFrame().ip - 1, opIdx) + " has no integer representation");
                     } else {
                         runtimeError("attempt to perform bitwise operation on " + a.typeToString() + " and " + b.typeToString());
                     }
@@ -492,11 +796,14 @@ bool VM::run(size_t targetFrameCount) {
                 Value b = pop();
                 Value a = pop();
                 int64_t ia, ib;
-                if (toIntegerNoString(a, ia) && toIntegerNoString(b, ib)) {
+                bool okA = toIntegerNoString(a, ia);
+                bool okB = toIntegerNoString(b, ib);
+                if (okA && okB) {
                     push(shiftLeft(a, b));
                 } else if (!callBinaryMetamethod(a, b, "__shl")) {
                     if (a.isNumber() && b.isNumber()) {
-                        runtimeError("number has no integer representation");
+                        int opIdx = !okA ? 0 : 1;
+                        runtimeError("number" + getVarInfo(currentFrame().ip - 1, opIdx) + " has no integer representation");
                     } else {
                         runtimeError("attempt to perform bitwise operation on " + a.typeToString() + " and " + b.typeToString());
                     }
@@ -508,11 +815,14 @@ bool VM::run(size_t targetFrameCount) {
                 Value b = pop();
                 Value a = pop();
                 int64_t ia, ib;
-                if (toIntegerNoString(a, ia) && toIntegerNoString(b, ib)) {
+                bool okA = toIntegerNoString(a, ia);
+                bool okB = toIntegerNoString(b, ib);
+                if (okA && okB) {
                     push(shiftRight(a, b));
                 } else if (!callBinaryMetamethod(a, b, "__shr")) {
                     if (a.isNumber() && b.isNumber()) {
-                        runtimeError("number has no integer representation");
+                        int opIdx = !okA ? 0 : 1;
+                        runtimeError("number" + getVarInfo(currentFrame().ip - 1, opIdx) + " has no integer representation");
                     } else {
                         runtimeError("attempt to perform bitwise operation on " + a.typeToString() + " and " + b.typeToString());
                     }
@@ -555,7 +865,7 @@ bool VM::run(size_t targetFrameCount) {
                     push(makeInteger(~ia));
                 } else if (!callBinaryMetamethod(a, a, "__bnot")) { // Unary bitwise NOT
                     if (a.isNumber()) {
-                        runtimeError("number has no integer representation");
+                        runtimeError("number" + getVarInfo(currentFrame().ip - 1, 0) + " has no integer representation");
                     } else {
                         runtimeError("attempt to perform bitwise operation on " + a.typeToString());
                     }
@@ -832,6 +1142,7 @@ bool VM::run(size_t targetFrameCount) {
                 if (!callValue(actualArgCount, retCount)) {
                     return false;
                 }
+                if (currentCoroutine_->status == CoroutineObject::Status::SUSPENDED) return true;
                 // If it was a Lua call, trigger hook
                 if (currentCoroutine_->frames.size() > prevFrames && 
                     (currentCoroutine_->hookMask & CoroutineObject::MASK_CALL)) {
@@ -873,34 +1184,49 @@ bool VM::run(size_t targetFrameCount) {
             case OpCode::OP_RETURN_VALUE:
             case OpCode::OP_RETURN_VALUE_MULTI: {
                 uint8_t operand = readByte();
-                
+
+                if (!currentFrame().isReturning) {
+                    currentFrame().isReturning = true;
+                    size_t actualCount;
+                    if (op == OpCode::OP_RETURN_VALUE_MULTI) {
+                        actualCount = static_cast<size_t>(operand) + currentCoroutine_->lastResultCount;
+                    } else {
+                        actualCount = operand;
+                    }
+
+                    // Pop all return values from the stack (in reverse order)
+                    std::vector<Value> returnValues;
+                    returnValues.reserve(actualCount);
+                    for (size_t i = 0; i < actualCount; i++) {
+                        returnValues.push_back(pop());
+                    }
+                    // Reverse so they're in correct order
+                    std::reverse(returnValues.begin(), returnValues.end());
+
+                    currentCoroutine_->pendingReturns.push_back(std::move(returnValues));
+                }
+
                 size_t stackBase = currentFrame().stackBase;
+                currentFrame().ip -= 2;
                 closeUpvalues(stackBase);
                 
                 if (currentCoroutine_->status == CoroutineObject::Status::SUSPENDED) {
                     return true;
                 }
+                currentFrame().ip += 2;
+
+                std::vector<Value> returnValues = std::move(currentCoroutine_->pendingReturns.back());
+                currentCoroutine_->pendingReturns.pop_back();
+                currentFrame().isReturning = false;
 
                 // Handle debug hook before returning
                 if (currentCoroutine_->hookMask & CoroutineObject::MASK_RET) {
                     callHook("return");
                 }
 
-                size_t actualCount;
-                if (op == OpCode::OP_RETURN_VALUE_MULTI) {
-                    actualCount = static_cast<size_t>(operand) + currentCoroutine_->lastResultCount;
-                } else {
-                    actualCount = operand;
+                if (currentFrame().isPcall) {
+                    returnValues.insert(returnValues.begin(), Value::boolean(true));
                 }
-
-                // Pop all return values from the stack (in reverse order)
-                std::vector<Value> returnValues;
-                returnValues.reserve(actualCount);
-                for (size_t i = 0; i < actualCount; i++) {
-                    returnValues.push_back(pop());
-                }
-                // Reverse so they're in correct order
-                std::reverse(returnValues.begin(), returnValues.end());
 
                 // Get the expected return count from the call frame
                 uint8_t expectedRetCount = currentFrame().retCount;
@@ -945,6 +1271,9 @@ bool VM::run(size_t targetFrameCount) {
                 if (shouldExit) {
                     if (currentCoroutine_->frames.empty()) {
                         currentCoroutine_->status = CoroutineObject::Status::DEAD;
+                        currentCoroutine_->chunk = nullptr;
+                    } else {
+                        currentCoroutine_->chunk = returnChunk;
                     }
                     
                     // Push all return values before returning
@@ -955,8 +1284,116 @@ bool VM::run(size_t targetFrameCount) {
                     return !hadError_;
                 }
 
+                while (!currentCoroutine_->frames.empty() && currentFrame().isC) {
+                    CallFrame cframe = currentFrame();
+                    if (cframe.isErrorUnwinding) {
+                        if (!currentCoroutine_->tbcVariables.empty() && currentCoroutine_->tbcVariables.back() >= cframe.stackBase) {
+                            Value errObj = !currentCoroutine_->closeError.isNil() ? currentCoroutine_->closeError :
+                                           (!lastErrorObject_.isNil() ? lastErrorObject_ : Value::runtimeString(internString(lastErrorMessage_)));
+                            try {
+                                closeUpvalues(cframe.stackBase, nullptr, errObj);
+                            } catch (const RuntimeError& e) {
+                                errObj = lastErrorObject_.isNil() ? Value::runtimeString(internString(e.what())) : lastErrorObject_;
+                                hadError_ = false;
+                                currentCoroutine_->closeError = errObj;
+                            } catch (const std::exception& e) {
+                                errObj = Value::runtimeString(internString(e.what()));
+                                hadError_ = false;
+                                currentCoroutine_->closeError = errObj;
+                            }
+                            if (currentCoroutine_->status == CoroutineObject::Status::SUSPENDED) {
+                                return true;
+                            }
+                        }
+                        Value errObj = !currentCoroutine_->closeError.isNil() ? currentCoroutine_->closeError :
+                                       (!lastErrorObject_.isNil() ? lastErrorObject_ : Value::runtimeString(internString(lastErrorMessage_)));
+                        currentCoroutine_->frames.pop_back();
+                        currentCoroutine_->closeError = Value::nil();
+                        lastErrorObject_ = Value::nil();
+                        hadError_ = false;
+                        isHandlingError_ = false;
+
+                        while (currentCoroutine_->stack.size() > cframe.stackBase - 1) {
+                            pop();
+                        }
+
+                        returnValues.clear();
+                        returnValues.push_back(Value::boolean(false));
+                        returnValues.push_back(errObj);
+
+                        uint8_t cRetCount = cframe.retCount;
+                        if (cRetCount > 0) {
+                            size_t expected = static_cast<size_t>(cRetCount - 1);
+                            if (returnValues.size() > expected) {
+                                returnValues.resize(expected);
+                            } else {
+                                while (returnValues.size() < expected) {
+                                    returnValues.push_back(Value::nil());
+                                }
+                            }
+                        }
+
+                        if (targetFrameCount > 0 && currentCoroutine_->frames.size() <= targetFrameCount) {
+                            shouldExit = true;
+                        } else if (currentCoroutine_->frames.empty()) {
+                            shouldExit = true;
+                            currentCoroutine_->status = CoroutineObject::Status::DEAD;
+                        }
+
+                        if (shouldExit) {
+                            currentCoroutine_->lastResultCount = returnValues.size();
+                            for (const auto& value : returnValues) {
+                                push(value);
+                            }
+                            return true;
+                        }
+                        continue;
+                    }
+
+                    currentCoroutine_->frames.pop_back();
+
+                    if (cframe.isPcall) {
+                        returnValues.insert(returnValues.begin(), Value::boolean(true));
+                    }
+
+                    uint8_t cRetCount = cframe.retCount;
+                    if (cRetCount > 0) {
+                        size_t expected = static_cast<size_t>(cRetCount - 1);
+                        if (returnValues.size() > expected) {
+                            returnValues.resize(expected);
+                        } else {
+                            while (returnValues.size() < expected) {
+                                returnValues.push_back(Value::nil());
+                            }
+                        }
+                    }
+
+                    while (currentCoroutine_->stack.size() > cframe.stackBase - 1) {
+                        pop();
+                    }
+
+                    if (targetFrameCount > 0 && currentCoroutine_->frames.size() <= targetFrameCount) {
+                        shouldExit = true;
+                    } else if (currentCoroutine_->frames.empty()) {
+                        shouldExit = true;
+                        currentCoroutine_->status = CoroutineObject::Status::DEAD;
+                    }
+
+                    if (shouldExit) {
+                        currentCoroutine_->lastResultCount = returnValues.size();
+                        for (const auto& value : returnValues) {
+                            push(value);
+                        }
+                        return !hadError_;
+                    }
+                }
+
                 // Restore execution state
-                currentCoroutine_->chunk = returnChunk;
+                if (!currentCoroutine_->frames.empty()) {
+                    currentCoroutine_->chunk = currentFrame().chunk;
+                } else {
+                    currentCoroutine_->chunk = returnChunk;
+                }
                 // Note: currentFrame().ip is now the caller's ip
 
                 // Set lastResultCount before pushing so it matches the number of returned values
@@ -1040,6 +1477,18 @@ bool VM::run(size_t targetFrameCount) {
                     if (t.isTable()) {
                         TableObject* table = t.asTableObj();
                         if (table->getMetatable().isNil() || table->has(key)) {
+                            if (key.isNil()) {
+                                runtimeError("table index is nil");
+                                pop(); pop(); pop();
+                                done = true;
+                                break;
+                            }
+                            if (key.isFloat() && std::isnan(key.asNumber())) {
+                                runtimeError("table index is NaN");
+                                pop(); pop(); pop();
+                                done = true;
+                                break;
+                            }
                             table->set(key, value);
                             pop(); pop(); pop();
                             done = true;
@@ -1050,6 +1499,18 @@ bool VM::run(size_t targetFrameCount) {
                     Value newIndex = getMetamethod(t, "__newindex");
                     if (newIndex.isNil()) {
                         if (t.isTable()) {
+                            if (key.isNil()) {
+                                runtimeError("table index is nil");
+                                pop(); pop(); pop();
+                                done = true;
+                                break;
+                            }
+                            if (key.isFloat() && std::isnan(key.asNumber())) {
+                                runtimeError("table index is NaN");
+                                pop(); pop(); pop();
+                                done = true;
+                                break;
+                            }
                             TableObject* table = t.asTableObj();
                             table->set(key, value);
                         } else {
@@ -1086,26 +1547,178 @@ bool VM::run(size_t targetFrameCount) {
                 }
 
                 CallFrame& frame = currentFrame();
+                FunctionObject* func = frame.closure ? frame.closure->function() : nullptr;
+
+                if (func && func->hasNamedVarargs() && !func->isVarargOptimized()) {
+                    int slot = func->namedVarargSlot();
+                    Value tblVal = currentCoroutine_->stack[frame.stackBase + slot];
+                    if (!tblVal.isTable()) {
+                        runtimeError("vararg table has no proper 'n'");
+                        break;
+                    }
+                    TableObject* tbl = tblVal.asTableObj();
+                    Value nVal = tbl->get("n");
+                    if (!nVal.isInteger()) {
+                        runtimeError("vararg table has no proper 'n'");
+                        break;
+                    }
+                    int64_t n = nVal.asInteger();
+                    if (n < 0 || n > 1000000) {
+                        runtimeError("vararg table has no proper 'n'");
+                        break;
+                    }
+
+                    if (retCount == 0) {
+                        for (int64_t i = 1; i <= n; i++) {
+                            push(tbl->get(Value::integer(i)));
+                        }
+                        currentCoroutine_->lastResultCount = static_cast<size_t>(n);
+                    } else {
+                        int count = (int)retCount - 1;
+                        for (int i = 0; i < count; i++) {
+                            if (i < n) {
+                                push(tbl->get(Value::integer(static_cast<int64_t>(i + 1))));
+                            } else {
+                                push(Value::nil());
+                            }
+                        }
+                        currentCoroutine_->lastResultCount = count;
+                    }
+                } else {
+                    const auto& varargs = frame.varargs;
+                    
+                    if (retCount == 0) {
+                        // Push all varargs
+                        for (size_t i = 0; i < varargs.size(); i++) {
+                            push(varargs[i]);
+                        }
+                        currentCoroutine_->lastResultCount = varargs.size();
+                    } else {
+                        // Push exactly retCount - 1 values
+                        int count = (int)retCount - 1;
+                        for (int i = 0; i < count; i++) {
+                            if (i < (int)varargs.size()) {
+                                push(varargs[i]);
+                            } else {
+                                push(Value::nil());
+                            }
+                        }
+                        currentCoroutine_->lastResultCount = count;
+                    }
+                }
+                break;
+            }
+
+            case OpCode::OP_PACK_VARARG_TABLE: {
+                CallFrame& frame = currentFrame();
+                TableObject* tbl = createTable();
+                const auto& varargs = frame.varargs;
+                for (size_t i = 0; i < varargs.size(); i++) {
+                    tbl->set(Value::integer(static_cast<int64_t>(i + 1)), varargs[i]);
+                }
+                tbl->set("n", Value::integer(static_cast<int64_t>(varargs.size())));
+                push(Value::table(tbl));
+                break;
+            }
+
+            case OpCode::OP_GET_VARARG_ITEM: {
+                Value key = pop();
+                CallFrame& frame = currentFrame();
                 const auto& varargs = frame.varargs;
                 
-                if (retCount == 0) {
-                    // Push all varargs
-                    for (size_t i = 0; i < varargs.size(); i++) {
-                        push(varargs[i]);
+                if (key.isStringEqual("n")) {
+                    push(Value::integer(static_cast<int64_t>(varargs.size())));
+                } else if (key.isInteger()) {
+                    int64_t idx = key.asInteger();
+                    if (idx >= 1 && static_cast<size_t>(idx) <= varargs.size()) {
+                        push(varargs[idx - 1]);
+                    } else {
+                        push(Value::nil());
                     }
-                    currentCoroutine_->lastResultCount = varargs.size();
+                } else if (key.isNumber()) {
+                    double num = key.asNumber();
+                    int64_t idx = static_cast<int64_t>(num);
+                    if (static_cast<double>(idx) == num && idx >= 1 && static_cast<size_t>(idx) <= varargs.size()) {
+                        push(varargs[idx - 1]);
+                    } else {
+                        push(Value::nil());
+                    }
                 } else {
-                    // Push exactly retCount - 1 values
-                    int count = (int)retCount - 1;
-                    for (int i = 0; i < count; i++) {
-                        if (i < (int)varargs.size()) {
-                            push(varargs[i]);
-                        } else {
-                            push(Value::nil());
-                        }
-                    }
-                    currentCoroutine_->lastResultCount = count;
+                    push(Value::nil());
                 }
+                break;
+            }
+
+            case OpCode::OP_GET_VARARG_COUNT: {
+                CallFrame& frame = currentFrame();
+                push(Value::integer(static_cast<int64_t>(frame.varargs.size())));
+                break;
+            }
+
+            case OpCode::OP_DEF_GLOBAL:
+            case OpCode::OP_DEF_GLOBAL_LONG: {
+                uint8_t upIndex = readByte();
+                Value key;
+                if (op == OpCode::OP_DEF_GLOBAL) {
+                    key = readConstant();
+                } else {
+                    uint32_t keyIndex = readByte();
+                    keyIndex |= (readByte() << 8);
+                    keyIndex |= (readByte() << 16);
+                    key = getConstant(keyIndex);
+                }
+                Value value = peek(0);
+
+                if (currentCoroutine_->frames.empty() || currentFrame().closure == nullptr) {
+                    runtimeError("Upvalue access outside of closure");
+                    break;
+                }
+
+                UpvalueObject* upvalue = currentFrame().closure->getUpvalueObj(upIndex);
+                if (upvalue == nullptr && upIndex == 0 && currentFrame().closure->upvalueCount() > 0) {
+                    upvalue = currentFrame().closure->getUpvalueObj(0);
+                }
+
+                if (upvalue == nullptr) {
+                    runtimeError("Invalid upvalue index " + std::to_string(upIndex));
+                    break;
+                }
+                Value upTable = upvalue->get(currentCoroutine_->stack);
+
+                if (!upTable.isTable()) {
+                    runtimeError("attempt to index a " + upTable.typeToString() + " value");
+                    pop();
+                    break;
+                }
+                TableObject* table = upTable.asTableObj();
+                std::string keyStr = getStringValue(key);
+                if (!table->get(keyStr).isNil()) {
+                    runtimeError("global '" + keyStr + "' already defined");
+                    pop();
+                    break;
+                }
+                table->set(keyStr, value);
+                pop();
+                break;
+            }
+
+            case OpCode::OP_DEF_GLOBAL_TABLE: {
+                // Stack: [value, env_table, key]
+                Value key = pop();
+                Value envTable = pop();
+                Value value = pop();
+
+                if (!envTable.isTable()) {
+                    runtimeError("attempt to index a " + envTable.typeToString() + " value");
+                    break;
+                }
+                TableObject* table = envTable.asTableObj();
+                std::string keyStr = getStringValue(key);
+                if (!table->get(keyStr).isNil()) {
+                    runtimeError("global '" + keyStr + "' already defined");
+                    break;
+                }
+                table->set(keyStr, value);
                 break;
             }
 
@@ -1139,31 +1752,57 @@ bool VM::run(size_t targetFrameCount) {
                 break;
             }
 
-            case OpCode::OP_YIELD: {
-                uint8_t count = readByte();
+            case OpCode::OP_YIELD:
+            case OpCode::OP_YIELD_MULTI: {
+                uint8_t operand = readByte();
                 uint8_t retCount = readByte();
+
+                if (!currentCoroutine_->caller || currentCoroutine_ == mainCoroutine_) {
+                    runtimeError("attempt to yield from outside a coroutine");
+                    return false;
+                }
+                if (currentCoroutine_->nonYieldableCount > 0 || currentCoroutine_->isClosing) {
+                    runtimeError("attempt to yield across a C-call boundary");
+                    return false;
+                }
+
+                size_t actualCount;
+                if (op == OpCode::OP_YIELD_MULTI) {
+                    actualCount = static_cast<size_t>(operand) + currentCoroutine_->lastResultCount;
+                } else {
+                    actualCount = operand;
+                }
                 
                 // Pop yielded values and save them
                 currentCoroutine_->yieldedValues.clear();
-                for (int i = 0; i < count; i++) {
+                for (size_t i = 0; i < actualCount; i++) {
                     currentCoroutine_->yieldedValues.push_back(pop());
                 }
                 // Reverse so they are in original order
                 std::reverse(currentCoroutine_->yieldedValues.begin(), currentCoroutine_->yieldedValues.end());
 
+                if (currentCoroutine_->hookMask & CoroutineObject::MASK_CALL) {
+                    callHook("call");
+                }
+
                 currentCoroutine_->status = CoroutineObject::Status::SUSPENDED;
-                currentCoroutine_->yieldCount = count;
+                currentCoroutine_->yieldCount = actualCount;
                 currentCoroutine_->retCount = retCount;
+                if (currentCoroutine_->hookMask & CoroutineObject::MASK_RET) {
+                    callHook("return");
+                }
                 return true; // Return to resumer
             }
 
             case OpCode::OP_RETURN: {
                 size_t stackBase = currentFrame().stackBase;
+                currentFrame().ip -= 1;
                 closeUpvalues(stackBase);
 
                 if (currentCoroutine_->status == CoroutineObject::Status::SUSPENDED) {
                     return true;
                 }
+                currentFrame().ip += 1;
 
                 if (currentCoroutine_->hookMask & CoroutineObject::MASK_RET) {
                     callHook("return");
@@ -1180,6 +1819,7 @@ bool VM::run(size_t targetFrameCount) {
 
                     uint8_t expectedRetCount = currentFrame().retCount;
                     const Chunk* returnChunk = currentFrame().callerChunk;
+                    bool frameIsPcall = currentFrame().isPcall;
                     currentCoroutine_->frames.pop_back();
 
                     // Check if we hit the target frame count (for pcall/load) or if this was the last frame
@@ -1198,27 +1838,294 @@ bool VM::run(size_t targetFrameCount) {
                     if (shouldExit) {
                         if (currentCoroutine_->frames.empty()) {
                             currentCoroutine_->status = CoroutineObject::Status::DEAD;
+                            currentCoroutine_->chunk = nullptr;
                         } else {
-                            for (size_t i = 0; i < toPush; i++) {
-                                push(Value::nil());
+                            currentCoroutine_->chunk = returnChunk;
+                            if (frameIsPcall) {
+                                push(Value::boolean(true));
+                                if (expectedRetCount > 1) {
+                                    for (size_t i = 0; i < expectedRetCount - 2; i++) push(Value::nil());
+                                    currentCoroutine_->lastResultCount = expectedRetCount - 1;
+                                } else {
+                                    currentCoroutine_->lastResultCount = 1;
+                                }
+                            } else {
+                                for (size_t i = 0; i < toPush; i++) {
+                                    push(Value::nil());
+                                }
+                                currentCoroutine_->lastResultCount = toPush;
                             }
-                            currentCoroutine_->lastResultCount = toPush;
                         }
                         return !hadError_;
                     }
 
-                    currentCoroutine_->chunk = returnChunk;
+                    std::vector<Value> returnValues;
                     for (size_t i = 0; i < toPush; i++) {
-                        push(Value::nil());
+                        returnValues.push_back(Value::nil());
                     }
-                    currentCoroutine_->lastResultCount = toPush;
+                    if (frameIsPcall) {
+                        returnValues.insert(returnValues.begin(), Value::boolean(true));
+                    }
+
+                    while (!currentCoroutine_->frames.empty() && currentFrame().isC) {
+                        CallFrame cframe = currentFrame();
+                        if (cframe.isErrorUnwinding) {
+                            if (!currentCoroutine_->tbcVariables.empty() && currentCoroutine_->tbcVariables.back() >= cframe.stackBase) {
+                                Value errObj = !currentCoroutine_->closeError.isNil() ? currentCoroutine_->closeError :
+                                               (!lastErrorObject_.isNil() ? lastErrorObject_ : Value::runtimeString(internString(lastErrorMessage_)));
+                                try {
+                                    closeUpvalues(cframe.stackBase, nullptr, errObj);
+                                } catch (const RuntimeError& e) {
+                                    errObj = lastErrorObject_.isNil() ? Value::runtimeString(internString(e.what())) : lastErrorObject_;
+                                    hadError_ = false;
+                                    currentCoroutine_->closeError = errObj;
+                                } catch (const std::exception& e) {
+                                    errObj = Value::runtimeString(internString(e.what()));
+                                    hadError_ = false;
+                                    currentCoroutine_->closeError = errObj;
+                                }
+                                if (currentCoroutine_->status == CoroutineObject::Status::SUSPENDED) {
+                                    return true;
+                                }
+                            }
+                            Value errObj = !currentCoroutine_->closeError.isNil() ? currentCoroutine_->closeError :
+                                           (!lastErrorObject_.isNil() ? lastErrorObject_ : Value::runtimeString(internString(lastErrorMessage_)));
+                            currentCoroutine_->frames.pop_back();
+                            currentCoroutine_->closeError = Value::nil();
+                            lastErrorObject_ = Value::nil();
+                            hadError_ = false;
+                            isHandlingError_ = false;
+
+                            while (currentCoroutine_->stack.size() > cframe.stackBase - 1) {
+                                pop();
+                            }
+
+                            returnValues.clear();
+                            returnValues.push_back(Value::boolean(false));
+                            returnValues.push_back(errObj);
+
+                            uint8_t cRetCount = cframe.retCount;
+                            if (cRetCount > 0) {
+                                size_t expected = static_cast<size_t>(cRetCount - 1);
+                                if (returnValues.size() > expected) {
+                                    returnValues.resize(expected);
+                                } else {
+                                    while (returnValues.size() < expected) {
+                                        returnValues.push_back(Value::nil());
+                                    }
+                                }
+                            }
+
+                            if (targetFrameCount > 0 && currentCoroutine_->frames.size() <= targetFrameCount) {
+                                shouldExit = true;
+                            } else if (currentCoroutine_->frames.empty()) {
+                                shouldExit = true;
+                                currentCoroutine_->status = CoroutineObject::Status::DEAD;
+                            }
+
+                            if (shouldExit) {
+                                currentCoroutine_->lastResultCount = returnValues.size();
+                                for (const auto& value : returnValues) {
+                                    push(value);
+                                }
+                                return true;
+                            }
+                            continue;
+                        }
+
+                        currentCoroutine_->frames.pop_back();
+
+                        if (cframe.isPcall) {
+                            returnValues.insert(returnValues.begin(), Value::boolean(true));
+                        }
+
+                        uint8_t cRetCount = cframe.retCount;
+                        if (cRetCount > 0) {
+                            size_t expected = static_cast<size_t>(cRetCount - 1);
+                            if (returnValues.size() > expected) {
+                                returnValues.resize(expected);
+                            } else {
+                                while (returnValues.size() < expected) {
+                                    returnValues.push_back(Value::nil());
+                                }
+                            }
+                        }
+
+                        while (currentCoroutine_->stack.size() > cframe.stackBase - 1) {
+                            pop();
+                        }
+
+                        if (targetFrameCount > 0 && currentCoroutine_->frames.size() <= targetFrameCount) {
+                            shouldExit = true;
+                        } else if (currentCoroutine_->frames.empty()) {
+                            shouldExit = true;
+                            currentCoroutine_->status = CoroutineObject::Status::DEAD;
+                        }
+
+                        if (shouldExit) {
+                            currentCoroutine_->lastResultCount = returnValues.size();
+                            for (const auto& value : returnValues) {
+                                push(value);
+                            }
+                            return !hadError_;
+                        }
+                    }
+
+                    if (!currentCoroutine_->frames.empty()) {
+                        currentCoroutine_->chunk = currentFrame().chunk;
+                    } else {
+                        currentCoroutine_->chunk = returnChunk;
+                    }
+
+                    for (const auto& val : returnValues) {
+                        push(val);
+                    }
+                    currentCoroutine_->lastResultCount = returnValues.size();
+                    break;
                 }
-                break;
             }
 
             default:
                 runtimeError("Unknown opcode");
                 return false;
+        }
+        } catch (const RuntimeError& e) {
+            if (targetFrameCount > 0) {
+                throw;
+            }
+            int pcallIdx = -1;
+            for (int i = (int)currentCoroutine_->frames.size() - 1; i >= 0; i--) {
+                if (currentCoroutine_->frames[i].isPcall) {
+                    pcallIdx = i;
+                    break;
+                }
+            }
+            if (pcallIdx >= 0) {
+                Value errObj = lastErrorObject_.isNil() ? Value::runtimeString(internString(lastErrorMessage_)) : lastErrorObject_;
+                currentCoroutine_->frames[pcallIdx].isErrorUnwinding = true;
+                currentCoroutine_->closeError = errObj;
+
+                while ((int)currentCoroutine_->frames.size() - 1 > pcallIdx) {
+                    if (currentCoroutine_->frames.back().isReturning && !currentCoroutine_->pendingReturns.empty()) {
+                        currentCoroutine_->pendingReturns.pop_back();
+                    }
+                    currentCoroutine_->frames.pop_back();
+                }
+
+                CallFrame& pframe = currentCoroutine_->frames[pcallIdx];
+                size_t base = pframe.stackBase;
+                try {
+                    closeUpvalues(base, nullptr, errObj);
+                } catch (const RuntimeError& e) {
+                    errObj = lastErrorObject_.isNil() ? Value::runtimeString(internString(e.what())) : lastErrorObject_;
+                    hadError_ = false;
+                    currentCoroutine_->closeError = errObj;
+                } catch (const std::exception& e) {
+                    errObj = Value::runtimeString(internString(e.what()));
+                    hadError_ = false;
+                    currentCoroutine_->closeError = errObj;
+                }
+
+                if (currentCoroutine_->status == CoroutineObject::Status::SUSPENDED) {
+                    return true;
+                }
+
+                Value finalErr = !currentCoroutine_->closeError.isNil() ? currentCoroutine_->closeError :
+                                 (!lastErrorObject_.isNil() ? lastErrorObject_ : errObj);
+                currentCoroutine_->closeError = Value::nil();
+                lastErrorObject_ = Value::nil();
+                hadError_ = false;
+                isHandlingError_ = false;
+
+                while (currentCoroutine_->stack.size() > pframe.stackBase - 1) {
+                    pop();
+                }
+
+                const Chunk* retChunk = pframe.callerChunk;
+                uint8_t cRetCount = pframe.retCount;
+                currentCoroutine_->frames.pop_back();
+
+                std::vector<Value> returnValues = { Value::boolean(false), finalErr };
+                if (cRetCount > 0) {
+                    size_t expected = static_cast<size_t>(cRetCount - 1);
+                    if (returnValues.size() > expected) {
+                        returnValues.resize(expected);
+                    } else {
+                        while (returnValues.size() < expected) {
+                            returnValues.push_back(Value::nil());
+                        }
+                    }
+                }
+
+                bool shouldExit = false;
+                while (!currentCoroutine_->frames.empty() && currentFrame().isC) {
+                    CallFrame cframe = currentFrame();
+                    currentCoroutine_->frames.pop_back();
+
+                    if (cframe.isPcall) {
+                        returnValues.insert(returnValues.begin(), Value::boolean(true));
+                    }
+
+                    uint8_t cRetCount2 = cframe.retCount;
+                    if (cRetCount2 > 0) {
+                        size_t expected = static_cast<size_t>(cRetCount2 - 1);
+                        if (returnValues.size() > expected) {
+                            returnValues.resize(expected);
+                        } else {
+                            while (returnValues.size() < expected) {
+                                returnValues.push_back(Value::nil());
+                            }
+                        }
+                    }
+
+                    while (currentCoroutine_->stack.size() > cframe.stackBase - 1) {
+                        pop();
+                    }
+
+                    if (targetFrameCount > 0 && currentCoroutine_->frames.size() <= targetFrameCount) {
+                        shouldExit = true;
+                    } else if (currentCoroutine_->frames.empty()) {
+                        shouldExit = true;
+                        currentCoroutine_->status = CoroutineObject::Status::DEAD;
+                    }
+
+                    if (shouldExit) {
+                        currentCoroutine_->lastResultCount = returnValues.size();
+                        for (const auto& value : returnValues) {
+                            push(value);
+                        }
+                        return !hadError_;
+                    }
+                }
+
+                if (targetFrameCount > 0 && currentCoroutine_->frames.size() <= targetFrameCount) {
+                    shouldExit = true;
+                } else if (currentCoroutine_->frames.empty()) {
+                    shouldExit = true;
+                    currentCoroutine_->status = CoroutineObject::Status::DEAD;
+                }
+
+                if (shouldExit) {
+                    currentCoroutine_->lastResultCount = returnValues.size();
+                    for (const auto& val : returnValues) {
+                        push(val);
+                    }
+                    return true;
+                }
+
+                if (!currentCoroutine_->frames.empty()) {
+                    currentCoroutine_->chunk = currentFrame().chunk;
+                } else {
+                    currentCoroutine_->chunk = retChunk;
+                }
+
+                for (const auto& val : returnValues) {
+                    push(val);
+                }
+                currentCoroutine_->lastResultCount = returnValues.size();
+                continue;
+            }
+            throw;
         }
 
         if (hadError_) {

@@ -2,8 +2,261 @@
 #include "value/function.hpp"
 #include "value/string.hpp"
 
+namespace {
+class InnerRefChecker : public ASTVisitor {
+public:
+    explicit InnerRefChecker(const std::string& name) : name_(name) {}
+    bool referenced = false;
+
+    void check(const std::vector<std::unique_ptr<StmtNode>>& body) {
+        for (const auto& stmt : body) {
+            if (stmt) stmt->accept(*this);
+            if (referenced) return;
+        }
+    }
+
+    void visitLiteral(LiteralNode*) override {}
+    void visitStringLiteral(StringLiteralNode*) override {}
+    void visitVariable(VariableExprNode* node) override {
+        if (node->name() == name_) referenced = true;
+    }
+    void visitVararg(VarargExprNode*) override {}
+    void visitUnary(UnaryNode* n) override { if (n->operand()) n->operand()->accept(*this); }
+    void visitBinary(BinaryNode* n) override { if (n->left()) n->left()->accept(*this); if (n->right()) n->right()->accept(*this); }
+    void visitGroupExpr(GroupExprNode* n) override { if (n->expr()) n->expr()->accept(*this); }
+    void visitCall(CallExprNode* n) override { if (n->callee()) n->callee()->accept(*this); for (const auto& a : n->args()) if (a) a->accept(*this); }
+    void visitMethodCall(MethodCallExprNode* n) override { if (n->object()) n->object()->accept(*this); for (const auto& a : n->args()) if (a) a->accept(*this); }
+    void visitTableConstructor(TableConstructorNode* n) override { for (const auto& e : n->entries()) { if (e.key) e.key->accept(*this); if (e.value) e.value->accept(*this); } }
+    void visitIndexExpr(IndexExprNode* n) override { if (n->table()) n->table()->accept(*this); if (n->key()) n->key()->accept(*this); }
+    void visitExprStmt(ExprStmtNode* n) override { if (n->expr()) n->expr()->accept(*this); }
+    void visitAssignmentStmt(AssignmentStmtNode* n) override { if (n->name() == name_) referenced = true; if (n->value()) n->value()->accept(*this); }
+    void visitIndexAssignmentStmt(IndexAssignmentStmtNode* n) override { if (n->table()) n->table()->accept(*this); if (n->key()) n->key()->accept(*this); if (n->value()) n->value()->accept(*this); }
+    void visitMultipleAssignmentStmt(MultipleAssignmentStmtNode* n) override { for (const auto& t : n->targets()) if (t) t->accept(*this); for (const auto& v : n->values()) if (v) v->accept(*this); }
+    void visitLocalDeclStmt(LocalDeclStmtNode* n) override { if (n->initializer()) n->initializer()->accept(*this); }
+    void visitMultipleLocalDeclStmt(MultipleLocalDeclStmtNode* n) override { for (const auto& init : n->initializers()) if (init) init->accept(*this); }
+    void visitGlobalDeclStmt(GlobalDeclStmtNode* n) override { if (n->initializer()) n->initializer()->accept(*this); }
+    void visitMultipleGlobalDeclStmt(MultipleGlobalDeclStmtNode* n) override { for (const auto& init : n->initializers()) if (init) init->accept(*this); }
+    void visitBlock(BlockStmtNode* n) override { for (const auto& s : n->statements()) if (s) s->accept(*this); }
+    void visitIfStmt(IfStmtNode* n) override { if (n->condition()) n->condition()->accept(*this); for (const auto& s : n->thenBranch()) if (s) s->accept(*this); for (const auto& eb : n->elseIfBranches()) { if (eb.condition) eb.condition->accept(*this); for (const auto& s : eb.body) if (s) s->accept(*this); } for (const auto& s : n->elseBranch()) if (s) s->accept(*this); }
+    void visitWhileStmt(WhileStmtNode* n) override { if (n->condition()) n->condition()->accept(*this); for (const auto& s : n->body()) if (s) s->accept(*this); }
+    void visitRepeatStmt(RepeatStmtNode* n) override { for (const auto& s : n->body()) if (s) s->accept(*this); if (n->condition()) n->condition()->accept(*this); }
+    void visitForStmt(ForStmtNode* n) override { if (n->start()) n->start()->accept(*this); if (n->end()) n->end()->accept(*this); if (n->step()) n->step()->accept(*this); for (const auto& s : n->body()) if (s) s->accept(*this); }
+    void visitForInStmt(ForInStmtNode* n) override { for (const auto& it : n->iterators()) if (it) it->accept(*this); for (const auto& s : n->body()) if (s) s->accept(*this); }
+    void visitFunctionDecl(FunctionDeclNode* n) override { check(n->body()); }
+    void visitFunctionExpr(FunctionExprNode* n) override { check(n->body()); }
+    void visitReturn(ReturnStmtNode* n) override { for (const auto& v : n->values()) if (v) v->accept(*this); }
+    void visitBreak(BreakStmtNode*) override {}
+    void visitGoto(GotoStmtNode*) override {}
+    void visitLabel(LabelStmtNode*) override {}
+    void visitProgram(ProgramNode* n) override { check(n->statements()); }
+private:
+    std::string name_;
+};
+
+class VarargEscapeChecker : public ASTVisitor {
+public:
+    explicit VarargEscapeChecker(const std::string& name) : name_(name) {
+        if (name_ == "_ENV") {
+            escapes = true;
+        }
+    }
+
+    bool escapes = false;
+
+    void check(const std::vector<std::unique_ptr<StmtNode>>& body) {
+        for (const auto& stmt : body) {
+            if (stmt) stmt->accept(*this);
+            if (escapes) return;
+        }
+    }
+
+    void visitLiteral(LiteralNode*) override {}
+    void visitStringLiteral(StringLiteralNode*) override {}
+
+    void visitVariable(VariableExprNode* node) override {
+        if (node->name() == name_) {
+            escapes = true;
+        }
+    }
+
+    void visitVararg(VarargExprNode*) override {}
+
+    void visitUnary(UnaryNode* node) override {
+        if (node->operand()) node->operand()->accept(*this);
+    }
+
+    void visitBinary(BinaryNode* node) override {
+        if (node->left()) node->left()->accept(*this);
+        if (node->right()) node->right()->accept(*this);
+    }
+
+    void visitGroupExpr(GroupExprNode* node) override {
+        if (node->expr()) node->expr()->accept(*this);
+    }
+
+    void visitCall(CallExprNode* node) override {
+        if (auto* var = dynamic_cast<VariableExprNode*>(node->callee())) {
+            if (var->name() == name_) escapes = true;
+        }
+        if (node->callee()) node->callee()->accept(*this);
+        for (const auto& arg : node->args()) {
+            if (arg) arg->accept(*this);
+        }
+    }
+
+    void visitMethodCall(MethodCallExprNode* node) override {
+        if (auto* var = dynamic_cast<VariableExprNode*>(node->object())) {
+            if (var->name() == name_) escapes = true;
+        }
+        if (node->object()) node->object()->accept(*this);
+        for (const auto& arg : node->args()) {
+            if (arg) arg->accept(*this);
+        }
+    }
+
+    void visitTableConstructor(TableConstructorNode* node) override {
+        for (const auto& entry : node->entries()) {
+            if (entry.key) entry.key->accept(*this);
+            if (entry.value) entry.value->accept(*this);
+        }
+    }
+
+    void visitIndexExpr(IndexExprNode* node) override {
+        if (node->key()) node->key()->accept(*this);
+        if (auto* var = dynamic_cast<VariableExprNode*>(node->table())) {
+            if (var->name() == name_) {
+                // Allowed read: t[k]
+                return;
+            }
+        }
+        if (node->table()) node->table()->accept(*this);
+    }
+
+    void visitExprStmt(ExprStmtNode* node) override {
+        if (node->expr()) node->expr()->accept(*this);
+    }
+
+    void visitAssignmentStmt(AssignmentStmtNode* node) override {
+        if (node->name() == name_) escapes = true;
+        if (node->value()) node->value()->accept(*this);
+    }
+
+    void visitMultipleAssignmentStmt(MultipleAssignmentStmtNode* node) override {
+        for (const auto& target : node->targets()) {
+            if (auto* var = dynamic_cast<VariableExprNode*>(target.get())) {
+                if (var->name() == name_) escapes = true;
+            } else if (auto* idx = dynamic_cast<IndexExprNode*>(target.get())) {
+                if (auto* tVar = dynamic_cast<VariableExprNode*>(idx->table())) {
+                    if (tVar->name() == name_) escapes = true;
+                }
+            }
+            if (target) target->accept(*this);
+        }
+        for (const auto& val : node->values()) {
+            if (val) val->accept(*this);
+        }
+    }
+
+    void visitIndexAssignmentStmt(IndexAssignmentStmtNode* node) override {
+        if (auto* var = dynamic_cast<VariableExprNode*>(node->table())) {
+            if (var->name() == name_) escapes = true;
+        }
+        if (node->table()) node->table()->accept(*this);
+        if (node->key()) node->key()->accept(*this);
+        if (node->value()) node->value()->accept(*this);
+    }
+
+    void visitLocalDeclStmt(LocalDeclStmtNode* node) override {
+        if (node->initializer()) node->initializer()->accept(*this);
+    }
+
+    void visitMultipleLocalDeclStmt(MultipleLocalDeclStmtNode* node) override {
+        for (const auto& init : node->initializers()) {
+            if (init) init->accept(*this);
+        }
+    }
+
+    void visitGlobalDeclStmt(GlobalDeclStmtNode* node) override {
+        if (node->initializer()) node->initializer()->accept(*this);
+    }
+
+    void visitMultipleGlobalDeclStmt(MultipleGlobalDeclStmtNode* node) override {
+        for (const auto& init : node->initializers()) {
+            if (init) init->accept(*this);
+        }
+    }
+
+    void visitBlock(BlockStmtNode* node) override {
+        for (const auto& stmt : node->statements()) {
+            if (stmt) stmt->accept(*this);
+        }
+    }
+
+    void visitIfStmt(IfStmtNode* node) override {
+        if (node->condition()) node->condition()->accept(*this);
+        for (const auto& s : node->thenBranch()) if (s) s->accept(*this);
+        for (const auto& eb : node->elseIfBranches()) {
+            if (eb.condition) eb.condition->accept(*this);
+            for (const auto& s : eb.body) if (s) s->accept(*this);
+        }
+        for (const auto& s : node->elseBranch()) if (s) s->accept(*this);
+    }
+
+    void visitWhileStmt(WhileStmtNode* node) override {
+        if (node->condition()) node->condition()->accept(*this);
+        for (const auto& s : node->body()) if (s) s->accept(*this);
+    }
+
+    void visitRepeatStmt(RepeatStmtNode* node) override {
+        for (const auto& s : node->body()) if (s) s->accept(*this);
+        if (node->condition()) node->condition()->accept(*this);
+    }
+
+    void visitForStmt(ForStmtNode* node) override {
+        if (node->start()) node->start()->accept(*this);
+        if (node->end()) node->end()->accept(*this);
+        if (node->step()) node->step()->accept(*this);
+        for (const auto& s : node->body()) if (s) s->accept(*this);
+    }
+
+    void visitForInStmt(ForInStmtNode* node) override {
+        for (const auto& it : node->iterators()) if (it) it->accept(*this);
+        for (const auto& s : node->body()) if (s) s->accept(*this);
+    }
+
+    void visitFunctionDecl(FunctionDeclNode* node) override {
+        InnerRefChecker inner(name_);
+        inner.check(node->body());
+        if (inner.referenced) escapes = true;
+    }
+
+    void visitFunctionExpr(FunctionExprNode* node) override {
+        InnerRefChecker inner(name_);
+        inner.check(node->body());
+        if (inner.referenced) escapes = true;
+    }
+
+    void visitReturn(ReturnStmtNode* node) override {
+        for (const auto& val : node->values()) {
+            if (val) val->accept(*this);
+        }
+    }
+
+    void visitBreak(BreakStmtNode*) override {}
+    void visitGoto(GotoStmtNode*) override {}
+    void visitLabel(LabelStmtNode*) override {}
+    void visitProgram(ProgramNode* node) override {
+        check(node->statements());
+    }
+
+private:
+    std::string name_;
+};
+} // anonymous namespace
+
 CodeGenerator::CodeGenerator()
-    : chunk_(nullptr), currentLine_(1), scopeDepth_(0), localCount_(0), enclosingCompiler_(nullptr), expectedRetCount_(2) {}
+    : chunk_(nullptr), currentLine_(1), scopeDepth_(0), localCount_(0), enclosingCompiler_(nullptr),
+      globalMode_(GlobalMode::ALL), envDeclaredGlobal_(false), expectedRetCount_(2) {}
 
 std::unique_ptr<FunctionObject> CodeGenerator::generate(ProgramNode* program, const std::string& name) {
     chunk_ = std::make_unique<Chunk>();
@@ -13,6 +266,19 @@ std::unique_ptr<FunctionObject> CodeGenerator::generate(ProgramNode* program, co
     scopeDepth_ = 0;
     localCount_ = 0;
     enclosingCompiler_ = nullptr; // Reset to top level
+    globalMode_ = GlobalMode::ALL;
+    declaredGlobals_.clear();
+    shadowedLocals_.clear();
+    envDeclaredGlobal_ = false;
+    varSequence_ = 0;
+    currentVarargName_ = "";
+    namedVarargSlot_ = -1;
+    isVarargOptimized_ = false;
+    visibleLabels_.clear();
+    pendingGotos_.clear();
+    activeVars_.clear();
+    blockScopes_.clear();
+    gotosNeedingStubs_.clear();
 
     // Root compiler state initialization
     // _ENV is the first upvalue by convention in Lua 5.2+ for the top-level chunk.
@@ -28,8 +294,11 @@ std::unique_ptr<FunctionObject> CodeGenerator::generate(ProgramNode* program, co
 
     program->accept(*this);
 
-    // Emit return at end
+    // Emit return at end of normal execution
     emitReturn();
+
+    // Resolve forward gotos (top level) - stubs are emitted here, after return
+    emitGotoStubs();
 
     // Close remaining locals (top level)
     size_t endPC = currentChunk()->size();
@@ -37,7 +306,10 @@ std::unique_ptr<FunctionObject> CodeGenerator::generate(ProgramNode* program, co
         finishedLocals_.push_back({l.name, l.startPC, endPC, l.slot});
     }
 
-    auto function = std::make_unique<FunctionObject>(name, 0, std::move(chunk_), static_cast<int>(upvalues_.size()), true);
+    auto function = std::make_unique<FunctionObject>("", 0, std::move(chunk_), static_cast<int>(upvalues_.size()), true);
+    for (const auto& uv : upvalues_) {
+        function->addUpvalueName(uv.name);
+    }
     for (const auto& l : finishedLocals_) {
         function->addLocalVar(l.name, l.startPC, l.endPC, l.slot);
     }
@@ -265,14 +537,25 @@ void CodeGenerator::visitVariable(VariableExprNode* node) {
     }
 
     // 2. Try to resolve as upvalue (captured from enclosing scope)
-    int upvalue = resolveUpvalue(name);
-    if (upvalue != -1) {
-        emitOpCode(OpCode::OP_GET_UPVALUE);
-        emitByte(static_cast<uint8_t>(upvalue));
-        return;
+    if (!isDeclaredGlobal(name)) {
+        int upvalue = resolveUpvalue(name);
+        if (upvalue != -1) {
+            emitOpCode(OpCode::OP_GET_UPVALUE);
+            emitByte(static_cast<uint8_t>(upvalue));
+            return;
+        }
     }
 
     // 3. Fall back to global variable (resolved via _ENV)
+    if (envDeclaredGlobal_) {
+        throw CompileError("_ENV is global when accessing variable '" + name + "'", node->line());
+    }
+    if (globalMode_ == GlobalMode::NONE) {
+        if (!isDeclaredGlobal(name)) {
+            throw CompileError("variable '" + name + "' is not declared", node->line());
+        }
+    }
+
     int envSlot = resolveLocal("_ENV");
     if (envSlot != -1) {
         // _ENV is a local variable
@@ -320,6 +603,11 @@ void CodeGenerator::visitExprStmt(ExprStmtNode* node) {
 void CodeGenerator::visitAssignmentStmt(AssignmentStmtNode* node) {
     setLine(node->line());
 
+    // Pre-resolve target variable as upvalue if it is not a local and not global
+    if (resolveLocal(node->name()) == -1 && !isDeclaredGlobal(node->name())) {
+        resolveUpvalue(node->name());
+    }
+
     // Compile the value
     expectedName_ = node->name();
     node->value()->accept(*this);
@@ -338,18 +626,28 @@ void CodeGenerator::visitAssignmentStmt(AssignmentStmtNode* node) {
     }
 
     // 2. Try to resolve as upvalue
-    int upvalue = resolveUpvalue(node->name());
-    if (upvalue != -1) {
-        if (upvalues_[upvalue].isConstant) {
-            throw CompileError("attempt to assign to const variable '" + node->name() + "'", node->line());
+    if (!isDeclaredGlobal(node->name())) {
+        int upvalue = resolveUpvalue(node->name());
+        if (upvalue != -1) {
+            if (upvalues_[upvalue].isConstant) {
+                throw CompileError("attempt to assign to const variable '" + node->name() + "'", node->line());
+            }
+            emitOpCode(OpCode::OP_SET_UPVALUE);
+            emitByte(static_cast<uint8_t>(upvalue));
+            emitOpCode(OpCode::OP_POP);
+            return;
         }
-        emitOpCode(OpCode::OP_SET_UPVALUE);
-        emitByte(static_cast<uint8_t>(upvalue));
-        emitOpCode(OpCode::OP_POP);
-        return;
     }
 
     // 3. Fall back to global variable (via _ENV)
+    if (envDeclaredGlobal_) {
+        throw CompileError("_ENV is global when accessing variable '" + node->name() + "'", node->line());
+    }
+    if (globalMode_ == GlobalMode::NONE) {
+        if (!isDeclaredGlobal(node->name())) {
+            throw CompileError("variable '" + node->name() + "' is not declared", node->line());
+        }
+    }
     int envSlot = resolveLocal("_ENV");
     if (envSlot != -1) {
         // _ENV is a local variable
@@ -397,7 +695,9 @@ void CodeGenerator::visitLocalDeclStmt(LocalDeclStmtNode* node) {
     } else {
         // Compile initializer
         if (node->initializer()) {
+            expectedName_ = node->name();
             node->initializer()->accept(*this);
+            expectedName_ = "";
         } else {
             emitOpCode(OpCode::OP_NIL);
         }
@@ -421,7 +721,9 @@ void CodeGenerator::visitMultipleLocalDeclStmt(MultipleLocalDeclStmtNode* node) 
     // 1. Evaluate all initializers except the last one
     for (size_t i = 0; i < (initCount > 0 ? initCount - 1 : 0); i++) {
         expectedRetCount_ = 2; // ONE
+        if (i < varCount) expectedName_ = vars[i].name;
         initializers[i]->accept(*this);
+        expectedName_ = "";
     }
 
     // 2. Evaluate the last initializer with multires if needed
@@ -432,7 +734,9 @@ void CodeGenerator::visitMultipleLocalDeclStmt(MultipleLocalDeclStmtNode* node) 
         } else {
             expectedRetCount_ = 2; // ONE
         }
+        if (initCount - 1 < varCount) expectedName_ = vars[initCount - 1].name;
         initializers[initCount - 1]->accept(*this);
+        expectedName_ = "";
     }
 
     expectedRetCount_ = oldRetCount;
@@ -470,12 +774,28 @@ void CodeGenerator::visitMultipleAssignmentStmt(MultipleAssignmentStmtNode* node
     size_t varCount = targets.size();
     size_t valCount = values.size();
 
+    // Pre-resolve target variables as upvalues in order of appearance (left to right)
+    for (size_t i = 0; i < varCount; i++) {
+        if (auto* varExpr = dynamic_cast<VariableExprNode*>(targets[i].get())) {
+            const std::string& name = varExpr->name();
+            if (resolveLocal(name) == -1 && !isDeclaredGlobal(name)) {
+                resolveUpvalue(name);
+            }
+        }
+    }
+
     uint8_t oldRetCount = expectedRetCount_;
 
     // 1. Evaluate all values except the last one
     for (size_t i = 0; i < (valCount > 0 ? valCount - 1 : 0); i++) {
         expectedRetCount_ = 2;
+        if (i < varCount) {
+            if (auto* var = dynamic_cast<VariableExprNode*>(targets[i].get())) {
+                expectedName_ = var->name();
+            }
+        }
         values[i]->accept(*this);
+        expectedName_ = "";
     }
 
     // 2. Evaluate the last value with multires if needed
@@ -485,7 +805,13 @@ void CodeGenerator::visitMultipleAssignmentStmt(MultipleAssignmentStmtNode* node
         } else {
             expectedRetCount_ = 2;
         }
+        if (valCount - 1 < varCount) {
+            if (auto* var = dynamic_cast<VariableExprNode*>(targets[valCount - 1].get())) {
+                expectedName_ = var->name();
+            }
+        }
         values[valCount - 1]->accept(*this);
+        expectedName_ = "";
     }
 
     expectedRetCount_ = oldRetCount;
@@ -527,18 +853,28 @@ void CodeGenerator::visitMultipleAssignmentStmt(MultipleAssignmentStmtNode* node
                 continue;
             }
 
-            int upvalue = resolveUpvalue(name);
-            if (upvalue != -1) {
-                if (upvalues_[upvalue].isConstant) {
-                    throw CompileError("attempt to assign to const variable '" + name + "'", node->line());
+            if (!isDeclaredGlobal(name)) {
+                int upvalue = resolveUpvalue(name);
+                if (upvalue != -1) {
+                    if (upvalues_[upvalue].isConstant) {
+                        throw CompileError("attempt to assign to const variable '" + name + "'", node->line());
+                    }
+                    emitOpCode(OpCode::OP_SET_UPVALUE);
+                    emitByte(static_cast<uint8_t>(upvalue));
+                    emitOpCode(OpCode::OP_POP);
+                    continue;
                 }
-                emitOpCode(OpCode::OP_SET_UPVALUE);
-                emitByte(static_cast<uint8_t>(upvalue));
-                emitOpCode(OpCode::OP_POP);
-                continue;
             }
 
             // Global variable (via _ENV)
+            if (envDeclaredGlobal_) {
+                throw CompileError("_ENV is global when accessing variable '" + name + "'", node->line());
+            }
+            if (globalMode_ == GlobalMode::NONE) {
+                if (!isDeclaredGlobal(name)) {
+                    throw CompileError("variable '" + name + "' is not declared", node->line());
+                }
+            }
             int envSlot = resolveLocal("_ENV");
             if (envSlot != -1) {
                 emitOpCode(OpCode::OP_GET_LOCAL);
@@ -574,35 +910,301 @@ void CodeGenerator::visitMultipleAssignmentStmt(MultipleAssignmentStmtNode* node
 }
 void CodeGenerator::visitGlobalDeclStmt(GlobalDeclStmtNode* node) {
     setLine(node->line());
+    const std::string& name = node->name();
+
+    if (name == "*") {
+        if (node->isConstant()) {
+            globalMode_ = GlobalMode::CONST_ALL;
+        } else {
+            globalMode_ = GlobalMode::ALL;
+        }
+        activeVars_.push_back({"*", true, scopeDepth_});
+        return;
+    }
+
+    if (name == "none") {
+        globalMode_ = GlobalMode::NONE;
+        activeVars_.push_back({"none", true, scopeDepth_});
+        return;
+    }
+
+    if (node->isFunction()) {
+        if (name == "_ENV") {
+            envDeclaredGlobal_ = true;
+        } else {
+            declaredGlobals_.push_back({name, node->isConstant(), scopeDepth_, ++varSequence_});
+            shadowedLocals_.insert(name);
+        }
+        activeVars_.push_back({name, true, scopeDepth_});
+
+        if (node->initializer()) {
+            expectedName_ = name;
+            node->initializer()->accept(*this);
+            expectedName_ = "";
+        }
+    } else {
+        // Evaluate initializer FIRST before registering shadow
+        if (node->initializer()) {
+            expectedName_ = name;
+            node->initializer()->accept(*this);
+            expectedName_ = "";
+        }
+
+        if (name == "_ENV") {
+            envDeclaredGlobal_ = true;
+        } else {
+            declaredGlobals_.push_back({name, node->isConstant(), scopeDepth_, ++varSequence_});
+            shadowedLocals_.insert(name);
+        }
+        activeVars_.push_back({name, true, scopeDepth_});
+    }
+
+    if (node->initializer()) {
+        int envSlot = resolveLocal("_ENV");
+        if (envSlot != -1) {
+            emitOpCode(OpCode::OP_GET_LOCAL);
+            emitByte(static_cast<uint8_t>(envSlot));
+            emitConstant(Value::string(internString(name)));
+            emitOpCode(OpCode::OP_DEF_GLOBAL_TABLE);
+        } else {
+            int envUpvalue = resolveUpvalue("_ENV");
+            if (envUpvalue == -1) envUpvalue = 0;
+            size_t nameIndex = currentChunk()->addConstant(Value::string(internString(name)));
+            if (nameIndex < 256) {
+                emitOpCode(OpCode::OP_DEF_GLOBAL);
+                emitByte(static_cast<uint8_t>(envUpvalue));
+                emitByte(static_cast<uint8_t>(nameIndex));
+            } else {
+                emitOpCode(OpCode::OP_DEF_GLOBAL_LONG);
+                emitByte(static_cast<uint8_t>(envUpvalue));
+                emitByte(nameIndex & 0xff);
+                emitByte((nameIndex >> 8) & 0xff);
+                emitByte((nameIndex >> 16) & 0xff);
+            }
+        }
+    }
 }
 
 void CodeGenerator::visitMultipleGlobalDeclStmt(MultipleGlobalDeclStmtNode* node) {
     setLine(node->line());
+    const auto& vars = node->vars();
+    const auto& inits = node->initializers();
+
+    if (inits.empty()) {
+        for (const auto& var : vars) {
+            if (var.name == "*") {
+                globalMode_ = var.isConstant ? GlobalMode::CONST_ALL : GlobalMode::ALL;
+            } else if (var.name == "none") {
+                globalMode_ = GlobalMode::NONE;
+            } else if (var.name == "_ENV") {
+                envDeclaredGlobal_ = true;
+            } else {
+                declaredGlobals_.push_back({var.name, var.isConstant, scopeDepth_, ++varSequence_});
+                shadowedLocals_.insert(var.name);
+            }
+            activeVars_.push_back({var.name, true, scopeDepth_});
+        }
+        return;
+    }
+
+    size_t varCount = vars.size();
+    size_t initCount = inits.size();
+    uint8_t oldRetCount = expectedRetCount_;
+
+    // 1. Evaluate all initializers except the last one
+    for (size_t i = 0; i < (initCount > 0 ? initCount - 1 : 0); i++) {
+        expectedRetCount_ = 2; // ONE
+        if (i < varCount) expectedName_ = vars[i].name;
+        inits[i]->accept(*this);
+        expectedName_ = "";
+    }
+
+    // 2. Evaluate the last initializer with multires if needed
+    if (initCount > 0) {
+        if (varCount > initCount) {
+            expectedRetCount_ = static_cast<uint8_t>(varCount - (initCount - 1) + 1);
+        } else {
+            expectedRetCount_ = 2; // ONE
+        }
+        if (initCount - 1 < varCount) expectedName_ = vars[initCount - 1].name;
+        inits[initCount - 1]->accept(*this);
+        expectedName_ = "";
+    }
+
+    expectedRetCount_ = oldRetCount;
+
+    if (initCount < varCount) {
+        auto* lastVal = initCount > 0 ? inits[initCount - 1].get() : nullptr;
+        bool lastIsCall = lastVal && (dynamic_cast<CallExprNode*>(lastVal) != nullptr ||
+                                      dynamic_cast<MethodCallExprNode*>(lastVal) != nullptr ||
+                                      dynamic_cast<VarargExprNode*>(lastVal) != nullptr);
+        if (!lastIsCall) {
+            for (size_t i = initCount; i < varCount; i++) {
+                emitOpCode(OpCode::OP_NIL);
+            }
+        }
+    } else if (initCount > varCount) {
+        for (size_t i = varCount; i < initCount; i++) {
+            emitOpCode(OpCode::OP_POP);
+        }
+    }
+
+    for (const auto& var : vars) {
+        if (var.name == "_ENV") {
+            envDeclaredGlobal_ = true;
+        } else {
+            declaredGlobals_.push_back({var.name, var.isConstant, scopeDepth_, ++varSequence_});
+            shadowedLocals_.insert(var.name);
+        }
+        activeVars_.push_back({var.name, true, scopeDepth_});
+    }
+
+    for (int i = static_cast<int>(varCount) - 1; i >= 0; i--) {
+        const std::string& name = vars[i].name;
+        int envSlot = resolveLocal("_ENV");
+        if (envSlot != -1) {
+            emitOpCode(OpCode::OP_GET_LOCAL);
+            emitByte(static_cast<uint8_t>(envSlot));
+            emitConstant(Value::string(internString(name)));
+            emitOpCode(OpCode::OP_DEF_GLOBAL_TABLE);
+        } else {
+            int envUpvalue = resolveUpvalue("_ENV");
+            if (envUpvalue == -1) envUpvalue = 0;
+            size_t nameIndex = currentChunk()->addConstant(Value::string(internString(name)));
+            if (nameIndex < 256) {
+                emitOpCode(OpCode::OP_DEF_GLOBAL);
+                emitByte(static_cast<uint8_t>(envUpvalue));
+                emitByte(static_cast<uint8_t>(nameIndex));
+            } else {
+                emitOpCode(OpCode::OP_DEF_GLOBAL_LONG);
+                emitByte(static_cast<uint8_t>(envUpvalue));
+                emitByte(nameIndex & 0xff);
+                emitByte((nameIndex >> 8) & 0xff);
+                emitByte((nameIndex >> 16) & 0xff);
+            }
+        }
+    }
+}
+
+void CodeGenerator::checkGotoScoping(const Goto& g, const Label& lbl) {
+    for (const auto& var : lbl.activeVars) {
+        bool found = false;
+        for (const auto& gvar : g.activeVars) {
+            if (gvar.name == var.name && gvar.isGlobal == var.isGlobal && gvar.depth == var.depth) {
+                found = true;
+                break;
+            }
+        }
+        if (!found) {
+            throw CompileError("<goto " + g.name + "> at line " + std::to_string(g.line) +
+                               " jumps into the scope of '" + var.name + "'", g.line);
+        }
+    }
+}
+
+void CodeGenerator::resolveBlockGotos(size_t firstGoto, size_t firstLabel) {
+    for (size_t i = firstGoto; i < pendingGotos_.size(); ) {
+        Goto& g = pendingGotos_[i];
+        auto it = std::find_if(visibleLabels_.begin() + firstLabel, visibleLabels_.end(),
+                               [&](const Label& lbl) { return lbl.name == g.name; });
+        if (it != visibleLabels_.end()) {
+            // Check scoping
+            checkGotoScoping(g, *it);
+            
+            if (g.localCount == it->localCount) {
+                // Direct jump
+                size_t jumpDist = it->offset - g.instructionOffset - 2;
+                currentChunk()->code()[g.instructionOffset] = jumpDist & 0xff;
+                currentChunk()->code()[g.instructionOffset + 1] = (jumpDist >> 8) & 0xff;
+            } else {
+                // Needs cleanup stub
+                gotosNeedingStubs_.push_back({g, *it});
+            }
+            pendingGotos_.erase(pendingGotos_.begin() + i);
+        } else {
+            i++;
+        }
+    }
+}
+
+void CodeGenerator::compileBlock(const std::vector<std::unique_ptr<StmtNode>>& stmts, bool hasEndScope) {
+    size_t firstLabel = visibleLabels_.size();
+    size_t firstGoto = pendingGotos_.size();
+    size_t firstActiveVar = activeVars_.size();
+    int entryLocalCount = localCount_;
+    std::vector<ActiveVar> entryActiveVars = activeVars_;
+
+    blockScopes_.push_back({firstLabel, firstGoto, firstActiveVar, entryLocalCount, entryActiveVars});
+
+    size_t trailingLabelStart = stmts.size();
+    while (trailingLabelStart > 0 && dynamic_cast<LabelStmtNode*>(stmts[trailingLabelStart - 1].get()) != nullptr) {
+        trailingLabelStart--;
+    }
+
+    for (size_t i = 0; i < trailingLabelStart; i++) {
+        if (stmts[i]) stmts[i]->accept(*this);
+    }
+
+    if (hasEndScope) {
+        endScope();
+    }
+
+    for (size_t i = trailingLabelStart; i < stmts.size(); i++) {
+        if (stmts[i]) {
+            LabelStmtNode* labelNode = dynamic_cast<LabelStmtNode*>(stmts[i].get());
+            if (labelNode) {
+                setLine(labelNode->line());
+                const std::string& name = labelNode->label();
+                for (const auto& l : visibleLabels_) {
+                    if (l.name == name) {
+                        throw CompileError("label '" + name + "' already defined", currentLine_);
+                    }
+                }
+                Label lbl;
+                lbl.name = name;
+                lbl.offset = currentChunk()->size();
+                lbl.localCount = entryLocalCount;
+                lbl.activeVars = entryActiveVars;
+                lbl.activeVarCount = static_cast<int>(entryActiveVars.size());
+                lbl.blockDepth = scopeDepth_;
+                visibleLabels_.push_back(lbl);
+            } else {
+                stmts[i]->accept(*this);
+            }
+        }
+    }
+
+    resolveBlockGotos(firstGoto, firstLabel);
+
+    visibleLabels_.resize(firstLabel);
+
+    if (!hasEndScope) {
+        activeVars_.resize(firstActiveVar);
+    }
+
+    blockScopes_.pop_back();
 }
 
 void CodeGenerator::visitGoto(GotoStmtNode* node) {
     setLine(node->line());
     const std::string& name = node->label();
     
-    auto it = labels_.find(name);
-    if (it != labels_.end()) {
+    // Check if label was already defined (backward jump)
+    auto it = std::find_if(visibleLabels_.rbegin(), visibleLabels_.rend(),
+                           [&](const Label& lbl) { return lbl.name == name; });
+    if (it != visibleLabels_.rend()) {
         // Backward jump
-        if (localCount_ < it->second.localCount) {
-            throw CompileError("<goto " + name + "> jumps into the scope of local variables", currentLine_);
-        }
+        checkGotoScoping({name, 0, localCount_, static_cast<int>(activeVars_.size()), activeVars_, scopeDepth_, currentLine_}, *it);
         
-        // Pop locals to reach label's local count
-        // For simplicity and safety, we use OP_CLOSE_UPVALUE which also pops
-        for (int i = localCount_ - 1; i >= it->second.localCount; i--) {
+        for (int i = localCount_ - 1; i >= it->localCount; i--) {
             emitOpCode(OpCode::OP_CLOSE_UPVALUE);
         }
         
-        // Our OP_LOOP jumps backward. The offset is relative to the instruction after OP_LOOP
-        emitLoop(it->second.offset);
+        emitLoop(it->offset);
     } else {
         // Forward jump - unresolved
         size_t jump = emitJump(OpCode::OP_JUMP);
-        unresolvedGotos_.push_back({name, jump, localCount_, scopeDepth_, currentLine_});
+        pendingGotos_.push_back({name, jump, localCount_, static_cast<int>(activeVars_.size()), activeVars_, scopeDepth_, currentLine_});
     }
 }
 
@@ -610,30 +1212,62 @@ void CodeGenerator::visitLabel(LabelStmtNode* node) {
     setLine(node->line());
     const std::string& name = node->label();
     
-    if (labels_.find(name) != labels_.end()) {
-        throw CompileError("label '" + name + "' already defined", currentLine_);
+    for (const auto& l : visibleLabels_) {
+        if (l.name == name) {
+            throw CompileError("label '" + name + "' already defined", currentLine_);
+        }
     }
     
-    Label lbl = {currentChunk()->size(), localCount_, scopeDepth_};
-    labels_[name] = lbl;
+    Label lbl;
+    lbl.name = name;
+    lbl.offset = currentChunk()->size();
+    lbl.localCount = localCount_;
+    lbl.activeVars = activeVars_;
+    lbl.activeVarCount = static_cast<int>(activeVars_.size());
+    lbl.blockDepth = scopeDepth_;
+    visibleLabels_.push_back(lbl);
+
+    size_t firstGoto = blockScopes_.empty() ? 0 : blockScopes_.back().firstGoto;
+    size_t labelIdx = visibleLabels_.size() - 1;
+    resolveBlockGotos(firstGoto, labelIdx);
+}
+
+void CodeGenerator::emitGotoStubs() {
+    if (!pendingGotos_.empty()) {
+        throw CompileError("no visible label '" + pendingGotos_[0].name + "' for <goto> at line " + std::to_string(pendingGotos_[0].line), pendingGotos_[0].line);
+    }
+
+    for (const auto& item : gotosNeedingStubs_) {
+        const Goto& g = item.first;
+        const Label& lbl = item.second;
+        
+        size_t stubOffset = currentChunk()->size();
+        
+        // Patch original JUMP to jump to this stub
+        size_t jumpToStub = stubOffset - g.instructionOffset - 2;
+        currentChunk()->code()[g.instructionOffset] = jumpToStub & 0xff;
+        currentChunk()->code()[g.instructionOffset + 1] = (jumpToStub >> 8) & 0xff;
+        
+        // Generate cleanup stub
+        for (int i = g.localCount - 1; i >= lbl.localCount; i--) {
+            emitOpCode(OpCode::OP_CLOSE_UPVALUE);
+        }
+        
+        // Jump from stub to label
+        emitLoop(lbl.offset);
+    }
+    gotosNeedingStubs_.clear();
 }
 
 void CodeGenerator::visitBlock(BlockStmtNode* node) {
     setLine(node->line());
     beginScope();
-    for (const auto& stmt : node->statements()) {
-        if (stmt) stmt->accept(*this);
-    }
-    endScope();
+    compileBlock(node->statements(), true);
 }
 
 void CodeGenerator::visitProgram(ProgramNode* node) {
     setLine(node->line());
-
-    // Generate code for each statement
-    for (const auto& stmt : node->statements()) {
-        if (stmt) stmt->accept(*this);
-    }
+    compileBlock(node->statements(), false);
 }
 
 void CodeGenerator::emitByte(uint8_t byte) {
@@ -749,10 +1383,7 @@ void CodeGenerator::visitIfStmt(IfStmtNode* node) {
 
     // Compile then branch
     beginScope();
-    for (const auto& stmt : node->thenBranch()) {
-        if (stmt) stmt->accept(*this);
-    }
-    endScope();
+    compileBlock(node->thenBranch(), true);
 
     // Jump over else branch
     size_t elseJump = emitJump(OpCode::OP_JUMP);
@@ -772,10 +1403,7 @@ void CodeGenerator::visitIfStmt(IfStmtNode* node) {
 
         // Compile elseif body
         beginScope();
-        for (const auto& stmt : elseIfBranch.body) {
-            if (stmt) stmt->accept(*this);
-        }
-        endScope();
+        compileBlock(elseIfBranch.body, true);
 
         // Jump to end
         endJumps.push_back(emitJump(OpCode::OP_JUMP));
@@ -787,10 +1415,7 @@ void CodeGenerator::visitIfStmt(IfStmtNode* node) {
 
     // Compile else branch
     beginScope();
-    for (const auto& stmt : node->elseBranch()) {
-        if (stmt) stmt->accept(*this);
-    }
-    endScope();
+    compileBlock(node->elseBranch(), true);
 
     // Patch else jump
     patchJump(elseJump);
@@ -817,10 +1442,7 @@ void CodeGenerator::visitWhileStmt(WhileStmtNode* node) {
 
     // Compile body in its own scope
     beginScope();
-    for (const auto& stmt : node->body()) {
-        if (stmt) stmt->accept(*this);
-    }
-    endScope();
+    compileBlock(node->body(), true);
 
     // Loop back to condition
     emitLoop(loopStart);
@@ -844,25 +1466,51 @@ void CodeGenerator::visitRepeatStmt(RepeatStmtNode* node) {
     for (const auto& stmt : node->body()) {
         if (stmt) stmt->accept(*this);
     }
-    endScope();
 
-    // Compile condition
+    // Condition is evaluated WITHIN the body scope!
     node->condition()->accept(*this);
 
-    // Emit OP_NOT to invert condition (repeat UNTIL becomes repeat WHILE NOT)
-    emitOpCode(OpCode::OP_NOT);
+    // Identify locals in this scope before endScope removes them
+    std::vector<Local> scopeLocals;
+    for (int i = static_cast<int>(locals_.size()) - 1; i >= 0; i--) {
+        if (locals_[i].depth >= scopeDepth_) {
+            scopeLocals.push_back(locals_[i]);
+        } else {
+            break;
+        }
+    }
 
-    // If inverted condition is false (original was true), exit
-    // If inverted condition is true (original was false), loop back
-    size_t exitJump = emitJump(OpCode::OP_JUMP_IF_FALSE);
+    // If condition is falsey (or nil), we loop back.
+    // JUMP_IF_FALSE peeks at top of stack (the condition).
+    size_t loopBackJump = emitJump(OpCode::OP_JUMP_IF_FALSE);
+
+    // Condition was truthy: normal exit path
     emitOpCode(OpCode::OP_POP);  // Pop condition
 
-    // Loop back to start
+    // End scope cleans up locals for the exit path
+    endScope();
+
+    // Jump past the loop-back instructions
+    size_t exitJump = emitJump(OpCode::OP_JUMP);
+
+    // Loop-back path:
+    patchJump(loopBackJump);
+    emitOpCode(OpCode::OP_POP);  // Pop condition
+
+    // Pop/close locals for the next iteration
+    for (const auto& l : scopeLocals) {
+        if (l.isCaptured || l.isClose) {
+            emitOpCode(OpCode::OP_CLOSE_UPVALUE);
+        } else {
+            emitOpCode(OpCode::OP_POP);
+        }
+    }
+
+    // Loop back to start of loop body
     emitLoop(loopStart);
 
-    // Exit point
+    // Exit point for normal completion and break jumps
     patchJump(exitJump);
-    emitOpCode(OpCode::OP_POP);  // Pop condition
 
     endLoop();  // End loop context and patch all break jumps
 }
@@ -939,10 +1587,7 @@ void CodeGenerator::visitForStmt(ForStmtNode* node) {
 
     // Compile body
     beginScope();
-    for (const auto& stmt : node->body()) {
-        if (stmt) stmt->accept(*this);
-    }
-    endScope();
+    compileBlock(node->body(), true);
 
     // Increment loop variable: var = var + step
     // Get var
@@ -981,37 +1626,61 @@ void CodeGenerator::visitForInStmt(ForInStmtNode* node) {
     // Begin scope for iterator state and loop variables
     beginScope();
 
-    // Evaluate iterator expression
-    // We expect 3 values: iterator, state, control_var
-    // If iterator expression is a call, we can ask for 3 values.
-    // If it's not a call (e.g. variable), we get 1 value and pad with 2 nils.
-    
-    // Save current expected return count and set to 3 for iterator init
-    uint8_t oldRetCount = expectedRetCount_;
-    expectedRetCount_ = 4; // 3 results (3+1=4)
-    node->iterator()->accept(*this);
-    expectedRetCount_ = oldRetCount; // Restore
+    // Evaluate iterator expressions
+    // Generic for loop expects 4 values: iterator, state, control_var, to-be-closed
+    const auto& iterators = node->iterators();
+    size_t initCount = iterators.size();
+    const size_t varCount = 4;
 
-    // If it wasn't a call that pushed 3 values, we might only have 1 or 2.
-    // However, currently our CodeGen doesn't automatically pad for non-calls.
-    // Let's check if we need to pad.
-    // (Actually, a better way is to always ensure 3 values are on stack)
-    // For now, let's assume it only pushed 1 if not a call.
-    if (!dynamic_cast<CallExprNode*>(node->iterator()) && 
-        !dynamic_cast<MethodCallExprNode*>(node->iterator())) {
-        emitOpCode(OpCode::OP_NIL); // state
-        emitOpCode(OpCode::OP_NIL); // control
+    uint8_t oldRetCount = expectedRetCount_;
+
+    // 1. Evaluate all initializers except the last one
+    for (size_t i = 0; i < (initCount > 0 ? initCount - 1 : 0); i++) {
+        expectedRetCount_ = 2; // ONE
+        iterators[i]->accept(*this);
+    }
+
+    // 2. Evaluate the last initializer with multires if needed
+    if (initCount > 0) {
+        if (varCount > initCount) {
+            // Last expression needs to provide multiple values (nresults + 1)
+            expectedRetCount_ = static_cast<uint8_t>(varCount - (initCount - 1) + 1);
+        } else {
+            expectedRetCount_ = 2; // ONE
+        }
+        iterators[initCount - 1]->accept(*this);
+    }
+
+    expectedRetCount_ = oldRetCount;
+
+    // 3. Pad with nil if fewer values than variables (and not covered by multires call/vararg)
+    if (initCount < varCount) {
+        auto* lastInit = initCount > 0 ? iterators[initCount - 1].get() : nullptr;
+        bool lastIsCall = lastInit && (dynamic_cast<CallExprNode*>(lastInit) != nullptr || 
+                                       dynamic_cast<MethodCallExprNode*>(lastInit) != nullptr ||
+                                       dynamic_cast<VarargExprNode*>(lastInit) != nullptr);
+
+        if (!lastIsCall) {
+            for (size_t i = initCount; i < varCount; i++) {
+                emitOpCode(OpCode::OP_NIL);
+            }
+        }
+    } else if (initCount > varCount) {
+        // Discard excess values
+        for (size_t i = varCount; i < initCount; i++) {
+            emitOpCode(OpCode::OP_POP);
+        }
     }
 
     // Store iterator state in hidden locals
-    // They are already on stack in order [iter, state, control]
+    // They are already on stack in order [iter, state, control, to-be-closed]
+    int iteratorSlot = localCount_;
     addLocal("(for iterator)", true);
+    int stateSlot = localCount_;
     addLocal("(for state)", true);
-    addLocal("(for control)", true);
-    
-    int iteratorSlot = resolveLocal("(for iterator)");
-    int stateSlot = resolveLocal("(for state)");
-    int controlSlot = resolveLocal("(for control)");
+    int controlSlot = localCount_;
+    addLocal("(for state)", true);
+    addLocal("(for state)", true, true /* isClose */);
 
     // Add loop variables (initialized to nil)
     const auto& varNames = node->varNames();
@@ -1098,10 +1767,7 @@ void CodeGenerator::visitForInStmt(ForInStmtNode* node) {
 
     // Compile body
     beginScope();
-    for (const auto& stmt : node->body()) {
-        if (stmt) stmt->accept(*this);
-    }
-    endScope();
+    compileBlock(node->body(), true);
 
     // Loop back
     emitLoop(loopStart);
@@ -1127,20 +1793,33 @@ void CodeGenerator::visitCall(CallExprNode* node) {
         if (tableVar && tableVar->name() == "coroutine" && 
             stringKey && stringKey->content() == "yield") {
             
-            // Compile arguments
-            for (const auto& arg : node->args()) {
-                arg->accept(*this);
-            }
-            // Emit yield instruction
-            emitOpCode(OpCode::OP_YIELD);
-            if (node->args().size() > UINT8_MAX) {
-                throw CompileError("Too many arguments to yield", currentLine_);
-            }
-            emitByte(static_cast<uint8_t>(node->args().size()));
-            
             uint8_t yieldRetCount = expectedRetCount_;
-            // If yield is used as an expression statement, expectedRetCount_ is 1 but it should be popped.
-            // Wait, visitExprStmt will pop 1. So we should ask for 1.
+            const auto& args = node->args();
+            bool isLastMultires = false;
+            for (size_t i = 0; i < args.size(); i++) {
+                bool canBeMultires = (dynamic_cast<CallExprNode*>(args[i].get()) != nullptr) ||
+                                     (dynamic_cast<MethodCallExprNode*>(args[i].get()) != nullptr) ||
+                                     (dynamic_cast<VarargExprNode*>(args[i].get()) != nullptr);
+
+                if (i == args.size() - 1 && canBeMultires) {
+                    expectedRetCount_ = 0; // Last argument can be multires (0 = ALL)
+                    isLastMultires = true;
+                } else {
+                    expectedRetCount_ = 2; // Fixed args expect 1 result
+                }
+                args[i]->accept(*this);
+            }
+
+            if (isLastMultires) {
+                emitOpCode(OpCode::OP_YIELD_MULTI);
+                emitByte(static_cast<uint8_t>(args.size() - 1));
+            } else {
+                emitOpCode(OpCode::OP_YIELD);
+                if (args.size() > UINT8_MAX) {
+                    throw CompileError("Too many arguments to yield", currentLine_);
+                }
+                emitByte(static_cast<uint8_t>(args.size()));
+            }
             emitByte(yieldRetCount);
             return;
         }
@@ -1161,6 +1840,7 @@ void CodeGenerator::visitCall(CallExprNode* node) {
 
     for (size_t i = 0; i < args.size(); i++) {
         bool canBeMultires = (dynamic_cast<CallExprNode*>(args[i].get()) != nullptr) ||
+                             (dynamic_cast<MethodCallExprNode*>(args[i].get()) != nullptr) ||
                              (dynamic_cast<VarargExprNode*>(args[i].get()) != nullptr);
 
         if (i == args.size() - 1 && canBeMultires) {
@@ -1229,6 +1909,7 @@ void CodeGenerator::visitMethodCall(MethodCallExprNode* node) {
     
     for (size_t i = 0; i < args.size(); i++) {
         bool canBeMultires = (dynamic_cast<CallExprNode*>(args[i].get()) != nullptr) ||
+                             (dynamic_cast<MethodCallExprNode*>(args[i].get()) != nullptr) ||
                              (dynamic_cast<VarargExprNode*>(args[i].get()) != nullptr);
         
         if (i == args.size() - 1 && canBeMultires) {
@@ -1288,6 +1969,7 @@ void CodeGenerator::visitTableConstructor(TableConstructorNode* node) {
         // Compile key
         if (entry.key == nullptr) {
             bool canBeMultires = (dynamic_cast<CallExprNode*>(entry.value.get()) != nullptr) ||
+                                 (dynamic_cast<MethodCallExprNode*>(entry.value.get()) != nullptr) ||
                                  (dynamic_cast<VarargExprNode*>(entry.value.get()) != nullptr);
             bool isLast = (i == entries.size() - 1);
 
@@ -1326,6 +2008,22 @@ void CodeGenerator::visitTableConstructor(TableConstructorNode* node) {
 void CodeGenerator::visitIndexExpr(IndexExprNode* node) {
     setLine(node->line());
 
+    if (isVarargOptimized_ && !currentVarargName_.empty()) {
+        if (auto* varNode = dynamic_cast<VariableExprNode*>(node->table())) {
+            if (varNode->name() == currentVarargName_ && resolveLocal(currentVarargName_) == namedVarargSlot_) {
+                if (auto* strLit = dynamic_cast<StringLiteralNode*>(node->key())) {
+                    if (strLit->content() == "n") {
+                        emitOpCode(OpCode::OP_GET_VARARG_COUNT);
+                        return;
+                    }
+                }
+                node->key()->accept(*this);
+                emitOpCode(OpCode::OP_GET_VARARG_ITEM);
+                return;
+            }
+        }
+    }
+
     // Compile table expression
     node->table()->accept(*this);
 
@@ -1355,8 +2053,12 @@ void CodeGenerator::visitIndexAssignmentStmt(IndexAssignmentStmtNode* node) {
 void CodeGenerator::visitFunctionDecl(FunctionDeclNode* node) {
     setLine(node->line());
 
+    if (resolveLocal(node->name()) == -1 && !isDeclaredGlobal(node->name())) {
+        resolveUpvalue(node->name());
+    }
+
     // Compile function and emit OP_CLOSURE
-    compileFunction(node->name(), node->params(), node->body(), node->hasVarargs());
+    compileFunction(node->name(), node->params(), node->body(), node->hasVarargs(), node->varargName(), node->line(), node->line());
 
     // Three-level resolution: local → upvalue → global
     
@@ -1371,18 +2073,29 @@ void CodeGenerator::visitFunctionDecl(FunctionDeclNode* node) {
     }
 
     // 2. Try to resolve as upvalue
-    int upvalue = resolveUpvalue(node->name());
-    if (upvalue != -1) {
-        if (upvalues_[upvalue].isConstant) {
-            throw CompileError("attempt to assign to const variable '" + node->name() + "'", node->line());
+    if (!isDeclaredGlobal(node->name())) {
+        int upvalue = resolveUpvalue(node->name());
+        if (upvalue != -1) {
+            if (upvalues_[upvalue].isConstant) {
+                throw CompileError("attempt to assign to const variable '" + node->name() + "'", node->line());
+            }
+            emitOpCode(OpCode::OP_SET_UPVALUE);
+            emitByte(static_cast<uint8_t>(upvalue));
+            emitOpCode(OpCode::OP_POP);
+            return;
         }
-        emitOpCode(OpCode::OP_SET_UPVALUE);
-        emitByte(static_cast<uint8_t>(upvalue));
-        emitOpCode(OpCode::OP_POP);
-        return;
     }
 
     // 3. Fall back to global variable (via _ENV)
+    if (envDeclaredGlobal_) {
+        throw CompileError("_ENV is global when accessing variable '" + node->name() + "'", node->line());
+    }
+    if (globalMode_ == GlobalMode::NONE) {
+        if (!isDeclaredGlobal(node->name())) {
+            throw CompileError("variable '" + node->name() + "' is not declared", node->line());
+        }
+    }
+
     int envSlot = resolveLocal("_ENV");
     if (envSlot != -1) {
         // _ENV is a local variable
@@ -1413,7 +2126,7 @@ void CodeGenerator::visitFunctionExpr(FunctionExprNode* node) {
 
     // Compile function and emit OP_CLOSURE (leaves closure on stack)
     std::string name = expectedName_.empty() ? "anonymous" : expectedName_;
-    compileFunction(name, node->params(), node->body(), node->hasVarargs());
+    compileFunction(name, node->params(), node->body(), node->hasVarargs(), node->varargName(), node->lineDefined(), node->lastLineDefined());
 }
 
 void CodeGenerator::visitGroupExpr(GroupExprNode* node) {
@@ -1432,16 +2145,21 @@ void CodeGenerator::visitGroupExpr(GroupExprNode* node) {
     isTailCall_ = oldTailCall;
 }
 
-void CodeGenerator::compileFunction(const std::string& name, const std::vector<std::string>& params,                                   const std::vector<std::unique_ptr<StmtNode>>& body, bool hasVarargs) {
+void CodeGenerator::compileFunction(const std::string& name, const std::vector<std::string>& params,
+                                   const std::vector<std::unique_ptr<StmtNode>>& body, bool hasVarargs,
+                                   const std::string& varargName, int lineDefined, int lastLineDefined) {
     // Save current compiler state and start new function compilation
     pushCompilerState();
 
-    // When compiling any chunk (top-level or via load/require), we ensure _ENV is upvalue 0.
-    // resolveUpvalue will find it in the parent or create it as a root upvalue.
-    int envIdx = resolveUpvalue("_ENV");
-    if (envIdx != 0) {
-        // This should not happen if _ENV is always the first thing we resolve
+    currentVarargName_ = varargName;
+    if (!varargName.empty()) {
+        VarargEscapeChecker checker(varargName);
+        checker.check(body);
+        isVarargOptimized_ = !checker.escapes;
+    } else {
+        isVarargOptimized_ = false;
     }
+
 
     // Begin scope for function body
     beginScope();
@@ -1451,53 +2169,29 @@ void CodeGenerator::compileFunction(const std::string& name, const std::vector<s
         addLocal(param);
     }
 
-    // Compile function body
-    for (const auto& stmt : body) {
-        if (stmt) stmt->accept(*this);
+    // If named varargs, add the vararg table as a const local parameter
+    if (!varargName.empty()) {
+        if (isVarargOptimized_) {
+            emitOpCode(OpCode::OP_NIL);
+        } else {
+            emitOpCode(OpCode::OP_PACK_VARARG_TABLE);
+        }
+        addLocal(varargName, true /* isConstant */);
+        namedVarargSlot_ = locals_.back().slot;
+    } else {
+        namedVarargSlot_ = -1;
     }
 
-    // Resolve forward gotos
-    for (const Goto& g : unresolvedGotos_) {
-        auto it = labels_.find(g.name);
-        if (it == labels_.end()) {
-            throw CompileError("no visible label '" + g.name + "' for <goto>", g.line);
-        }
-        
-        if (g.localCount < it->second.localCount) {
-            throw CompileError("<goto " + g.name + "> jumps into the scope of local variables", g.line);
-        }
-        
-        if (g.localCount == it->second.localCount) {
-            // Direct jump
-            size_t jumpDist = it->second.offset - g.instructionOffset - 2;
-            currentChunk()->code()[g.instructionOffset] = jumpDist & 0xff;
-            currentChunk()->code()[g.instructionOffset + 1] = (jumpDist >> 8) & 0xff;
-        } else {
-            // Need a cleanup stub
-            size_t stubOffset = currentChunk()->size();
-            
-            // Patch original JUMP to jump to the stub
-            size_t jumpToStub = stubOffset - g.instructionOffset - 2;
-            currentChunk()->code()[g.instructionOffset] = jumpToStub & 0xff;
-            currentChunk()->code()[g.instructionOffset + 1] = (jumpToStub >> 8) & 0xff;
-            
-            // Generate cleanup stub
-            for (int i = g.localCount - 1; i >= it->second.localCount; i--) {
-                emitOpCode(OpCode::OP_CLOSE_UPVALUE);
-            }
-            
-            // Jump from stub to label (forward or backward depending on where the label is relative to stub)
-            // Wait, the label is always BEFORE the stub, because the label was defined in the function body,
-            // and the stub is appended at the very end of the function body!
-            // So it's ALWAYS a backward jump from the stub to the label.
-            emitLoop(it->second.offset);
-        }
-    }
+    // Compile function body
+    compileBlock(body, false);
 
     // Emit implicit return nil at end (if no explicit return)
     emitOpCode(OpCode::OP_NIL);
     emitOpCode(OpCode::OP_RETURN_VALUE);
     emitByte(1);  // Return count: 1 value (nil)
+
+    // Resolve forward gotos - stubs are emitted here, after return
+    emitGotoStubs();
 
     // Get compiled function chunk (don't call endScope - cleanup is handled by OP_RETURN_VALUE)
     auto functionChunk = std::move(chunk_);
@@ -1515,6 +2209,8 @@ void CodeGenerator::compileFunction(const std::string& name, const std::vector<s
     // capturedUpvalues contains the upvalues for the current function.
     std::vector<Upvalue> capturedUpvalues = upvalues_;
     std::vector<LocalVarInfo> capturedLocals = finishedLocals_;
+    int capturedNamedVarargSlot = namedVarargSlot_;
+    bool capturedIsVarargOptimized = isVarargOptimized_;
 
     // Restore outer compiler state
     popCompilerState();
@@ -1528,9 +2224,18 @@ void CodeGenerator::compileFunction(const std::string& name, const std::vector<s
         capturedUpvalues.size(),
         hasVarargs
     );
+    func->setLines(lineDefined, lastLineDefined);
+
+    if (!varargName.empty()) {
+        func->setNamedVarargs(capturedNamedVarargSlot, capturedIsVarargOptimized);
+    }
 
     for (const auto& l : capturedLocals) {
         func->addLocalVar(l.name, l.startPC, l.endPC, l.slot);
+    }
+
+    for (const auto& uv : capturedUpvalues) {
+        func->addUpvalueName(uv.name);
     }
 
     // Add function to chunk's function pool and get its index
@@ -1564,6 +2269,9 @@ void CodeGenerator::visitReturn(ReturnStmtNode* node) {
 
     // Compile all return values
     const auto& values = node->values();
+    if (values.size() > 254) {
+        throw CompileError("too many returns", node->line());
+    }
     if (values.empty()) {
         // Return with no values - return 0 values
         emitOpCode(OpCode::OP_RETURN_VALUE);
@@ -1573,6 +2281,7 @@ void CodeGenerator::visitReturn(ReturnStmtNode* node) {
         const auto& args = values;
         for (size_t i = 0; i < args.size(); i++) {
             bool canBeMultires = (dynamic_cast<CallExprNode*>(args[i].get()) != nullptr) ||
+                                 (dynamic_cast<MethodCallExprNode*>(args[i].get()) != nullptr) ||
                                  (dynamic_cast<VarargExprNode*>(args[i].get()) != nullptr);
             
             uint8_t oldRetCount = expectedRetCount_;
@@ -1580,8 +2289,15 @@ void CodeGenerator::visitReturn(ReturnStmtNode* node) {
             if (i == args.size() - 1 && canBeMultires) {
                 expectedRetCount_ = 0; // All results (0 = ALL)
                 isLastMultires = true;
-                if (values.size() == 1 && (dynamic_cast<CallExprNode*>(args[i].get()) != nullptr || 
-                                           dynamic_cast<MethodCallExprNode*>(args[i].get()) != nullptr)) {
+                bool hasCloseVar = false;
+                for (const auto& local : locals_) {
+                    if (local.isClose) {
+                        hasCloseVar = true;
+                        break;
+                    }
+                }
+                if (!hasCloseVar && values.size() == 1 && (dynamic_cast<CallExprNode*>(args[i].get()) != nullptr || 
+                                                           dynamic_cast<MethodCallExprNode*>(args[i].get()) != nullptr)) {
                     isTailCall_ = true;
                 }
             } else {
@@ -1658,32 +2374,199 @@ void CodeGenerator::addLocal(const std::string& name, bool isConstant, bool isCl
     local.isConstant = isConstant;
     local.isClose = isClose;
     local.startPC = currentChunk()->size();
+    local.seq = ++varSequence_;
     locals_.push_back(local);
+    activeVars_.push_back({name, false, scopeDepth_});
 
     if (isClose) {
+        size_t nameIndex = currentChunk()->addConstant(Value::string(internString(name)));
         emitOpCode(OpCode::OP_TBC);
         emitByte(static_cast<uint8_t>(local.slot));
+        emitByte(static_cast<uint8_t>(nameIndex));
     }
 }
 
 int CodeGenerator::resolveLocal(const std::string& name) {
+    const Local* foundLocal = nullptr;
     // Search backwards to find most recent declaration
     for (int i = static_cast<int>(locals_.size()) - 1; i >= 0; i--) {
         if (locals_[i].name == name) {
-            return locals_[i].slot;
+            foundLocal = &locals_[i];
+            break;
         }
     }
-    return -1;  // Not found, must be global
+
+    if (foundLocal == nullptr) {
+        return -1;
+    }
+
+    // Check if shadowed by a declared global in this scope
+    for (int i = static_cast<int>(declaredGlobals_.size()) - 1; i >= 0; i--) {
+        if (declaredGlobals_[i].name == name) {
+            if (declaredGlobals_[i].seq > foundLocal->seq) {
+                return -1; // Shadowed by global
+            }
+            break;
+        }
+    }
+
+    return foundLocal->slot;
+}
+
+bool CodeGenerator::isDeclaredGlobal(const std::string& name) const {
+    const DeclaredGlobal* foundGlobal = nullptr;
+    for (int i = static_cast<int>(declaredGlobals_.size()) - 1; i >= 0; i--) {
+        if (declaredGlobals_[i].name == name) {
+            foundGlobal = &declaredGlobals_[i];
+            break;
+        }
+    }
+    if (foundGlobal != nullptr) {
+        for (int i = static_cast<int>(locals_.size()) - 1; i >= 0; i--) {
+            if (locals_[i].name == name) {
+                if (locals_[i].seq > foundGlobal->seq) {
+                    return false;
+                }
+                break;
+            }
+        }
+        return true;
+    }
+
+    const CompilerState* curr = enclosingCompiler_;
+    while (curr != nullptr) {
+        const DeclaredGlobal* currGlobal = nullptr;
+        for (int i = static_cast<int>(curr->declaredGlobals.size()) - 1; i >= 0; i--) {
+            if (curr->declaredGlobals[i].name == name) {
+                currGlobal = &curr->declaredGlobals[i];
+                break;
+            }
+        }
+        if (currGlobal != nullptr) {
+            bool shadowed = false;
+            for (int j = static_cast<int>(curr->locals.size()) - 1; j >= 0; j--) {
+                if (curr->locals[j].name == name) {
+                    if (curr->locals[j].seq > currGlobal->seq) {
+                        shadowed = true;
+                    }
+                    break;
+                }
+            }
+            if (!shadowed) return true;
+            break;
+        }
+        curr = curr->enclosing;
+    }
+    return false;
+}
+
+bool CodeGenerator::isDeclaredGlobalConst(const std::string& name) const {
+    const DeclaredGlobal* foundGlobal = nullptr;
+    for (int i = static_cast<int>(declaredGlobals_.size()) - 1; i >= 0; i--) {
+        if (declaredGlobals_[i].name == name) {
+            foundGlobal = &declaredGlobals_[i];
+            break;
+        }
+    }
+    if (foundGlobal != nullptr) {
+        for (int i = static_cast<int>(locals_.size()) - 1; i >= 0; i--) {
+            if (locals_[i].name == name) {
+                if (locals_[i].seq > foundGlobal->seq) {
+                    return false;
+                }
+                break;
+            }
+        }
+        return foundGlobal->isConstant;
+    }
+
+    const CompilerState* curr = enclosingCompiler_;
+    while (curr != nullptr) {
+        const DeclaredGlobal* currGlobal = nullptr;
+        for (int i = static_cast<int>(curr->declaredGlobals.size()) - 1; i >= 0; i--) {
+            if (curr->declaredGlobals[i].name == name) {
+                currGlobal = &curr->declaredGlobals[i];
+                break;
+            }
+        }
+        if (currGlobal != nullptr) {
+            bool shadowed = false;
+            for (int j = static_cast<int>(curr->locals.size()) - 1; j >= 0; j--) {
+                if (curr->locals[j].name == name) {
+                    if (curr->locals[j].seq > currGlobal->seq) {
+                        shadowed = true;
+                    }
+                    break;
+                }
+            }
+            if (!shadowed) return currGlobal->isConstant;
+            break;
+        }
+        curr = curr->enclosing;
+    }
+    return false;
 }
 
 void CodeGenerator::checkConstantAssign(const std::string& name, int line) {
-    for (int i = static_cast<int>(locals_.size()) - 1; i >= 0; i--) {
-        if (locals_[i].name == name) {
-            if (locals_[i].isConstant) {
-                throw CompileError("attempt to assign to const variable '" + name + "'", line);
+    int slot = resolveLocal(name);
+    if (slot != -1) {
+        for (int i = static_cast<int>(locals_.size()) - 1; i >= 0; i--) {
+            if (locals_[i].slot == slot) {
+                if (locals_[i].isConstant) {
+                    throw CompileError("attempt to assign to const variable '" + name + "'", line);
+                }
+                return;
             }
-            return;
         }
+    }
+
+    if (!isDeclaredGlobal(name)) {
+        CompilerState* curr = enclosingCompiler_;
+        while (curr != nullptr) {
+            bool currDeclaredGlobal = false;
+            for (const auto& g : curr->declaredGlobals) {
+                if (g.name == name) {
+                    bool shadowed = false;
+                    for (int j = static_cast<int>(curr->locals.size()) - 1; j >= 0; j--) {
+                        if (curr->locals[j].name == name) {
+                            if (curr->locals[j].seq > g.seq) {
+                                shadowed = true;
+                            }
+                            break;
+                        }
+                    }
+                    if (!shadowed) {
+                        currDeclaredGlobal = true;
+                        if (g.isConstant) {
+                            throw CompileError("attempt to assign to const variable '" + name + "'", line);
+                        }
+                    }
+                    break;
+                }
+            }
+            if (currDeclaredGlobal) break;
+
+            for (int i = static_cast<int>(curr->locals.size()) - 1; i >= 0; i--) {
+                if (curr->locals[i].name == name) {
+                    if (curr->locals[i].isConstant) {
+                        throw CompileError("attempt to assign to const variable '" + name + "'", line);
+                    }
+                    return;
+                }
+            }
+            curr = curr->enclosing;
+        }
+    }
+
+    if (isDeclaredGlobal(name)) {
+        if (isDeclaredGlobalConst(name)) {
+            throw CompileError("attempt to assign to const variable '" + name + "'", line);
+        }
+        return;
+    }
+
+    if (globalMode_ == GlobalMode::CONST_ALL) {
+        throw CompileError("attempt to assign to const variable '" + name + "'", line);
     }
 }
 
@@ -1702,6 +2585,15 @@ int CodeGenerator::resolveUpvalue(const std::string& name) {
     // 2. Check parent's locals
     for (int i = static_cast<int>(enclosingCompiler_->locals.size()) - 1; i >= 0; i--) {
         if (enclosingCompiler_->locals[i].name == name) {
+            bool shadowed = false;
+            for (const auto& g : enclosingCompiler_->declaredGlobals) {
+                if (g.name == name && g.seq > enclosingCompiler_->locals[i].seq) {
+                    shadowed = true;
+                    break;
+                }
+            }
+            if (shadowed) break;
+
             enclosingCompiler_->locals[i].isCaptured = true;
             return addUpvalue(name, static_cast<uint8_t>(enclosingCompiler_->locals[i].slot), true, enclosingCompiler_->locals[i].isConstant);
         }
@@ -1715,8 +2607,6 @@ int CodeGenerator::resolveUpvalue(const std::string& name) {
     }
 
     // 4. Recursively try to resolve in ancestor (via parent)
-    // We need to know if the ancestor upvalue is constant!
-    // Let's modify resolveUpvalueHelper to return more info or just find it.
     int ancestorUpvalue = resolveUpvalueHelper(enclosingCompiler_, name);
     if (ancestorUpvalue != -1) {
         bool isConst = enclosingCompiler_->upvalues[ancestorUpvalue].isConstant;
@@ -1736,6 +2626,15 @@ int CodeGenerator::resolveUpvalueHelper(CompilerState* state, const std::string&
     // Check parent's locals
     for (int i = static_cast<int>(parent->locals.size()) - 1; i >= 0; i--) {
         if (parent->locals[i].name == name) {
+            bool shadowed = false;
+            for (const auto& g : parent->declaredGlobals) {
+                if (g.name == name && g.seq > parent->locals[i].seq) {
+                    shadowed = true;
+                    break;
+                }
+            }
+            if (shadowed) break;
+
             parent->locals[i].isCaptured = true;
             
             // Add upvalue to the intermediate state
@@ -1818,20 +2717,43 @@ void CodeGenerator::beginScope() {
 void CodeGenerator::endScope() {
     scopeDepth_--;
 
-    // Pop locals from this scope
-    while (!locals_.empty() && locals_.back().depth > scopeDepth_) {
-        // Record debug info for finished local
-        Local& l = locals_.back();
-        finishedLocals_.push_back({l.name, l.startPC, currentChunk()->size(), l.slot});
-
-        if (locals_.back().isCaptured || locals_.back().isClose) {
-            // Close the upvalue or to-be-closed variable instead of just popping
-            emitOpCode(OpCode::OP_CLOSE_UPVALUE);
-        } else {
-            emitOpCode(OpCode::OP_POP);
+    bool hasSpecial = false;
+    int targetLocalCount = localCount_;
+    for (const auto& l : locals_) {
+        if (l.depth > scopeDepth_) {
+            if (l.slot < targetLocalCount) targetLocalCount = l.slot;
+            if (l.isCaptured || l.isClose) {
+                hasSpecial = true;
+            }
         }
-        locals_.pop_back();
-        localCount_--;
+    }
+
+    if (hasSpecial) {
+        emitOpCode(OpCode::OP_CLOSE);
+        emitByte(static_cast<uint8_t>(targetLocalCount));
+        while (!locals_.empty() && locals_.back().depth > scopeDepth_) {
+            Local& l = locals_.back();
+            finishedLocals_.push_back({l.name, l.startPC, currentChunk()->size(), l.slot});
+            locals_.pop_back();
+            localCount_--;
+        }
+    } else {
+        while (!locals_.empty() && locals_.back().depth > scopeDepth_) {
+            Local& l = locals_.back();
+            finishedLocals_.push_back({l.name, l.startPC, currentChunk()->size(), l.slot});
+            emitOpCode(OpCode::OP_POP);
+            locals_.pop_back();
+            localCount_--;
+        }
+    }
+
+    // Pop declared globals from this scope
+    while (!declaredGlobals_.empty() && declaredGlobals_.back().scopeDepth > scopeDepth_) {
+        declaredGlobals_.pop_back();
+    }
+
+    while (!activeVars_.empty() && activeVars_.back().depth > scopeDepth_) {
+        activeVars_.pop_back();
     }
 }
 
@@ -1846,8 +2768,21 @@ void CodeGenerator::pushCompilerState() {
     state.localCount = localCount_;
     state.expectedRetCount = expectedRetCount_;
     state.enclosing = enclosingCompiler_;
-    state.labels = std::move(labels_);
-    state.unresolvedGotos = std::move(unresolvedGotos_);
+    state.visibleLabels = std::move(visibleLabels_);
+    state.pendingGotos = std::move(pendingGotos_);
+    state.activeVars = std::move(activeVars_);
+    state.blockScopes = std::move(blockScopes_);
+    state.gotosNeedingStubs = std::move(gotosNeedingStubs_);
+    state.varargName = currentVarargName_;
+    state.namedVarargSlot = namedVarargSlot_;
+    state.isVarargOptimized = isVarargOptimized_;
+    state.globalMode = globalMode_;
+    state.declaredGlobals = std::move(declaredGlobals_);
+    state.shadowedLocals = std::move(shadowedLocals_);
+    state.envDeclaredGlobal = envDeclaredGlobal_;
+    state.varSequence = varSequence_;
+
+    GlobalMode inheritedGlobalMode = globalMode_;
 
     compilerStack_.push_back(std::move(state));
 
@@ -1861,11 +2796,22 @@ void CodeGenerator::pushCompilerState() {
     locals_.clear();
     upvalues_.clear();
     finishedLocals_.clear();
-    labels_.clear();
-    unresolvedGotos_.clear();
+    visibleLabels_.clear();
+    pendingGotos_.clear();
+    activeVars_.clear();
+    blockScopes_.clear();
+    gotosNeedingStubs_.clear();
     scopeDepth_ = 0;
     localCount_ = 0;
     expectedRetCount_ = 2; // Default for function body (one result)
+    currentVarargName_ = "";
+    namedVarargSlot_ = -1;
+    isVarargOptimized_ = false;
+    globalMode_ = inheritedGlobalMode;
+    declaredGlobals_.clear();
+    shadowedLocals_.clear();
+    envDeclaredGlobal_ = false;
+    varSequence_ = 0;
 }
 
 void CodeGenerator::popCompilerState() {
@@ -1881,12 +2827,23 @@ void CodeGenerator::popCompilerState() {
     locals_ = std::move(state.locals);
     upvalues_ = std::move(state.upvalues);
     finishedLocals_ = std::move(state.finishedLocals);
-    labels_ = std::move(state.labels);
-    unresolvedGotos_ = std::move(state.unresolvedGotos);
+    visibleLabels_ = std::move(state.visibleLabels);
+    pendingGotos_ = std::move(state.pendingGotos);
+    activeVars_ = std::move(state.activeVars);
+    blockScopes_ = std::move(state.blockScopes);
+    gotosNeedingStubs_ = std::move(state.gotosNeedingStubs);
     scopeDepth_ = state.scopeDepth;
     localCount_ = state.localCount;
     expectedRetCount_ = state.expectedRetCount;
     enclosingCompiler_ = state.enclosing;
+    currentVarargName_ = state.varargName;
+    namedVarargSlot_ = state.namedVarargSlot;
+    isVarargOptimized_ = state.isVarargOptimized;
+    globalMode_ = state.globalMode;
+    declaredGlobals_ = std::move(state.declaredGlobals);
+    shadowedLocals_ = std::move(state.shadowedLocals);
+    envDeclaredGlobal_ = state.envDeclaredGlobal;
+    varSequence_ = state.varSequence;
 }
 
 size_t CodeGenerator::internString(const std::string& str) {

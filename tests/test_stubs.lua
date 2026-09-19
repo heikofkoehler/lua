@@ -16,9 +16,11 @@ assert(string.sub(d, 1, 4) == "\x1bLua")
 print("OK")
 
 print("Testing string.pack...")
-local p = string.pack("i", 42)
+local p = string.pack("j", 42)
 assert(type(p) == "string")
 assert(#p == 8)
+local p_i = string.pack("i", 42)
+assert(#p_i == 4)
 print("OK")
 
 print("All stub tests passed!")

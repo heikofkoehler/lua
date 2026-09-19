@@ -254,6 +254,14 @@ size_t Chunk::disassembleInstruction(size_t offset) const {
         }
         case OpCode::OP_CLOSE_UPVALUE:
             return simpleInstruction("OP_CLOSE_UPVALUE", offset);
+        case OpCode::OP_CLOSE:
+            return byteInstruction("OP_CLOSE", offset);
+        case OpCode::OP_TBC: {
+            uint8_t slot = code_[offset + 1];
+            uint8_t nameIdx = code_[offset + 2];
+            std::cout << std::left << std::setw(16) << "OP_TBC" << " slot:" << (int)slot << " name:" << (int)nameIdx << "\n";
+            return offset + 3;
+        }
 
         case OpCode::OP_POP:
             return simpleInstruction("OP_POP", offset);
@@ -339,9 +347,32 @@ size_t Chunk::disassembleInstruction(size_t offset) const {
 
         case OpCode::OP_GET_VARARG:
             return byteInstruction("OP_GET_VARARG", offset);
+        case OpCode::OP_PACK_VARARG_TABLE:
+            return simpleInstruction("OP_PACK_VARARG_TABLE", offset);
+        case OpCode::OP_GET_VARARG_ITEM:
+            return simpleInstruction("OP_GET_VARARG_ITEM", offset);
+        case OpCode::OP_GET_VARARG_COUNT:
+            return simpleInstruction("OP_GET_VARARG_COUNT", offset);
+        case OpCode::OP_DEF_GLOBAL:
+            return twoByteInstruction("OP_DEF_GLOBAL", offset);
+        case OpCode::OP_DEF_GLOBAL_LONG: {
+            uint8_t upIndex = code_[offset + 1];
+            uint32_t constIndex = code_[offset + 2] | (code_[offset + 3] << 8) | (code_[offset + 4] << 16);
+            std::cout << "OP_DEF_GLOBAL_LONG  upvalue: " << static_cast<int>(upIndex)
+                      << "  const: " << constIndex << " '";
+            if (constIndex < constants_.size()) {
+                constants_[constIndex].print(std::cout);
+            }
+            std::cout << "'" << std::endl;
+            return offset + 5;
+        }
+        case OpCode::OP_DEF_GLOBAL_TABLE:
+            return simpleInstruction("OP_DEF_GLOBAL_TABLE", offset);
 
         case OpCode::OP_YIELD:
             return yieldInstruction("OP_YIELD", offset);
+        case OpCode::OP_YIELD_MULTI:
+            return yieldInstruction("OP_YIELD_MULTI", offset);
 
         case OpCode::OP_RETURN:
             return simpleInstruction("OP_RETURN", offset);
@@ -349,6 +380,71 @@ size_t Chunk::disassembleInstruction(size_t offset) const {
         default:
             std::cout << "Unknown opcode " << static_cast<int>(instruction) << std::endl;
             return offset + 1;
+    }
+}
+
+size_t Chunk::instructionLength(size_t offset) const {
+    if (offset >= code_.size()) return 0;
+    OpCode op = static_cast<OpCode>(code_[offset]);
+    switch (op) {
+        case OpCode::OP_CONSTANT:
+            return 2;
+        case OpCode::OP_CONSTANT_LONG:
+            return 4;
+        case OpCode::OP_NIL:
+        case OpCode::OP_TRUE:
+        case OpCode::OP_FALSE:
+            return 1;
+        case OpCode::OP_GET_GLOBAL:
+        case OpCode::OP_SET_GLOBAL:
+        case OpCode::OP_GET_LOCAL:
+        case OpCode::OP_SET_LOCAL:
+        case OpCode::OP_GET_UPVALUE:
+        case OpCode::OP_SET_UPVALUE:
+        case OpCode::OP_CLOSE:
+        case OpCode::OP_ROTATE:
+        case OpCode::OP_TAILCALL:
+        case OpCode::OP_TAILCALL_MULTI:
+        case OpCode::OP_RETURN_VALUE:
+        case OpCode::OP_RETURN_VALUE_MULTI:
+        case OpCode::OP_GET_VARARG:
+            return 2;
+        case OpCode::OP_GET_TABUP:
+        case OpCode::OP_SET_TABUP:
+        case OpCode::OP_TBC:
+        case OpCode::OP_JUMP:
+        case OpCode::OP_JUMP_IF_FALSE:
+        case OpCode::OP_LOOP:
+        case OpCode::OP_CALL:
+        case OpCode::OP_CALL_MULTI:
+        case OpCode::OP_DEF_GLOBAL:
+        case OpCode::OP_YIELD:
+        case OpCode::OP_YIELD_MULTI:
+            return 3;
+        case OpCode::OP_GET_TABUP_LONG:
+        case OpCode::OP_SET_TABUP_LONG:
+        case OpCode::OP_DEF_GLOBAL_LONG:
+            return 5;
+        case OpCode::OP_CLOSURE: {
+            if (offset + 1 >= code_.size()) return 2;
+            uint8_t c = code_[offset + 1];
+            if (c < constants_.size() && constants_[c].isFunction()) {
+                const FunctionObject* func = getFunction(constants_[c].asFunctionIndex());
+                if (func) return 2 + func->upvalueCount() * 2;
+            }
+            return 2;
+        }
+        case OpCode::OP_CLOSURE_LONG: {
+            if (offset + 3 >= code_.size()) return 4;
+            uint32_t c = code_[offset + 1] | (code_[offset + 2] << 8) | (code_[offset + 3] << 16);
+            if (c < constants_.size() && constants_[c].isFunction()) {
+                const FunctionObject* func = getFunction(constants_[c].asFunctionIndex());
+                if (func) return 4 + func->upvalueCount() * 2;
+            }
+            return 4;
+        }
+        default:
+            return 1;
     }
 }
 
@@ -416,11 +512,16 @@ size_t Chunk::yieldInstruction(const char* name, size_t offset) const {
     return offset + 3;
 }
 
-void Chunk::serialize(std::ostream& os) const {
-    // Source Name
-    uint32_t nameLen = static_cast<uint32_t>(sourceName_.length());
-    os.write(reinterpret_cast<const char*>(&nameLen), sizeof(nameLen));
-    os.write(sourceName_.c_str(), nameLen);
+void Chunk::serialize(std::ostream& os, const std::string& parentSource) const {
+    // Source Name: omit if same as parentSource
+    if (!parentSource.empty() && sourceName_ == parentSource) {
+        uint32_t nameLen = 0;
+        os.write(reinterpret_cast<const char*>(&nameLen), sizeof(nameLen));
+    } else {
+        uint32_t nameLen = static_cast<uint32_t>(sourceName_.length());
+        os.write(reinterpret_cast<const char*>(&nameLen), sizeof(nameLen));
+        os.write(sourceName_.c_str(), nameLen);
+    }
 
     // Bytecode
     uint32_t codeSize = static_cast<uint32_t>(code_.size());
@@ -445,56 +546,108 @@ void Chunk::serialize(std::ostream& os) const {
     uint32_t constCount = static_cast<uint32_t>(constants_.size());
     os.write(reinterpret_cast<const char*>(&constCount), sizeof(constCount));
     for (const auto& constant : constants_) {
-        constant.serialize(os, this);
+        constant.serialize(os, this, sourceName_);
     }
 }
 
-std::unique_ptr<Chunk> Chunk::deserialize(std::istream& is) {
+template<typename T>
+static void readValue(std::istream& is, T& dest) {
+    if (!is.read(reinterpret_cast<char*>(&dest), sizeof(T)) || is.gcount() < static_cast<std::streamsize>(sizeof(T))) {
+        throw TruncatedError("bad binary format (truncated chunk)");
+    }
+}
+
+static void readBytes(std::istream& is, char* dest, size_t size) {
+    if (size == 0) return;
+    if (!is.read(dest, size) || is.gcount() < static_cast<std::streamsize>(size)) {
+        throw TruncatedError("bad binary format (truncated chunk)");
+    }
+}
+
+std::unique_ptr<Chunk> Chunk::deserialize(std::istream& is, const std::string& parentSource) {
     auto chunk = std::make_unique<Chunk>();
     
     // Source Name
-    uint32_t nameLen;
-    if (!is.read(reinterpret_cast<char*>(&nameLen), sizeof(nameLen))) return nullptr;
-    std::string sourceName(nameLen, '\0');
-    is.read(&sourceName[0], nameLen);
-    chunk->sourceName_ = sourceName;
+    uint32_t nameLen = 0;
+    readValue(is, nameLen);
+    if (nameLen == 0 && !parentSource.empty()) {
+        chunk->sourceName_ = parentSource;
+    } else {
+        std::string sourceName(nameLen, '\0');
+        readBytes(is, &sourceName[0], nameLen);
+        chunk->sourceName_ = sourceName;
+    }
 
     // Bytecode
-    uint32_t codeSize;
-    is.read(reinterpret_cast<char*>(&codeSize), sizeof(codeSize));
+    uint32_t codeSize = 0;
+    readValue(is, codeSize);
     chunk->code_.resize(codeSize);
-    is.read(reinterpret_cast<char*>(chunk->code_.data()), codeSize);
+    readBytes(is, reinterpret_cast<char*>(chunk->code_.data()), codeSize);
     
     // Lines
-    uint32_t linesSize;
-    is.read(reinterpret_cast<char*>(&linesSize), sizeof(linesSize));
+    uint32_t linesSize = 0;
+    readValue(is, linesSize);
     chunk->lines_.resize(linesSize);
-    is.read(reinterpret_cast<char*>(chunk->lines_.data()), linesSize * sizeof(int));
+    readBytes(is, reinterpret_cast<char*>(chunk->lines_.data()), linesSize * sizeof(int));
     
     // Identifiers
-    uint32_t idCount;
-    is.read(reinterpret_cast<char*>(&idCount), sizeof(idCount));
+    uint32_t idCount = 0;
+    readValue(is, idCount);
     for (uint32_t i = 0; i < idCount; i++) {
-        uint32_t len;
-        is.read(reinterpret_cast<char*>(&len), sizeof(len));
+        uint32_t len = 0;
+        readValue(is, len);
         std::string id(len, '\0');
-        is.read(&id[0], len);
+        readBytes(is, &id[0], len);
         chunk->identifiers_.push_back(id);
     }
     
     // Constants
-    uint32_t constCount;
-    is.read(reinterpret_cast<char*>(&constCount), sizeof(constCount));
+    uint32_t constCount = 0;
+    readValue(is, constCount);
     for (uint32_t i = 0; i < constCount; i++) {
-        chunk->constants_.push_back(Value::deserialize(is, chunk.get()));
+        chunk->constants_.push_back(Value::deserialize(is, chunk.get(), chunk->sourceName_));
     }
     
     return chunk;
 }
 
-void FunctionObject::serialize(std::ostream& os) const {
-    // Magic number at the top of the function (which is the top of the file)
-    os.write("\x1bLua", 4);
+void FunctionObject::serialize(std::ostream& os, const std::string& parentSource) const {
+    if (parentSource.empty()) {
+        // 1. Signature (4 bytes)
+        os.write("\x1bLua", 4);
+        // 2. Version (1 byte: 0x55)
+        uint8_t version = 0x55;
+        os.write(reinterpret_cast<const char*>(&version), 1);
+        // 3. Format (1 byte: 0)
+        uint8_t format = 0;
+        os.write(reinterpret_cast<const char*>(&format), 1);
+        // 4. LUAC_DATA (6 bytes: "\x19\x93\r\n\x1a\n")
+        os.write("\x19\x93\r\n\x1a\n", 6);
+        // 5. Size of int (1 byte)
+        uint8_t intSize = sizeof(int); // 4
+        os.write(reinterpret_cast<const char*>(&intSize), 1);
+        // 6. LUAC_INT (4 bytes)
+        int32_t luacInt = -0x5678;
+        os.write(reinterpret_cast<const char*>(&luacInt), sizeof(luacInt));
+        // 7. Size of instruction (1 byte: 4)
+        uint8_t insnSize = 4;
+        os.write(reinterpret_cast<const char*>(&insnSize), 1);
+        // 8. LUAC_NUM (4 bytes: 0x12345678)
+        uint32_t luacNum = 0x12345678;
+        os.write(reinterpret_cast<const char*>(&luacNum), sizeof(luacNum));
+        // 9. Size of lua_Integer (1 byte: 8)
+        uint8_t lintSize = sizeof(int64_t); // 8
+        os.write(reinterpret_cast<const char*>(&lintSize), 1);
+        // 10. LUAC_LINT (8 bytes: -0x5678)
+        int64_t luacLint = -0x5678;
+        os.write(reinterpret_cast<const char*>(&luacLint), sizeof(luacLint));
+        // 11. Size of lua_Number (1 byte: 8)
+        uint8_t lnumSize = sizeof(double); // 8
+        os.write(reinterpret_cast<const char*>(&lnumSize), 1);
+        // 12. LUAC_LNUM (8 bytes: -370.5)
+        double luacLnum = -370.5;
+        os.write(reinterpret_cast<const char*>(&luacLnum), sizeof(luacLnum));
+    }
 
     uint32_t nameLen = static_cast<uint32_t>(name_.length());
     os.write(reinterpret_cast<const char*>(&nameLen), sizeof(nameLen));
@@ -505,55 +658,121 @@ void FunctionObject::serialize(std::ostream& os) const {
     uint8_t varargs = hasVarargs_ ? 1 : 0;
     os.write(reinterpret_cast<const char*>(&varargs), sizeof(varargs));
     
-    chunk_->serialize(os);
+    chunk_->serialize(os, parentSource);
 
     // Local variable info
     uint32_t localCount = static_cast<uint32_t>(localVars_.size());
     os.write(reinterpret_cast<const char*>(&localCount), sizeof(localCount));
     for (const auto& l : localVars_) {
-        uint32_t nameLen = static_cast<uint32_t>(l.name.length());
-        os.write(reinterpret_cast<const char*>(&nameLen), sizeof(nameLen));
-        os.write(l.name.c_str(), nameLen);
+        uint32_t lNameLen = static_cast<uint32_t>(l.name.length());
+        os.write(reinterpret_cast<const char*>(&lNameLen), sizeof(lNameLen));
+        os.write(l.name.c_str(), lNameLen);
         os.write(reinterpret_cast<const char*>(&l.startPC), sizeof(l.startPC));
         os.write(reinterpret_cast<const char*>(&l.endPC), sizeof(l.endPC));
         os.write(reinterpret_cast<const char*>(&l.slot), sizeof(l.slot));
     }
+
+    // Upvalue names
+    uint32_t uvNameCount = static_cast<uint32_t>(upvalueNames_.size());
+    os.write(reinterpret_cast<const char*>(&uvNameCount), sizeof(uvNameCount));
+    for (const auto& uName : upvalueNames_) {
+        uint32_t uNameLen = static_cast<uint32_t>(uName.length());
+        os.write(reinterpret_cast<const char*>(&uNameLen), sizeof(uNameLen));
+        os.write(uName.c_str(), uNameLen);
+    }
 }
 
-std::unique_ptr<FunctionObject> FunctionObject::deserialize(std::istream& is) {
-    char magic[4];
-    if (!is.read(magic, 4) || std::memcmp(magic, "\x1bLua", 4) != 0) {
-        throw std::runtime_error("Invalid bytecode magic number");
+std::unique_ptr<FunctionObject> FunctionObject::deserialize(std::istream& is, const std::string& parentSource) {
+    if (parentSource.empty()) {
+        char magic[4];
+        readBytes(is, magic, 4);
+        if (std::memcmp(magic, "\x1bLua", 4) != 0) {
+            throw std::runtime_error("bad binary format (not a binary chunk)");
+        }
+
+        uint8_t version = 0;
+        readValue(is, version);
+        if (version != 0x55) throw std::runtime_error("bad binary format (version mismatch)");
+
+        uint8_t format = 0;
+        readValue(is, format);
+        if (format != 0) throw std::runtime_error("bad binary format (format mismatch)");
+
+        char data[6];
+        readBytes(is, data, 6);
+        if (std::memcmp(data, "\x19\x93\r\n\x1a\n", 6) != 0) throw std::runtime_error("bad binary format (corrupted header)");
+
+        uint8_t intSize = 0;
+        readValue(is, intSize);
+        if (intSize != sizeof(int)) throw std::runtime_error("bad binary format (int size mismatch)");
+
+        int32_t luacInt = 0;
+        readValue(is, luacInt);
+        if (luacInt != -0x5678) throw std::runtime_error("bad binary format (int check mismatch)");
+
+        uint8_t insnSize = 0;
+        readValue(is, insnSize);
+        if (insnSize != 4) throw std::runtime_error("bad binary format (instruction size mismatch)");
+
+        uint32_t luacNum = 0;
+        readValue(is, luacNum);
+        if (luacNum != 0x12345678) throw std::runtime_error("bad binary format (instruction check mismatch)");
+
+        uint8_t lintSize = 0;
+        readValue(is, lintSize);
+        if (lintSize != sizeof(int64_t)) throw std::runtime_error("bad binary format (lua_Integer size mismatch)");
+
+        int64_t luacLint = 0;
+        readValue(is, luacLint);
+        if (luacLint != -0x5678) throw std::runtime_error("bad binary format (lua_Integer check mismatch)");
+
+        uint8_t lnumSize = 0;
+        readValue(is, lnumSize);
+        if (lnumSize != sizeof(double)) throw std::runtime_error("bad binary format (lua_Number size mismatch)");
+
+        double luacLnum = 0;
+        readValue(is, luacLnum);
     }
 
-    uint32_t nameLen;
-    if (!is.read(reinterpret_cast<char*>(&nameLen), sizeof(nameLen))) return nullptr;
+    uint32_t nameLen = 0;
+    readValue(is, nameLen);
     std::string name(nameLen, '\0');
-    is.read(&name[0], nameLen);
+    readBytes(is, &name[0], nameLen);
     
-    int arity, upvalueCount;
-    is.read(reinterpret_cast<char*>(&arity), sizeof(arity));
-    is.read(reinterpret_cast<char*>(&upvalueCount), sizeof(upvalueCount));
-    uint8_t varargs;
-    is.read(reinterpret_cast<char*>(&varargs), sizeof(varargs));
+    int arity = 0, upvalueCount = 0;
+    readValue(is, arity);
+    readValue(is, upvalueCount);
+    uint8_t varargs = 0;
+    readValue(is, varargs);
     
-    auto chunk = Chunk::deserialize(is);
+    auto chunk = Chunk::deserialize(is, parentSource);
     auto function = std::make_unique<FunctionObject>(name, arity, std::move(chunk), upvalueCount, varargs != 0);
 
     // Local variable info
-    uint32_t localCount;
-    is.read(reinterpret_cast<char*>(&localCount), sizeof(localCount));
+    uint32_t localCount = 0;
+    readValue(is, localCount);
     for (uint32_t i = 0; i < localCount; i++) {
-        uint32_t lNameLen;
-        is.read(reinterpret_cast<char*>(&lNameLen), sizeof(lNameLen));
+        uint32_t lNameLen = 0;
+        readValue(is, lNameLen);
         std::string lName(lNameLen, '\0');
-        is.read(&lName[0], lNameLen);
-        size_t startPC, endPC;
-        int slot;
-        is.read(reinterpret_cast<char*>(&startPC), sizeof(startPC));
-        is.read(reinterpret_cast<char*>(&endPC), sizeof(endPC));
-        is.read(reinterpret_cast<char*>(&slot), sizeof(slot));
+        readBytes(is, &lName[0], lNameLen);
+        size_t startPC = 0, endPC = 0;
+        int slot = 0;
+        readValue(is, startPC);
+        readValue(is, endPC);
+        readValue(is, slot);
         function->addLocalVar(lName, startPC, endPC, slot);
+    }
+
+    // Upvalue names
+    uint32_t uvNameCount = 0;
+    readValue(is, uvNameCount);
+    for (uint32_t i = 0; i < uvNameCount; i++) {
+        uint32_t uNameLen = 0;
+        readValue(is, uNameLen);
+        std::string uName(uNameLen, '\0');
+        readBytes(is, &uName[0], uNameLen);
+        function->addUpvalueName(uName);
     }
 
     return function;

@@ -78,6 +78,22 @@ JITFunc JITCompiler::compile(FunctionObject* function) {
     a.ldr(stack_reg, a64::ptr(co_reg, offsetStack)); // co->stack.data()
     a.ldr(top_reg, a64::ptr(co_reg, offsetStack + 8)); // co->stack.top()
     
+    // Ensure stack has enough headroom (at least 2048 slots = 16384 bytes)
+    Label stack_ok = a.new_label();
+    a.ldr(scratch, a64::ptr(co_reg, offsetStack + 16)); // co->stack.__end_cap_
+    a.sub(scratch, scratch, top_reg);
+    a.mov(scratch2, 2048 * 8);
+    a.cmp(scratch, scratch2);
+    a.b_hs(stack_ok);
+    a.str(top_reg, a64::ptr(co_reg, offsetStack + 8));
+    a.mov(a64::x0, vm_reg);
+    a.mov(a64::x1, 2048);
+    a.mov(scratch, (uint64_t)VM::jitEnsureStack);
+    a.blr(scratch);
+    a.ldr(stack_reg, a64::ptr(co_reg, offsetStack));
+    a.ldr(top_reg, a64::ptr(co_reg, offsetStack + 8));
+    a.bind(stack_ok);
+
     // Load frame count (size in bytes)
     a.ldr(scratch, a64::ptr(co_reg, offsetFrames + 8)); // __end_ of frames
     a.ldr(scratch2, a64::ptr(co_reg, offsetFrames)); // __begin_ of frames

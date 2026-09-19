@@ -9,17 +9,16 @@ namespace {
 
 bool native_coroutine_create(VM* vm, int argCount) {
     if (argCount != 1) {
-        vm->runtimeError("coroutine.create expects 1 argument");
+        vm->runtimeError("bad argument #1 to 'create' (value expected)");
         return false;
     }
     Value funcVal = vm->pop();
-    if (!funcVal.isClosure()) {
-        vm->runtimeError("coroutine.create expects a closure");
+    if (!funcVal.isClosure() && !funcVal.isNativeFunction() && !funcVal.isCFunction()) {
+        vm->runtimeError("bad argument #1 to 'create' (function expected, got " + funcVal.typeToString() + ")");
         return false;
     }
 
-    ClosureObject* closure = funcVal.asClosureObj();
-    CoroutineObject* co = vm->createCoroutine(closure);
+    CoroutineObject* co = vm->createCoroutine(funcVal);
     vm->push(Value::thread(co));
     vm->currentCoroutine()->lastResultCount = 1;
     return true;
@@ -47,6 +46,13 @@ bool native_coroutine_resume(VM* vm, int argCount) {
     if (co->status == CoroutineObject::Status::DEAD) {
         vm->push(Value::boolean(false));
         StringObject* errStr = vm->internString("cannot resume dead coroutine");
+        vm->push(Value::runtimeString(errStr));
+        vm->currentCoroutine()->lastResultCount = 2;
+        return true;
+    }
+    if (co->status != CoroutineObject::Status::SUSPENDED) {
+        vm->push(Value::boolean(false));
+        StringObject* errStr = vm->internString("cannot resume non-suspended coroutine");
         vm->push(Value::runtimeString(errStr));
         vm->currentCoroutine()->lastResultCount = 2;
         return true;
@@ -90,12 +96,15 @@ bool native_coroutine_resume(VM* vm, int argCount) {
             size_t expected = static_cast<size_t>(expectedRetCount - 1);
             if (pushedCount > expected) {
                 co->stack.resize(co->stack.size() - (pushedCount - expected));
+                pushedCount = expected;
             } else if (pushedCount < expected) {
                 for (size_t i = 0; i < expected - pushedCount; i++) {
                     co->stack.push_back(Value::nil());
                 }
+                pushedCount = expected;
             }
         }
+        co->lastResultCount = pushedCount;
     }
 
     // Switch coroutines
@@ -110,7 +119,9 @@ bool native_coroutine_resume(VM* vm, int argCount) {
 
     if (!success) {
         vm->push(Value::boolean(false));
-        vm->push(Value::runtimeString(vm->internString("error in coroutine")));
+        Value errObj = !vm->lastErrorObject().isNil() ? vm->lastErrorObject() : Value::runtimeString(vm->internString(vm->lastErrorMessage()));
+        vm->push(errObj);
+        vm->setLastErrorObject(Value::nil());
         vm->currentCoroutine()->lastResultCount = 2;
         return true;
     }
@@ -164,8 +175,12 @@ bool native_coroutine_running(VM* vm, int argCount) {
 
 bool native_coroutine_yield(VM* vm, int argCount) {
     CoroutineObject* co = vm->currentCoroutine();
-    if (!co->caller) {
+    if (!co->caller || co == vm->mainCoroutine()) {
         vm->runtimeError("attempt to yield from outside a coroutine");
+        return false;
+    }
+    if (co->nonYieldableCount > 0 || co->isClosing) {
+        vm->runtimeError("attempt to yield across a C-call boundary");
         return false;
     }
 
@@ -190,8 +205,8 @@ bool native_coroutine_wrap(VM* vm, int argCount) {
     }
     
     Value func = vm->pop();
-    if (!func.isClosure() && !func.isNativeFunction()) {
-        vm->runtimeError("coroutine.wrap expects a function");
+    if (!func.isClosure() && !func.isNativeFunction() && !func.isCFunction()) {
+        vm->runtimeError("bad argument #1 to 'wrap' (function expected, got " + func.typeToString() + ")");
         return false;
     }
     
@@ -204,9 +219,9 @@ bool native_coroutine_wrap(VM* vm, int argCount) {
     std::string wrapScript = 
         "local co = ...\n"
         "return function(...)\n"
-        "    local res = {coroutine.resume(co, ...)}\n"
-        "    if not res[1] then error(res[2]) end\n"
-        "    return table.unpack(res, 2)\n"
+        "    local res = table.pack(coroutine.resume(co, ...))\n"
+        "    if not res[1] then error(res[2], 0) end\n"
+        "    return table.unpack(res, 2, res.n)\n"
         "end\n";
         
     FunctionObject* wrapperFunc = vm->compileSource(wrapScript, "coroutine.wrap");
@@ -234,18 +249,97 @@ bool native_coroutine_wrap(VM* vm, int argCount) {
 }
 
 bool native_coroutine_close(VM* vm, int argCount) {
-    if (argCount != 1) {
-        vm->runtimeError("coroutine.close expects 1 argument");
-        return false;
+    CoroutineObject* co = nullptr;
+    if (argCount == 0) {
+        co = vm->currentCoroutine();
+    } else {
+        Value coVal = vm->peek(argCount - 1);
+        if (!coVal.isThread()) {
+            vm->runtimeError("bad argument #1 to 'close' (thread expected, got " + coVal.typeToString() + ")");
+            return false;
+        }
+        co = coVal.asThreadObj();
     }
-    Value coVal = vm->pop();
-    if (!coVal.isThread()) {
-        vm->runtimeError("coroutine.close expects a thread");
+    for (int i = 0; i < argCount; i++) vm->pop();
+
+    if (co->isClosing) {
+        vm->push(Value::boolean(true));
+        vm->currentCoroutine()->lastResultCount = 1;
+        return true;
+    }
+
+    if (co->status == CoroutineObject::Status::NORMAL) {
+        vm->runtimeError("cannot close a normal coroutine");
         return false;
     }
 
-    CoroutineObject* co = coVal.asThreadObj();
-    vm->closeCoroutine(co);
+    if (co->status == CoroutineObject::Status::RUNNING) {
+        if (co == vm->mainCoroutine()) {
+            vm->runtimeError("cannot close main thread");
+            return false;
+        }
+        // Coroutine closing itself
+        co->isClosing = true;
+        co->nonYieldableCount++;
+        Value closeErr = Value::nil();
+        try {
+            vm->closeUpvalues(0, co);
+            if (!co->closeError.isNil()) {
+                closeErr = co->closeError;
+                co->closeError = Value::nil();
+            }
+        } catch (const RuntimeError& e) {
+            closeErr = !vm->lastErrorObject().isNil() ? vm->lastErrorObject() : Value::runtimeString(vm->internString(e.what()));
+            vm->setLastErrorObject(Value::nil());
+        } catch (const std::exception& e) {
+            closeErr = Value::runtimeString(vm->internString(e.what()));
+        }
+        co->nonYieldableCount--;
+        co->isClosing = false;
+        co->status = CoroutineObject::Status::DEAD;
+        throw CoroutineCloseSelfException{closeErr};
+    }
+
+    if (co->status == CoroutineObject::Status::DEAD) {
+        if (!co->closeError.isNil()) {
+            Value err = co->closeError;
+            co->closeError = Value::nil();
+            vm->push(Value::boolean(false));
+            vm->push(err);
+            vm->currentCoroutine()->lastResultCount = 2;
+            return true;
+        }
+        vm->push(Value::boolean(true));
+        vm->currentCoroutine()->lastResultCount = 1;
+        return true;
+    }
+
+    // co is SUSPENDED:
+    co->isClosing = true;
+    co->nonYieldableCount++;
+    Value closeErr = Value::nil();
+    try {
+        vm->closeCoroutine(co);
+        if (!co->closeError.isNil()) {
+            closeErr = co->closeError;
+            co->closeError = Value::nil();
+        }
+    } catch (const RuntimeError& e) {
+        closeErr = !vm->lastErrorObject().isNil() ? vm->lastErrorObject() : Value::runtimeString(vm->internString(e.what()));
+        vm->setLastErrorObject(Value::nil());
+    } catch (const std::exception& e) {
+        closeErr = Value::runtimeString(vm->internString(e.what()));
+    }
+    co->nonYieldableCount--;
+    co->isClosing = false;
+    co->status = CoroutineObject::Status::DEAD;
+
+    if (!closeErr.isNil()) {
+        vm->push(Value::boolean(false));
+        vm->push(closeErr);
+        vm->currentCoroutine()->lastResultCount = 2;
+        return true;
+    }
 
     vm->push(Value::boolean(true));
     vm->currentCoroutine()->lastResultCount = 1;
@@ -261,8 +355,7 @@ bool native_coroutine_isyieldable(VM* vm, int argCount) {
         }
     }
     
-    // In our VM, all coroutines are yieldable since we don't have C call boundaries that prevent it yet
-    bool yieldable = (co != vm->mainCoroutine());
+    bool yieldable = (co != vm->mainCoroutine() && co->nonYieldableCount == 0 && !co->isClosing);
     
     for (int i = 0; i < argCount; i++) vm->pop();
     vm->push(Value::boolean(yieldable));
