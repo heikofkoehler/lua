@@ -7,7 +7,8 @@ assert(string.packsize("bj") == 9) -- 1 + 8
 assert(string.packsize("bi") == 5) -- 1 + 4
 
 -- 2. Explicit alignment !4
-assert(string.packsize("!4bb") == 4) -- 1+1 + 2(tail padding)
+assert(string.packsize("!4bb") == 2) -- 1+1 (no tail padding without Xi4)
+assert(string.packsize("!4bbXi4") == 4) -- 1+1 + 2 (tail padding with Xi4)
 assert(string.packsize("!4bj") == 12) -- 1 + 3 (padding) + 8
 assert(string.packsize("!4bi") == 8)  -- 1 + 3 (padding) + 4
 

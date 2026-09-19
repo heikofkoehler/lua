@@ -784,6 +784,32 @@ void CodeGenerator::visitMultipleAssignmentStmt(MultipleAssignmentStmtNode* node
         }
     }
 
+    struct IndexTargetInfo {
+        int tableSlot = -1;
+        int keySlot = -1;
+    };
+    std::vector<IndexTargetInfo> indexInfo(varCount);
+    size_t tempLocalsCount = 0;
+
+    // Pre-evaluate table and key expressions for all IndexExprNode targets (left to right)
+    for (size_t i = 0; i < varCount; i++) {
+        if (auto* indexExpr = dynamic_cast<IndexExprNode*>(targets[i].get())) {
+            uint8_t oldRet = expectedRetCount_;
+            expectedRetCount_ = 2; // ONE
+            indexExpr->table()->accept(*this);
+            addLocal("(temp table)");
+            indexInfo[i].tableSlot = locals_.back().slot;
+            tempLocalsCount++;
+
+            expectedRetCount_ = 2; // ONE
+            indexExpr->key()->accept(*this);
+            addLocal("(temp key)");
+            indexInfo[i].keySlot = locals_.back().slot;
+            tempLocalsCount++;
+            expectedRetCount_ = oldRet;
+        }
+    }
+
     uint8_t oldRetCount = expectedRetCount_;
 
     // 1. Evaluate all values except the last one
@@ -891,13 +917,13 @@ void CodeGenerator::visitMultipleAssignmentStmt(MultipleAssignmentStmtNode* node
 
             size_t nameIndex = currentChunk()->addConstant(Value::string(internString(name)));
             emitSetTabUp(static_cast<uint8_t>(envUpvalue), nameIndex);
-        } else if (auto* indexExpr = dynamic_cast<IndexExprNode*>(target)) {
-            // Stack: [..., value]
-            // Evaluate table and key
-            indexExpr->table()->accept(*this);
-            // Stack: [..., value, table]
-            indexExpr->key()->accept(*this);
-            // Stack: [..., value, table, key]
+        } else if (dynamic_cast<IndexExprNode*>(target)) {
+            int tSlot = indexInfo[i].tableSlot;
+            int kSlot = indexInfo[i].keySlot;
+            emitOpCode(OpCode::OP_GET_LOCAL);
+            emitByte(static_cast<uint8_t>(tSlot));
+            emitOpCode(OpCode::OP_GET_LOCAL);
+            emitByte(static_cast<uint8_t>(kSlot));
 
             // We need [..., table, key, value] for OP_SET_TABLE
             // Rotate top 3: [value, table, key] -> [table, key, value]
@@ -906,6 +932,14 @@ void CodeGenerator::visitMultipleAssignmentStmt(MultipleAssignmentStmtNode* node
 
             emitOpCode(OpCode::OP_SET_TABLE);
         }
+    }
+
+    // 5. Pop temporary table/key locals in reverse order of addition
+    for (size_t k = 0; k < tempLocalsCount; k++) {
+        emitOpCode(OpCode::OP_POP);
+        locals_.pop_back();
+        activeVars_.pop_back();
+        localCount_--;
     }
 }
 void CodeGenerator::visitGlobalDeclStmt(GlobalDeclStmtNode* node) {
@@ -1518,100 +1552,69 @@ void CodeGenerator::visitRepeatStmt(RepeatStmtNode* node) {
 void CodeGenerator::visitForStmt(ForStmtNode* node) {
     setLine(node->line());
 
-    // Begin scope for loop variables (loop var + hidden limit/step locals)
+    // Begin scope for loop variables:
+    // slot base:     (for state) - current loop value
+    // slot base + 1: (for limit) - limit value
+    // slot base + 2: (for step)  - step value
+    // slot base + 3: user variable (node->varName()) - initialized to nil, const
     beginScope();
 
-    // Evaluate start expression and create loop variable
     uint8_t oldRetCount = expectedRetCount_;
-    expectedRetCount_ = 2;
-    node->start()->accept(*this);
-    addLocal(node->varName(), true);
 
-    // Evaluate end expression and store in hidden local
+    // 1. Evaluate start expression
+    expectedRetCount_ = 2; // 1 result
+    node->start()->accept(*this);
+    int base = localCount_;
+    addLocal("(for state)", true);
+
+    // 2. Evaluate limit expression
     expectedRetCount_ = 2;
     node->end()->accept(*this);
     addLocal("(for limit)", true);
 
-    // Evaluate step expression (or default to 1) and store in hidden local
+    // 3. Evaluate step expression (or default to 1)
     if (node->step()) {
         expectedRetCount_ = 2;
         node->step()->accept(*this);
     } else {
         emitConstant(Value::integer(1));
     }
-    expectedRetCount_ = oldRetCount;
     addLocal("(for step)", true);
+
+    expectedRetCount_ = oldRetCount;
+
+    // 4. User loop variable
+    emitOpCode(OpCode::OP_NIL);
+    addLocal(node->varName(), true);
+
+    // Emit OP_FORPREP [base: uint8_t] [offset: uint16_t]
+    emitOpCode(OpCode::OP_FORPREP);
+    emitByte(static_cast<uint8_t>(base));
+    emitByte(0xff);
+    emitByte(0xff);
+    size_t prepJump = currentChunk()->size() - 2;
 
     beginLoop();  // Start loop context for break statements
 
     size_t loopStart = currentChunk()->size();
 
-    int varSlot = resolveLocal(node->varName());
-    int endSlot = resolveLocal("(for limit)");
-    int stepSlot = resolveLocal("(for step)");
-
-    // Check step >= 0
-    emitOpCode(OpCode::OP_GET_LOCAL);
-    emitByte(static_cast<uint8_t>(stepSlot));
-    emitConstant(Value::number(0.0));
-    emitOpCode(OpCode::OP_GREATER_EQUAL);
-
-    // If step >= 0 (true), jump to positive comparison
-    // If step < 0 (false), fall through to negative comparison
-    size_t positiveJump = emitJump(OpCode::OP_JUMP_IF_FALSE);
-    
-    // Positive step path: check var <= end
-    emitOpCode(OpCode::OP_POP);  // Pop step >= 0 result (true)
-    emitOpCode(OpCode::OP_GET_LOCAL);
-    emitByte(static_cast<uint8_t>(varSlot));
-    emitOpCode(OpCode::OP_GET_LOCAL);
-    emitByte(static_cast<uint8_t>(endSlot));
-    emitOpCode(OpCode::OP_LESS_EQUAL);
-    size_t skipNegative = emitJump(OpCode::OP_JUMP);
-
-    // Negative step path: check var >= end
-    patchJump(positiveJump);
-    emitOpCode(OpCode::OP_POP);  // Pop step >= 0 result (false)
-    emitOpCode(OpCode::OP_GET_LOCAL);
-    emitByte(static_cast<uint8_t>(varSlot));
-    emitOpCode(OpCode::OP_GET_LOCAL);
-    emitByte(static_cast<uint8_t>(endSlot));
-    emitOpCode(OpCode::OP_GREATER_EQUAL);
-
-    // Both paths converge here with condition result on stack
-    patchJump(skipNegative);
-
-    // Exit loop if condition is false
-    size_t exitJump = emitJump(OpCode::OP_JUMP_IF_FALSE);
-    emitOpCode(OpCode::OP_POP);  // Pop condition (true case)
-
     // Compile body
     beginScope();
     compileBlock(node->body(), true);
 
-    // Increment loop variable: var = var + step
-    // Get var
-    emitOpCode(OpCode::OP_GET_LOCAL);
-    emitByte(static_cast<uint8_t>(varSlot));
+    // Emit OP_FORLOOP [base: uint8_t] [offset: uint16_t]
+    emitOpCode(OpCode::OP_FORLOOP);
+    emitByte(static_cast<uint8_t>(base));
+    size_t loopEnd = currentChunk()->size() + 2;
+    size_t backwardJump = loopEnd - loopStart;
+    if (backwardJump > 0xFFFF) {
+        throw CompileError("Loop body too large", node->line());
+    }
+    emitByte(static_cast<uint8_t>(backwardJump & 0xff));
+    emitByte(static_cast<uint8_t>((backwardJump >> 8) & 0xff));
 
-    // Get step
-    emitOpCode(OpCode::OP_GET_LOCAL);
-    emitByte(static_cast<uint8_t>(stepSlot));
-
-    // Add
-    emitOpCode(OpCode::OP_ADD);
-
-    // Store back to var
-    emitOpCode(OpCode::OP_SET_LOCAL);
-    emitByte(static_cast<uint8_t>(varSlot));
-    emitOpCode(OpCode::OP_POP);  // Pop result of assignment
-
-    // Loop back
-    emitLoop(loopStart);
-
-    // Exit point
-    patchJump(exitJump);
-    emitOpCode(OpCode::OP_POP);  // Pop condition (false)
+    // Exit point: patch prep jump to land right after OP_FORLOOP
+    patchJump(prepJump);
 
     endLoop();  // End loop context and patch all break jumps
 
@@ -1686,7 +1689,7 @@ void CodeGenerator::visitForInStmt(ForInStmtNode* node) {
     const auto& varNames = node->varNames();
     for (const auto& name : varNames) {
         emitOpCode(OpCode::OP_NIL);
-        addLocal(name);
+        addLocal(name, true);
     }
     
     beginLoop();  // Start loop context for break statements

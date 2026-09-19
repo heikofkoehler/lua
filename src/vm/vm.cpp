@@ -244,8 +244,8 @@ StringObject* VM::getString(size_t index) {
     return strings_[index];
 }
 
-TableObject* VM::createTable() {
-    return allocateObject<TableObject>();
+TableObject* VM::createTable(size_t nseq, size_t nrec) {
+    return allocateObject<TableObject>(nseq, nrec);
 }
 
 UserdataObject* VM::createUserdata(void* data) {
@@ -1222,40 +1222,105 @@ void VM::runtimeError(const Value& errorObj, int level) {
             }
         }
 
-        if (!handler.isNil()) {
-            currentCoroutine_->frames[handlerFrameIndex].errorHandler = Value::nil();
-            bool prevHadError = hadError_;
-            hadError_ = false;
-            bool prevRunning = isRunningErrorHandler_;
-            isRunningErrorHandler_ = true;
-            push(handler);
-            push(lastErrorObject_);
-            size_t prevFrames = currentCoroutine_->frames.size();
-            bool handlerSuccess = false;
-            try {
-                if (callValue(1, 2)) {
-                    if (currentCoroutine_->frames.size() > prevFrames) {
-                        handlerSuccess = run(prevFrames);
-                    } else {
-                        handlerSuccess = true;
+        if (handlerFrameIndex != -1) {
+            if (!handler.isNil()) {
+                currentCoroutine_->frames[handlerFrameIndex].errorHandler = Value::nil();
+                bool prevHadError = hadError_;
+                hadError_ = false;
+                bool prevRunning = isRunningErrorHandler_;
+                isRunningErrorHandler_ = true;
+                push(handler);
+                push(lastErrorObject_);
+                size_t prevFrames = currentCoroutine_->frames.size();
+                bool handlerSuccess = false;
+                try {
+                    if (callValue(1, 2)) {
+                        if (currentCoroutine_->frames.size() > prevFrames) {
+                            handlerSuccess = run(prevFrames);
+                        } else {
+                            handlerSuccess = true;
+                        }
+                        if (handlerSuccess) {
+                            lastErrorObject_ = pop();
+                            lastErrorMessage_ = lastErrorObject_.isString() ? getStringValue(lastErrorObject_) : lastErrorObject_.toString();
+                        }
                     }
-                    if (handlerSuccess) {
-                        lastErrorObject_ = pop();
-                        lastErrorMessage_ = lastErrorObject_.isString() ? getStringValue(lastErrorObject_) : lastErrorObject_.toString();
+                } catch (...) {
+                    handlerSuccess = false;
+                }
+                isRunningErrorHandler_ = prevRunning;
+                if (!handlerSuccess) {
+                    while (currentCoroutine_->frames.size() > prevFrames) {
+                        currentCoroutine_->frames.pop_back();
                     }
+                    lastErrorMessage_ = "error in error handling";
+                    lastErrorObject_ = Value::runtimeString(internString(lastErrorMessage_));
                 }
-            } catch (...) {
-                handlerSuccess = false;
+                hadError_ = prevHadError;
             }
-            isRunningErrorHandler_ = prevRunning;
-            if (!handlerSuccess) {
-                while (currentCoroutine_->frames.size() > prevFrames) {
-                    currentCoroutine_->frames.pop_back();
+        } else if (currentCoroutine_ == mainCoroutine_) {
+            // Uncaught / top-level error object in main coroutine (standalone CLI script):
+            // Convert via __tostring or standard Lua error object message
+            if (errorObj.isNumber()) {
+                lastErrorMessage_ = errorObj.toString();
+                lastErrorObject_ = errorObj;
+            } else {
+                Value tostringMeta = getMetamethod(errorObj, "__tostring");
+                if (!tostringMeta.isNil()) {
+                    bool prevHadError = hadError_;
+                    hadError_ = false;
+                    bool prevRunning = isRunningErrorHandler_;
+                    isRunningErrorHandler_ = true;
+
+                    // Push a dummy frame so call stack depth matches standard Lua msghandler:
+                    // Level 0: debug.getinfo
+                    // Level 1: __tostring
+                    // Level 2: msghandler (dummy C frame)
+                    // Level 3: error (C function)
+                    // Level 4: main chunk
+                    CallFrame msgHandlerFrame;
+                    msgHandlerFrame.isC = true;
+                    msgHandlerFrame.stackBase = currentCoroutine_->stack.size();
+                    currentCoroutine_->frames.push_back(msgHandlerFrame);
+
+                    push(tostringMeta);
+                    push(errorObj);
+                    size_t prevFrames = currentCoroutine_->frames.size();
+                    bool handlerSuccess = false;
+                    try {
+                        if (callValue(1, 2)) {
+                            if (currentCoroutine_->frames.size() > prevFrames) {
+                                handlerSuccess = run(prevFrames);
+                            } else {
+                                handlerSuccess = true;
+                            }
+                            if (handlerSuccess) {
+                                lastErrorObject_ = pop();
+                                lastErrorMessage_ = lastErrorObject_.isString() ? getStringValue(lastErrorObject_) : lastErrorObject_.toString();
+                            }
+                        }
+                    } catch (...) {
+                        handlerSuccess = false;
+                    }
+                    while (currentCoroutine_->frames.size() > prevFrames - 1) {
+                        currentCoroutine_->frames.pop_back();
+                    }
+                    isRunningErrorHandler_ = prevRunning;
+                    if (!handlerSuccess) {
+                        lastErrorMessage_ = "error in error handling";
+                        lastErrorObject_ = Value::runtimeString(internString(lastErrorMessage_));
+                    }
+                    hadError_ = prevHadError;
+                } else {
+                    lastErrorMessage_ = "(error object is a " + errorObj.typeToString() + " value)";
+                    lastErrorObject_ = Value::runtimeString(internString(lastErrorMessage_));
                 }
-                lastErrorMessage_ = "error in error handling";
-                lastErrorObject_ = Value::runtimeString(internString(lastErrorMessage_));
             }
-            hadError_ = prevHadError;
+        } else {
+            // Uncaught in sub-coroutine: preserve raw errorObj for coroutine.resume/wrap
+            if (errorObj.isNumber()) {
+                lastErrorMessage_ = errorObj.toString();
+            }
         }
         if (isJitExecuting_) return;
         throw RuntimeError(lastErrorMessage_);

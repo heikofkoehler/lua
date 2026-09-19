@@ -277,6 +277,22 @@ size_t Chunk::disassembleInstruction(size_t offset) const {
             return jumpInstruction("OP_JUMP_IF_FALSE", 1, offset);
         case OpCode::OP_LOOP:
             return jumpInstruction("OP_LOOP", -1, offset);
+        case OpCode::OP_FORPREP: {
+            uint8_t base = code_[offset + 1];
+            uint16_t jmp = code_[offset + 2] | (code_[offset + 3] << 8);
+            std::cout << std::left << std::setw(16) << "OP_FORPREP" << " "
+                      << std::right << std::setfill(' ') << std::setw(4) << static_cast<int>(base)
+                      << " -> " << (offset + 4 + jmp) << std::endl;
+            return offset + 4;
+        }
+        case OpCode::OP_FORLOOP: {
+            uint8_t base = code_[offset + 1];
+            uint16_t jmp = code_[offset + 2] | (code_[offset + 3] << 8);
+            std::cout << std::left << std::setw(16) << "OP_FORLOOP" << " "
+                      << std::right << std::setfill(' ') << std::setw(4) << static_cast<int>(base)
+                      << " -> " << (offset + 4 - jmp) << std::endl;
+            return offset + 4;
+        }
 
         case OpCode::OP_CLOSURE: {
             uint8_t constant = code_[offset + 1];
@@ -421,6 +437,9 @@ size_t Chunk::instructionLength(size_t offset) const {
         case OpCode::OP_YIELD:
         case OpCode::OP_YIELD_MULTI:
             return 3;
+        case OpCode::OP_FORPREP:
+        case OpCode::OP_FORLOOP:
+            return 4;
         case OpCode::OP_GET_TABUP_LONG:
         case OpCode::OP_SET_TABUP_LONG:
         case OpCode::OP_DEF_GLOBAL_LONG:

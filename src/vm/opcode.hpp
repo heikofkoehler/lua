@@ -102,6 +102,9 @@ enum class OpCode : uint8_t {
     OP_YIELD,       // Yield from coroutine [args: uint8_t, returns: uint8_t]
     OP_YIELD_MULTI, // Yield with multires from coroutine [fixed_args: uint8_t, returns: uint8_t]
 
+    OP_FORPREP,     // Prepare numeric for loop [base: uint8_t, offset: uint16_t]
+    OP_FORLOOP,     // Iterate numeric for loop [base: uint8_t, offset: uint16_t]
+
     OP_RETURN,      // Return from current chunk
 };
 
@@ -181,6 +184,8 @@ inline const char* opcodeName(OpCode op) {
         case OpCode::OP_DEF_GLOBAL_TABLE:  return "OP_DEF_GLOBAL_TABLE";
         case OpCode::OP_YIELD:         return "OP_YIELD";
         case OpCode::OP_YIELD_MULTI:   return "OP_YIELD_MULTI";
+        case OpCode::OP_FORPREP:       return "OP_FORPREP";
+        case OpCode::OP_FORLOOP:       return "OP_FORLOOP";
         case OpCode::OP_RETURN:        return "OP_RETURN";
         default:                     return "UNKNOWN";
     }

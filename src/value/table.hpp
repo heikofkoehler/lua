@@ -27,7 +27,12 @@ struct ValueEqual {
 // Table object: Lua's associative array (hash map)
 class TableObject : public GCObject {
 public:
-    TableObject() : GCObject(GCObject::Type::TABLE) {}
+    TableObject(size_t nseq = 0, size_t nrec = 0)
+        : GCObject(GCObject::Type::TABLE), capacity_(nseq + nrec) {
+        if (capacity_ > 0) {
+            map_.reserve(capacity_);
+        }
+    }
     ~TableObject() = default;
 
     // Table operations
@@ -52,7 +57,8 @@ public:
         if (key.isNil() || (key.isFloat() && std::isnan(key.asNumber()))) {
             return false;
         }
-        return map_.find(key) != map_.end();
+        auto it = map_.find(key);
+        return it != map_.end() && !it->second.isNil();
     }
 
     size_t length() const {
@@ -70,7 +76,11 @@ public:
     // Iteration support
     // Returns pair<key, value>. If key is nil, returns first pair.
     // If next pair doesn't exist (end of iteration), returns pair<nil, nil>.
-    std::pair<Value, Value> next(const Value& key) const;
+    std::pair<Value, Value> next(const Value& key, bool& keyFound) const;
+    std::pair<Value, Value> next(const Value& key) const {
+        bool dummy;
+        return next(key, dummy);
+    }
 
     // For iteration (if needed later)
     const std::unordered_map<Value, Value, ValueHash, ValueEqual>& data() const {
@@ -86,12 +96,16 @@ public:
 
     size_t size() const override {
         // Approximate size: object + entries * (key + value + node overhead)
-        return sizeof(TableObject) + map_.size() * (sizeof(Value) * 2 + 16);
+        size_t cap = std::max(map_.size(), capacity_);
+        return sizeof(TableObject) + cap * (sizeof(Value) * 2 + 16);
     }
+
+    size_t capacity() const { return capacity_; }
 
 private:
     std::unordered_map<Value, Value, ValueHash, ValueEqual> map_;
     Value metatable_ = Value::nil();
+    size_t capacity_ = 0;
 
     Value getByString(const Value& key) const;
 };

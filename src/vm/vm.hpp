@@ -78,7 +78,7 @@ public:
     StringObject* getString(size_t index);
 
     // Table operations
-    TableObject* createTable();
+    TableObject* createTable(size_t nseq = 0, size_t nrec = 0);
 
     // Userdata operations
     class UserdataObject* createUserdata(void* data);

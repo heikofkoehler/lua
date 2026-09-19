@@ -7,6 +7,8 @@
 #include <cstring>
 #include <algorithm>
 #include <cmath>
+#include <cstdarg>
+#include "api/lauxlib.h"
 
 // State manipulation
 lua_State *lua_newstate(void) {
@@ -397,3 +399,83 @@ int lua_pcall(lua_State *L, int nargs, int nresults, int errfunc) {
 void luaL_openlibs(lua_State *L) {
     L->vm->initStandardLibrary();
 }
+
+const char *lua_pushfstring(lua_State *L, const char *fmt, ...) {
+    char buf[1024];
+    va_list argp;
+    va_start(argp, fmt);
+    vsnprintf(buf, sizeof(buf), fmt, argp);
+    va_end(argp);
+    lua_pushstring(L, buf);
+    return lua_tostring(L, -1);
+}
+
+void luaL_setfuncs(lua_State *L, const struct luaL_Reg *l, int nup) {
+    (void)nup;
+    for (; l->name != NULL; l++) {
+        lua_pushcfunction(L, l->func);
+        lua_setfield(L, -2, l->name);
+    }
+}
+
+static void *std_alloc(void *ud, void *ptr, size_t osize, size_t nsize) {
+    (void)ud; (void)osize;
+    if (nsize == 0) {
+        std::free(ptr);
+        return nullptr;
+    }
+    return std::realloc(ptr, nsize);
+}
+
+lua_Alloc lua_getallocf(lua_State *L, void **ud) {
+    (void)L;
+    if (ud) *ud = nullptr;
+    return std_alloc;
+}
+
+const char *lua_pushlstring(lua_State *L, const char *s, size_t len) {
+    std::string str(s, len);
+    L->vm->push(Value::runtimeString(L->vm->internString(str)));
+    return lua_tostring(L, -1);
+}
+
+const char *lua_pushexternalstring(lua_State *L, const char *s, size_t len, lua_Free falloc, void *ud) {
+    (void)falloc; (void)ud;
+    return lua_pushlstring(L, s, len);
+}
+
+int lua_error(lua_State *L) {
+    std::string msg = "error";
+    if (lua_gettop(L) > 0) {
+        msg = lua_tostring(L, -1);
+    }
+    L->vm->runtimeError(msg);
+    return 0;
+}
+
+const char *luaL_checklstring(lua_State *L, int arg, size_t *l) {
+    const char *s = lua_tostring(L, arg);
+    if (!s) {
+        L->vm->runtimeError("bad argument to C function (string expected)");
+        if (l) *l = 0;
+        return "";
+    }
+    if (l) *l = std::strlen(s);
+    return s;
+}
+
+static int g_ref_counter = 100;
+int luaL_ref(lua_State *L, int t) {
+    (void)t;
+    if (lua_isnil(L, -1)) {
+        lua_pop(L, 1);
+        return -1; // LUA_REFNIL
+    }
+    lua_pop(L, 1);
+    return ++g_ref_counter;
+}
+
+void luaL_unref(lua_State *L, int t, int ref) {
+    (void)L; (void)t; (void)ref;
+}
+

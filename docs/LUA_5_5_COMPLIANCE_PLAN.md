@@ -264,23 +264,25 @@ Each test file in `lua-5.5.0-tests/` was systematically evaluated against `./bui
 - *Milestone Check:* `api.lua`, `errors.lua`, `pm.lua`, and `verybig.lua` compile and execute without constant overflow (`api.lua` Clean PASS, `verybig.lua` Clean PASS in ~2s). Phase 1 milestone tests (`main.lua`, `bitwise.lua`, `events.lua`, `literals.lua`) and all 207 internal test suite tests pass 100%.
 
 ### Phase 3: Parser & Language Extensions for Lua 5.5
-- [ ] Implement Named Varargs (`...name`):
+- [x] Implement Named Varargs (`...name`):
   - Extend AST in `src/compiler/ast.hpp`.
   - Update `Parser::functionBody()` in `src/compiler/parser.cpp`.
   - In `CodeGenerator`, emit bytecode prologue initializing local vararg table with count field `n`.
-- [ ] Implement Full `global` Syntax:
+- [x] Implement Full `global` Syntax:
   - Support `global *`, `global none`, `global <const> *`.
   - Support initialized globals: `global var1 = expr1, var2 = expr2`.
   - Support global function declarations: `global function name(...) ... end`.
-- *Milestone Check:* `vararg.lua`, `locals.lua`, `strings.lua`, `calls.lua`, `goto.lua`, `coroutine.lua`, `math.lua`, `files.lua` pass.
+- *Milestone Check:* `vararg.lua`, `locals.lua`, `strings.lua`, `calls.lua`, `goto.lua`, `coroutine.lua`, `math.lua`, `files.lua` pass (100% Clean PASS).
 
 ### Phase 4: Standard Library Conformance
-- [ ] Add `table.create(nseq, nrec)` to `src/vm/stdlib_table.cpp`.
-- [ ] Update `utf8.offset` and `utf8.len` in `src/vm/stdlib_utf8.cpp` to return dual indices and validate Unicode `0x10FFFF` limit.
-- [ ] Fix `string.packsize` in `src/vm/stdlib_string.cpp` to use native `sizeof(int)` and `sizeof(long)`.
-- [ ] Fix `collectgarbage("param")` in `src/vm/stdlib_base.cpp` to return the previous value.
-- [ ] Fix `package.searchpath` in `src/vm/stdlib_base.cpp` to replace all `'?'` characters in search templates.
-- *Milestone Check:* `sort.lua`, `nextvar.lua`, `utf8.lua`, `tpack.lua`, `attrib.lua` pass.
+- [x] Add `table.create(nseq, nrec)` to `src/vm/stdlib_table.cpp` and support preallocated hash/array capacities in `TableObject`.
+- [x] Update `utf8.offset`, `utf8.len`, `utf8.codes`, and `utf8.codepoint` in `src/vm/stdlib_utf8.cpp` to return dual indices, support lax mode, and validate Unicode `0x10FFFF` limit.
+- [x] Implement full `string.pack`, `string.unpack`, and `string.packsize` in `src/vm/stdlib_string.cpp` supporting native `sizeof(int)` and `sizeof(long)`, 1..16 byte integer widths, power-of-two alignment (`!n`), alignment items (`Xop`), strings (`s[n]`, `z`, `c[n]`), and floating point (`f`, `d`, `n`).
+- [x] Fix `collectgarbage("param")` in `src/vm/stdlib_base.cpp` to return the previous value.
+- [x] Fix `package.searchpath` in `src/vm/stdlib_base.cpp` to replace all `'?'` characters in search templates.
+- [x] Implement Lua C API bridge in `src/api/` (`lua.h`, `lauxlib.h`, `luaconf.h`, `lua_api.cpp`) for C dynamic library modules and package loading in `attrib.lua`.
+- [x] Pre-evaluate table and key expressions for indexed targets in `MultipleAssignmentStmtNode` to prevent mutation conflicts during store.
+- *Milestone Check:* `sort.lua`, `nextvar.lua`, `utf8.lua`, `tpack.lua`, `attrib.lua` pass (100% Clean PASS). Phase 1-3 milestone tests (14 suites) and all 207 internal tests continue to pass 100%.
 
 ### Phase 5: Garbage Collector & Memory Hardening
 - [ ] Refactor `blackenObject()` in `src/vm/gc_impl.cpp` to respect weak table keys/values (`__mode`).

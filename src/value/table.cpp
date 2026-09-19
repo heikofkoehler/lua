@@ -8,18 +8,14 @@ void TableObject::set(const Value& key, const Value& value) {
     }
     
     if (value.isNil()) {
-        // Setting to nil removes the key
-        map_.erase(key);
+        auto it = map_.find(key);
+        if (it != map_.end()) {
+            it->second = Value::nil();
+        }
     } else {
         if (VM::currentVM) {
             VM::currentVM->writeBarrier(this, key);
             VM::currentVM->writeBarrier(this, value);
-            
-            // If adding a NEW key, memory will grow
-            if (map_.find(key) == map_.end()) {
-                // Check GC BEFORE growth. Use a larger estimate to account for map overhead.
-                // VM::currentVM->checkGC(128); 
-            }
         }
         map_[key] = value;
     }
@@ -30,7 +26,7 @@ void TableObject::set(const std::string& key, const Value& value) {
     for (auto it = map_.begin(); it != map_.end(); ++it) {
         if (it->first.isStringEqual(key)) {
             if (value.isNil()) {
-                map_.erase(it);
+                it->second = Value::nil();
             } else {
                 if (VM::currentVM) VM::currentVM->writeBarrier(this, value);
                 it->second = value;
@@ -78,14 +74,16 @@ Value TableObject::getByString(const Value& key) const {
     return Value::nil();
 }
 
-std::pair<Value, Value> TableObject::next(const Value& key) const {
+std::pair<Value, Value> TableObject::next(const Value& key, bool& keyFound) const {
+    keyFound = true;
     if (key.isNil()) {
-        // Return first element
-        if (map_.empty()) {
-            return {Value::nil(), Value::nil()};
+        // Return first non-nil element
+        for (auto it = map_.begin(); it != map_.end(); ++it) {
+            if (!it->second.isNil()) {
+                return {it->first, it->second};
+            }
         }
-        auto it = map_.begin();
-        return {it->first, it->second};
+        return {Value::nil(), Value::nil()};
     } else {
         // Find key and return next
         auto it = map_.find(key);
@@ -102,11 +100,15 @@ std::pair<Value, Value> TableObject::next(const Value& key) const {
         }
         
         if (it == map_.end()) {
-            // Key still not found or invalid
+            // Key not found in table -> invalid key
+            keyFound = false;
             return {Value::nil(), Value::nil()};
         }
         
         ++it;
+        while (it != map_.end() && it->second.isNil()) {
+            ++it;
+        }
         if (it == map_.end()) {
             // End of table
             return {Value::nil(), Value::nil()};

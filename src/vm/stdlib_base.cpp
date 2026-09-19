@@ -79,24 +79,23 @@ bool native_collectgarbage(VM* vm, int argCount) {
         vm->currentCoroutine()->lastResultCount = 0;
         return true;
     }
- else if (opt == "param") {
+    else if (opt == "param") {
         // collectgarbage("param", name, [newvalue])
+        static std::unordered_map<std::string, int> gc_params = {
+            {"minormul", 200}, {"majorminor", 100}, {"minormajor", 100},
+            {"pause", 200}, {"stepmul", 100}, {"stepsize", 200}
+        };
         if (argCount >= 2) {
             std::string param = vm->getStringValue(vm->peek(argCount - 2));
+            int prev = gc_params.count(param) ? gc_params[param] : 100;
             if (argCount >= 3) {
-                // Setting a value (stub)
-                double val = vm->peek(0).asNumber();
-                for(int i=0; i<argCount; i++) vm->pop();
-                vm->push(Value::number(val)); // Return new value
-                vm->currentCoroutine()->lastResultCount = 1;
-                return true;
-            } else {
-                // Getting a value (stub)
-                for(int i=0; i<argCount; i++) vm->pop();
-                vm->push(Value::number(100)); // Return a default value
-                vm->currentCoroutine()->lastResultCount = 1;
-                return true;
+                int val = static_cast<int>(vm->peek(0).asNumber());
+                gc_params[param] = val;
             }
+            for (int i = 0; i < argCount; i++) vm->pop();
+            vm->push(Value::number(prev));
+            vm->currentCoroutine()->lastResultCount = 1;
+            return true;
         }
     } else if (opt == "setmemorylimit") {
         if (argCount < 2) {
@@ -326,6 +325,8 @@ bool native_sleep(VM* vm, int argCount) {
     return true;
 }
 
+static size_t g_next_idx = 0;
+
 bool native_next(VM* vm, int argCount) {
     if (argCount < 1) {
         vm->runtimeError("bad argument #1 to 'next' (value expected)");
@@ -340,7 +341,12 @@ bool native_next(VM* vm, int argCount) {
     }
 
     TableObject* table = tableVal.asTableObj();
-    auto result = table->next(key);
+    bool keyFound = true;
+    auto result = table->next(key, keyFound);
+    if (!keyFound) {
+        vm->runtimeError("invalid key to 'next'");
+        return false;
+    }
 
     for (int i = 0; i < argCount; i++) vm->pop();
     
@@ -356,23 +362,23 @@ bool native_next(VM* vm, int argCount) {
 }
 
 bool native_pairs(VM* vm, int argCount) {
-    if (argCount != 1) {
-        vm->runtimeError("pairs expects 1 argument");
+    if (argCount < 1) {
+        vm->runtimeError("bad argument #1 to 'pairs' (value expected)");
         return false;
     }
-    Value val = vm->peek(0);
+    Value val = vm->peek(argCount - 1);
 
     Value mm = vm->getMetamethod(val, "__pairs");
     if (!mm.isNil()) {
-        vm->pop();
+        for (int i = 0; i < argCount; i++) vm->pop();
         vm->push(mm);
         vm->push(val);
         size_t prevFrames = vm->currentCoroutine()->frames.size();
-        if (vm->callValue(1, 4)) {
+        if (vm->callValue(1, 5)) {
             if (vm->currentCoroutine()->frames.size() > prevFrames) {
                 if (!vm->run(prevFrames)) return false;
             }
-            vm->currentCoroutine()->lastResultCount = 3;
+            vm->currentCoroutine()->lastResultCount = 4;
             return true;
         }
         return false;
@@ -383,31 +389,62 @@ bool native_pairs(VM* vm, int argCount) {
         return false;
     }
 
-    size_t nextIdx = vm->registerNativeFunction("next", native_next);
-    vm->pop();
-    vm->push(Value::nativeFunction(nextIdx));
+    if (g_next_idx == 0) {
+        g_next_idx = vm->registerNativeFunction("next", native_next);
+    }
+    for (int i = 0; i < argCount; i++) vm->pop();
+    vm->push(Value::nativeFunction(g_next_idx));
     vm->push(val);
     vm->push(Value::nil());
     vm->currentCoroutine()->lastResultCount = 3;
     return true;
 }
 
+static size_t g_ipairs_iter_idx = 0;
+
+static Value get_table_item(VM* vm, const Value& tableVal, const Value& key) {
+    if (tableVal.isTable()) {
+        TableObject* table = tableVal.asTableObj();
+        Value v = table->get(key);
+        if (!v.isNil() || table->getMetatable().isNil()) {
+            return v;
+        }
+    }
+    Value indexMethod = vm->getMetamethod(tableVal, "__index");
+    if (indexMethod.isNil()) {
+        return Value::nil();
+    }
+    if (indexMethod.isFunction()) {
+        vm->push(indexMethod);
+        vm->push(tableVal);
+        vm->push(key);
+        size_t prevFrames = vm->currentCoroutine()->frames.size();
+        if (!vm->callValue(2, 2)) return Value::nil();
+        if (vm->currentCoroutine()->frames.size() > prevFrames) {
+            if (!vm->run(prevFrames)) return Value::nil();
+        }
+        return vm->pop();
+    } else if (indexMethod.isTable()) {
+        return get_table_item(vm, indexMethod, key);
+    }
+    return Value::nil();
+}
+
 bool native_ipairs_iter(VM* vm, int argCount) {
-    if (argCount != 2) return false;
-    Value indexVal = vm->peek(0);
-    Value tableVal = vm->peek(1);
+    if (argCount < 2) return false;
+    Value tableVal = vm->peek(argCount - 1);
+    Value indexVal = vm->peek(argCount - 2);
 
-    if (!tableVal.isTable()) return false;
-    TableObject* table = tableVal.asTableObj();
-    double nextIndex = indexVal.asNumber() + 1;
-    Value val = table->get(Value::number(nextIndex));
+    int64_t nextIndex = static_cast<int64_t>(static_cast<uint64_t>(indexVal.asInteger()) + 1ULL);
+    Value key = vm->makeInteger(nextIndex);
+    Value val = get_table_item(vm, tableVal, key);
 
-    vm->pop(); vm->pop();
+    for (int i = 0; i < argCount; i++) vm->pop();
     if (val.isNil()) {
         vm->push(Value::nil());
         vm->currentCoroutine()->lastResultCount = 1;
     } else {
-        vm->push(Value::number(nextIndex));
+        vm->push(key);
         vm->push(val);
         vm->currentCoroutine()->lastResultCount = 2;
     }
@@ -415,21 +452,23 @@ bool native_ipairs_iter(VM* vm, int argCount) {
 }
 
 bool native_ipairs(VM* vm, int argCount) {
-    if (argCount != 1) {
-        vm->runtimeError("ipairs expects 1 argument");
+    if (argCount < 1) {
+        vm->runtimeError("bad argument #1 to 'ipairs' (value expected)");
         return false;
     }
-    Value table = vm->peek(0);
+    Value table = vm->peek(argCount - 1);
     if (!table.isTable()) {
         vm->runtimeError("bad argument #1 to 'ipairs' (table expected)");
         return false;
     }
 
-    size_t iterIdx = vm->registerNativeFunction("__ipairs_iter", native_ipairs_iter);
-    vm->pop();
-    vm->push(Value::nativeFunction(iterIdx));
+    if (g_ipairs_iter_idx == 0) {
+        g_ipairs_iter_idx = vm->registerNativeFunction("__ipairs_iter", native_ipairs_iter);
+    }
+    for (int i = 0; i < argCount; i++) vm->pop();
+    vm->push(Value::nativeFunction(g_ipairs_iter_idx));
     vm->push(table);
-    vm->push(Value::number(0));
+    vm->push(vm->makeInteger(0));
     vm->currentCoroutine()->lastResultCount = 3;
     return true;
 }
@@ -918,11 +957,7 @@ bool native_load(VM* vm, int argCount) {
             size_t nextPos = nl + 1;
             if (nextPos < source.size() && source[nextPos] == '\x1b') {
                 source = source.substr(nextPos);
-            } else {
-                source = source.substr(nl);
             }
-        } else {
-            source.clear();
         }
     }
     bool isBinary = (!source.empty() && source[0] == '\x1b');
@@ -1176,6 +1211,10 @@ bool native_package_loadlib(VM* vm, int argCount) {
     if (!handle) {
         errorMsg = "cannot open " + libname + ": LoadLibrary failed";
         errorType = "open";
+    } else if (funcname == "*") {
+        vm->push(Value::boolean(true));
+        vm->currentCoroutine()->lastResultCount = 1;
+        return true;
     } else {
         func = (void*)GetProcAddress((HMODULE)handle, funcname.c_str());
         if (!func) {
@@ -1184,11 +1223,15 @@ bool native_package_loadlib(VM* vm, int argCount) {
         }
     }
 #else
-    handle = dlopen(libname.c_str(), RTLD_NOW | RTLD_LOCAL);
+    handle = dlopen(libname.c_str(), RTLD_NOW | RTLD_GLOBAL);
     if (!handle) {
         const char* err = dlerror();
         errorMsg = err ? err : "unknown error";
         errorType = "open";
+    } else if (funcname == "*") {
+        vm->push(Value::boolean(true));
+        vm->currentCoroutine()->lastResultCount = 1;
+        return true;
     } else {
         func = dlsym(handle, funcname.c_str());
         if (!func) {
@@ -1238,26 +1281,29 @@ void registerBaseLibrary(VM* vm) {
     vm->setGlobal("tostring", Value::nativeFunction(tostringIdx));
     
     size_t typeIdx = vm->registerNativeFunction("type", [](VM* vm, int argCount) -> bool {
-        if (argCount != 1) {
-            vm->runtimeError("type expects 1 argument");
+        if (argCount < 1) {
+            vm->runtimeError("bad argument #1 to 'type' (value expected)");
             return false;
         }
-        Value val = vm->peek(0);
+        Value val = vm->peek(argCount - 1);
         std::string typeName = val.typeToString();
-        vm->pop();
+        for (int i = 0; i < argCount; i++) vm->pop();
         StringObject* str = vm->internString(typeName);
         vm->push(Value::runtimeString(str));
+        vm->currentCoroutine()->lastResultCount = 1;
         return true;
     });
     vm->setGlobal("type", Value::nativeFunction(typeIdx));
     
     size_t nextIdx = vm->registerNativeFunction("next", native_next);
+    g_next_idx = nextIdx;
     vm->setGlobal("next", Value::nativeFunction(nextIdx));
     
     size_t pairsIdx = vm->registerNativeFunction("pairs", native_pairs);
     vm->setGlobal("pairs", Value::nativeFunction(pairsIdx));
     
     size_t ipairsIterIdx = vm->registerNativeFunction("__ipairs_iter", native_ipairs_iter);
+    g_ipairs_iter_idx = ipairsIterIdx;
     vm->setGlobal("__ipairs_iter", Value::nativeFunction(ipairsIterIdx));
     
     size_t ipairsIdx = vm->registerNativeFunction("ipairs", native_ipairs);
@@ -1336,6 +1382,8 @@ void registerBaseLibrary(VM* vm) {
 
     TableObject* loaded = vm->createTable();
     package->set("loaded", Value::table(loaded));
+    loaded->set("package", Value::table(package));
+    loaded->set("_G", Value::table(gTable));
 
     // Check if -E flag was used
     bool ignoreEnv = vm->getGlobal("__IGNORE_ENV__").asBool();
@@ -1371,60 +1419,60 @@ void registerBaseLibrary(VM* vm) {
     package->set("searchers", Value::table(searchers));
 
     const char* requireScript = 
-        "package.searchers[1] = function(modname)\n"
-        "    if package.preload[modname] then return package.preload[modname] end\n"
+        "local _PACKAGE = package\n"
+        "_PACKAGE.searchers[1] = function(modname)\n"
+        "    if _PACKAGE.preload[modname] ~= nil then return _PACKAGE.preload[modname], ':preload:' end\n"
         "    return \"\\n\\tno field package.preload['\" .. modname .. \"']\"\n"
         "end\n"
-        "package.searchers[2] = function(modname)\n"
-        "    local path = package.path .. \";\"\n"
-        "    local start = 1\n"
-        "    local err = \"\"\n"
-        "    while true do\n"
-        "        local sep = string.find(path, \";\", start)\n"
-        "        if not sep then break end\n"
-        "        local template = string.sub(path, start, sep - 1)\n"
-        "        local filename = string.gsub(template, \"?\", modname)\n"
-        "        local f, e = loadfile(filename)\n"
-        "        if f then return f, filename end\n"
-        "        err = err .. \"\\n\\tno file '\" .. filename .. \"'\"\n"
-        "        start = sep + 1\n"
-        "    end\n"
-        "    return err\n"
+        "_PACKAGE.searchers[2] = function(modname)\n"
+        "    if type(_PACKAGE.path) ~= 'string' then error(\"'package.path' must be a string\") end\n"
+        "    local filename, err = _PACKAGE.searchpath(modname, _PACKAGE.path)\n"
+        "    if not filename then return err end\n"
+        "    local f, e = loadfile(filename)\n"
+        "    if not f then error(\"error loading module '\" .. modname .. \"' from file '\" .. filename .. \"':\\n\\t\" .. e, 0) end\n"
+        "    return f, filename\n"
         "end\n"
-        "package.searchers[3] = function(modname)\n"
-        "    local cpath = package.cpath .. \";\"\n"
-        "    local start = 1\n"
-        "    local err = \"\"\n"
-        "    while true do\n"
-        "        local sep = string.find(cpath, \";\", start)\n"
-        "        if not sep then break end\n"
-        "        local template = string.sub(cpath, start, sep - 1)\n"
-        "        local filename = string.gsub(template, \"?\", modname)\n"
-        "        local modprefix = string.match(modname, \"^([^-]+)\") or modname\n"
-        "        local openname = \"luaopen_\" .. string.gsub(modprefix, \"%%.\", \"_\")\n"
-        "        local f, e = package.loadlib(filename, openname)\n"
-        "        if f then return f, filename end\n"
-        "        err = err .. \"\\n\\tno file '\" .. filename .. \"' (C module)\"\n"
-        "        start = sep + 1\n"
-        "    end\n"
-        "    return err\n"
+        "_PACKAGE.searchers[3] = function(modname)\n"
+        "    if type(_PACKAGE.cpath) ~= 'string' then error(\"'package.cpath' must be a string\") end\n"
+        "    local filename, err = _PACKAGE.searchpath(modname, _PACKAGE.cpath)\n"
+        "    if not filename then return err end\n"
+        "    local modprefix = string.match(modname, '^([^-]+)') or modname\n"
+        "    local openname = 'luaopen_' .. string.gsub(modprefix, '%.', '_')\n"
+        "    local f, e = _PACKAGE.loadlib(filename, openname)\n"
+        "    if not f then error(\"error loading module '\" .. modname .. \"' from file '\" .. filename .. \"':\\n\\t\" .. e, 0) end\n"
+        "    return f, filename\n"
+        "end\n"
+        "_PACKAGE.searchers[4] = function(modname)\n"
+        "    if type(_PACKAGE.cpath) ~= 'string' then error(\"'package.cpath' must be a string\") end\n"
+        "    local root = string.match(modname, '^([^.]+)%.')\n"
+        "    if not root then return nil end\n"
+        "    local filename, err = _PACKAGE.searchpath(root, _PACKAGE.cpath)\n"
+        "    if not filename then return err end\n"
+        "    local openname = 'luaopen_' .. string.gsub(modname, '%.', '_')\n"
+        "    local f, e = _PACKAGE.loadlib(filename, openname)\n"
+        "    if not f then error(\"error loading module '\" .. modname .. \"' from file '\" .. filename .. \"':\\n\\t\" .. e, 0) end\n"
+        "    return f, filename\n"
         "end\n"
         "function require(modname)\n"
-        "    if package.loaded[modname] then return package.loaded[modname] end\n"
-        "    local errors = \"\"\n"
-        "    for i=1, #package.searchers do\n"
-        "        local searcher = package.searchers[i]\n"
+        "    if type(_PACKAGE.searchers) ~= 'table' then error(\"'package.searchers' must be a table\") end\n"
+        "    if _PACKAGE.loaded[modname] then return _PACKAGE.loaded[modname] end\n"
+        "    local errors = ''\n"
+        "    for i=1, #_PACKAGE.searchers do\n"
+        "        local searcher = _PACKAGE.searchers[i]\n"
         "        local loader, data = searcher(modname)\n"
         "        if type(loader) == 'function' then\n"
         "            local res = loader(modname, data)\n"
-        "            if res == nil then res = true end\n"
-        "            package.loaded[modname] = res\n"
-        "            return res\n"
+        "            if res ~= nil then\n"
+        "                _PACKAGE.loaded[modname] = res\n"
+        "            elseif not _PACKAGE.loaded[modname] then\n"
+        "                _PACKAGE.loaded[modname] = true\n"
+        "            end\n"
+        "            return _PACKAGE.loaded[modname], data\n"
         "        elseif type(loader) == 'string' then\n"
         "            errors = errors .. loader\n"
         "        end\n"
         "    end\n"
-        "    error(\"module '\" .. modname .. \"' not found:\" .. errors)\n"
+        "    error(\"module '\" .. modname .. \"' not found:\" .. errors, 0)\n"
         "end\n";
 
     vm->runSource(requireScript, "require_init");

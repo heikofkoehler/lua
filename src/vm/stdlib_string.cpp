@@ -937,111 +937,315 @@ bool native_string_format(VM* vm, int argCount) {
     return true;
 }
 
-// Helper for string.pack/unpack
-static size_t get_spec_size(const std::string& fmt, size_t& i, char spec, int& size) {
-    size = 0;
-    if (spec == 'c') {
-        size = 0;
-        while (i + 1 < fmt.length() && isdigit((unsigned char)fmt[i+1])) {
-            size = size * 10 + (fmt[++i] - '0');
-        }
-        return size;
-    }
+// Helpers for string.pack/unpack/packsize
+static const size_t MAX_PACK_SIZE = 0x7FFFFFFFFFFFFFFFULL;
 
-    if (spec == 'i' || spec == 'I') {
-        if (i + 1 < fmt.length() && isdigit((unsigned char)fmt[i+1])) {
-            size = 0;
-            while (i + 1 < fmt.length() && isdigit((unsigned char)fmt[i+1])) {
-                size = size * 10 + (fmt[++i] - '0');
-            }
-        } else {
-            size = sizeof(int); // 4 bytes (native int)
-        }
-        return size;
-    }
-
-    switch (spec) {
-        case 'b': case 'B': size = sizeof(char); return sizeof(char);
-        case 'h': case 'H': size = sizeof(short); return sizeof(short);
-        case 'l': case 'L': size = sizeof(int32_t); return sizeof(int32_t);
-        case 'j': case 'J': size = sizeof(int64_t); return sizeof(int64_t);
-        case 'T': size = sizeof(size_t); return sizeof(size_t);
-        case 'f': size = sizeof(float); return sizeof(float);
-        case 'd': case 'n': size = sizeof(double); return sizeof(double);
-        default: size = 0; return 0;
-    }
-}
-
-static void apply_alignment(size_t& offset, size_t align, std::string* result = nullptr) {
-    if (align > 1) {
-        size_t padding = (align - (offset % align)) % align;
-        if (result) {
-            for (size_t i = 0; i < padding; i++) result->push_back('\0');
-        }
-        offset += padding;
-    }
-}
-
-static void swap_endian(char* data, size_t size) {
+static void swap_bytes(char* data, size_t size) {
     for (size_t i = 0; i < size / 2; i++) {
         std::swap(data[i], data[size - 1 - i]);
     }
 }
 
+static void apply_pack_alignment(size_t& offset, size_t align, std::string* result = nullptr) {
+    if (align > 1) {
+        size_t padding = (align - (offset % align)) % align;
+        if (result) {
+            result->append(padding, '\0');
+        }
+        offset += padding;
+    }
+}
+
+static int64_t parse_format_num(const std::string& fmt, size_t& i) {
+    if (i + 1 >= fmt.length() || !isdigit(static_cast<unsigned char>(fmt[i + 1]))) {
+        return -2;
+    }
+    i++;
+    uint64_t val = 0;
+    bool overflow = false;
+    while (i < fmt.length() && isdigit(static_cast<unsigned char>(fmt[i]))) {
+        int d = fmt[i] - '0';
+        if (val > (0x7FFFFFFFFFFFFFFFULL - d) / 10) {
+            overflow = true;
+        }
+        val = val * 10 + d;
+        i++;
+    }
+    i--;
+    if (overflow) return -1;
+    return static_cast<int64_t>(val);
+}
+
+static bool pack_integer(VM* vm, std::string& result, int64_t val, int size, bool issigned, bool littleEndian) {
+    if (size < 8) {
+        if (issigned) {
+            int64_t lim = 1LL << (8 * size - 1);
+            if (val < -lim || val >= lim) {
+                vm->runtimeError(std::to_string(size) + "-byte integer overflow");
+                return false;
+            }
+        } else {
+            if (val < 0) {
+                vm->runtimeError(std::to_string(size) + "-byte integer overflow");
+                return false;
+            }
+            uint64_t ulim = (size == 8) ? UINT64_MAX : ((1ULL << (8 * size)) - 1);
+            if (static_cast<uint64_t>(val) > ulim) {
+                vm->runtimeError(std::to_string(size) + "-byte integer overflow");
+                return false;
+            }
+        }
+    }
+
+    uint8_t buf[16];
+    uint64_t uval = static_cast<uint64_t>(val);
+    uint8_t fill = (issigned && val < 0) ? 0xFF : 0x00;
+
+    if (littleEndian) {
+        for (int k = 0; k < size; k++) {
+            if (k < 8) {
+                buf[k] = static_cast<uint8_t>((uval >> (8 * k)) & 0xFF);
+            } else {
+                buf[k] = fill;
+            }
+        }
+    } else {
+        for (int k = 0; k < size; k++) {
+            int src_idx = size - 1 - k;
+            if (src_idx < 8) {
+                buf[k] = static_cast<uint8_t>((uval >> (8 * src_idx)) & 0xFF);
+            } else {
+                buf[k] = fill;
+            }
+        }
+    }
+    result.append(reinterpret_cast<char*>(buf), size);
+    return true;
+}
+
+static bool unpack_integer(VM* vm, const std::string& data, size_t current, int size, bool issigned, bool littleEndian, int64_t& outVal) {
+    if (current + size > data.length()) {
+        vm->runtimeError("data string too short");
+        return false;
+    }
+
+    const uint8_t* p = reinterpret_cast<const uint8_t*>(&data[current]);
+    uint64_t uval = 0;
+
+    if (size <= 8) {
+        if (littleEndian) {
+            for (int k = 0; k < size; k++) {
+                uval |= (static_cast<uint64_t>(p[k]) << (8 * k));
+            }
+        } else {
+            for (int k = 0; k < size; k++) {
+                uval = (uval << 8) | p[k];
+            }
+        }
+        if (issigned) {
+            if (size < 8) {
+                if (uval & (1ULL << (8 * size - 1))) {
+                    uval |= (~0ULL << (8 * size));
+                }
+            }
+            outVal = static_cast<int64_t>(uval);
+        } else {
+            outVal = static_cast<int64_t>(uval);
+        }
+    } else {
+        uint8_t extra[8];
+        int extra_len = size - 8;
+        if (littleEndian) {
+            for (int k = 0; k < 8; k++) {
+                uval |= (static_cast<uint64_t>(p[k]) << (8 * k));
+            }
+            for (int k = 0; k < extra_len; k++) {
+                extra[k] = p[8 + k];
+            }
+        } else {
+            for (int k = 0; k < extra_len; k++) {
+                extra[k] = p[k];
+            }
+            for (int k = 0; k < 8; k++) {
+                uval = (uval << 8) | p[extra_len + k];
+            }
+        }
+
+        if (issigned) {
+            bool is_neg = (uval & (1ULL << 63)) != 0;
+            uint8_t expected = is_neg ? 0xFF : 0x00;
+            for (int k = 0; k < extra_len; k++) {
+                if (extra[k] != expected) {
+                    vm->runtimeError(std::to_string(size) + "-byte integer does not fit into Lua Integer");
+                    return false;
+                }
+            }
+            outVal = static_cast<int64_t>(uval);
+        } else {
+            for (int k = 0; k < extra_len; k++) {
+                if (extra[k] != 0x00) {
+                    vm->runtimeError(std::to_string(size) + "-byte integer does not fit into Lua Integer");
+                    return false;
+                }
+            }
+            outVal = static_cast<int64_t>(uval);
+        }
+    }
+    return true;
+}
+
 bool native_string_packsize(VM* vm, int argCount) {
     if (argCount < 1) { vm->runtimeError("string.packsize expects format"); return false; }
     std::string fmt = vm->getStringValue(vm->peek(argCount - 1));
-    
+
     size_t total = 0;
-    size_t currentAlignment = 1;
-    size_t maxAlignment = 1;
+    size_t maxalign = 1;
 
     for (size_t i = 0; i < fmt.length(); i++) {
         char spec = fmt[i];
         if (spec == ' ' || spec == '<' || spec == '>' || spec == '=') continue;
+
         if (spec == '!') {
-            if (i + 1 < fmt.length() && isdigit((unsigned char)fmt[i+1])) {
-                currentAlignment = fmt[i+1] - '0';
-                i++;
+            int64_t num = parse_format_num(fmt, i);
+            if (num == -2) {
+                maxalign = sizeof(void*);
+            } else if (num < 1 || num > 16) {
+                vm->runtimeError("integral size (" + std::to_string(num) + ") out of limits [1,16]");
+                return false;
+            } else if ((num & (num - 1)) != 0) {
+                vm->runtimeError("alignment " + std::to_string(num) + " is not power of 2");
+                return false;
             } else {
-                currentAlignment = 8; // Default native alignment
+                maxalign = static_cast<size_t>(num);
             }
             continue;
         }
-        
-        int size;
-        size_t specSize = get_spec_size(fmt, i, spec, size);
-        if (specSize > 0 && spec != 'x') {
-            size_t align = (spec == 'c') ? 1 : std::min(specSize, currentAlignment);
-            maxAlignment = std::max(maxAlignment, align);
-            apply_alignment(total, align);
-            total += specSize;
-        } else if (spec == 'x') {
-            total += 1;
-        } else if (spec == 'X') {
-            if (i + 1 < fmt.length()) {
-                size_t next_i = i + 1;
-                char nextSpec = fmt[next_i];
-                int dummy;
-                size_t xSize = get_spec_size(fmt, next_i, nextSpec, dummy);
-                if (xSize > 0 && nextSpec != 'x') {
-                    size_t align = std::min(xSize, currentAlignment);
-                    maxAlignment = std::max(maxAlignment, align);
-                    apply_alignment(total, align);
-                }
-                i = next_i; // Advance i to skip the processed specifier
+
+        if (spec == 'X') {
+            if (i + 1 >= fmt.length()) {
+                vm->runtimeError("invalid next option for option 'X'");
+                return false;
             }
-        } else if (spec == 's' || spec == 'z') {
+            char nextSpec = fmt[i + 1];
+            if (nextSpec == ' ' || nextSpec == 'X' || nextSpec == '<' || nextSpec == '>' ||
+                nextSpec == '=' || nextSpec == '!' || nextSpec == 'c' || nextSpec == 's' || nextSpec == 'z') {
+                vm->runtimeError("invalid next option for option 'X'");
+                return false;
+            }
+            i++;
+            size_t xsize = 0;
+            switch (nextSpec) {
+                case 'b': case 'B': xsize = 1; break;
+                case 'h': case 'H': xsize = 2; break;
+                case 'l': case 'L': xsize = sizeof(long); break;
+                case 'j': case 'J': xsize = sizeof(int64_t); break;
+                case 'T': xsize = sizeof(size_t); break;
+                case 'f': xsize = sizeof(float); break;
+                case 'd': case 'n': xsize = sizeof(double); break;
+                case 'i': case 'I': {
+                    int64_t num = parse_format_num(fmt, i);
+                    if (num == -2) {
+                        xsize = sizeof(int);
+                    } else if (num < 1 || num > 16) {
+                        vm->runtimeError("integral size (" + std::to_string(num) + ") out of limits [1,16]");
+                        return false;
+                    } else {
+                        xsize = static_cast<size_t>(num);
+                    }
+                    break;
+                }
+                default:
+                    vm->runtimeError("invalid next option for option 'X'");
+                    return false;
+            }
+            size_t align = (xsize <= maxalign) ? xsize : maxalign;
+            if ((align & (align - 1)) != 0) {
+                vm->runtimeError("format asks for alignment not power of 2");
+                return false;
+            }
+            apply_pack_alignment(total, align);
+            continue;
+        }
+
+        if (spec == 'x') {
+            if (total > MAX_PACK_SIZE - 1) {
+                vm->runtimeError("format result too large");
+                return false;
+            }
+            total += 1;
+            continue;
+        }
+
+        if (spec == 's' || spec == 'z') {
             vm->runtimeError("variable-length format in string.packsize");
             return false;
         }
-    }
-    
-    // Tail padding to satisfy currentAlignment
-    apply_alignment(total, currentAlignment);
 
-    for(int i=0; i<argCount; i++) vm->pop();
-    vm->push(Value::integer(static_cast<int64_t>(total)));
+        size_t specSize = 0;
+        size_t itemAlign = 1;
+        if (spec == 'c') {
+            int64_t num = parse_format_num(fmt, i);
+            if (num == -2) {
+                vm->runtimeError("missing size for format 'c'");
+                return false;
+            } else if (num < 0) {
+                vm->runtimeError("invalid format (width or height out of limits)");
+                return false;
+            }
+            specSize = static_cast<size_t>(num);
+            itemAlign = 1;
+        } else if (spec == 'b' || spec == 'B') {
+            specSize = 1;
+            itemAlign = 1;
+        } else if (spec == 'h' || spec == 'H') {
+            specSize = 2;
+            itemAlign = (specSize <= maxalign) ? specSize : maxalign;
+        } else if (spec == 'l' || spec == 'L') {
+            specSize = sizeof(long);
+            itemAlign = (specSize <= maxalign) ? specSize : maxalign;
+        } else if (spec == 'j' || spec == 'J') {
+            specSize = sizeof(int64_t);
+            itemAlign = (specSize <= maxalign) ? specSize : maxalign;
+        } else if (spec == 'T') {
+            specSize = sizeof(size_t);
+            itemAlign = (specSize <= maxalign) ? specSize : maxalign;
+        } else if (spec == 'f') {
+            specSize = sizeof(float);
+            itemAlign = (specSize <= maxalign) ? specSize : maxalign;
+        } else if (spec == 'd' || spec == 'n') {
+            specSize = sizeof(double);
+            itemAlign = (specSize <= maxalign) ? specSize : maxalign;
+        } else if (spec == 'i' || spec == 'I') {
+            int64_t num = parse_format_num(fmt, i);
+            if (num == -2) {
+                specSize = sizeof(int);
+            } else if (num < 1 || num > 16) {
+                vm->runtimeError("integral size (" + std::to_string(num) + ") out of limits [1,16]");
+                return false;
+            } else {
+                specSize = static_cast<size_t>(num);
+            }
+            itemAlign = (specSize <= maxalign) ? specSize : maxalign;
+        } else {
+            vm->runtimeError("invalid format option '" + std::string(1, spec) + "'");
+            return false;
+        }
+
+        if ((itemAlign & (itemAlign - 1)) != 0) {
+            vm->runtimeError("format asks for alignment not power of 2");
+            return false;
+        }
+
+        apply_pack_alignment(total, itemAlign);
+        if (total > MAX_PACK_SIZE - specSize) {
+            vm->runtimeError("format result too large");
+            return false;
+        }
+        total += specSize;
+    }
+
+    for (int k = 0; k < argCount; k++) vm->pop();
+    vm->push(vm->makeInteger(static_cast<int64_t>(total)));
     vm->currentCoroutine()->lastResultCount = 1;
     return true;
 }
@@ -1050,9 +1254,8 @@ bool native_string_pack(VM* vm, int argCount) {
     if (argCount < 1) { vm->runtimeError("string.pack expects format"); return false; }
     std::string fmt = vm->getStringValue(vm->peek(argCount - 1));
     std::string result;
-    size_t currentAlignment = 1;
-    size_t maxAlignment = 1;
-    bool littleEndian = true; // Default
+    size_t maxalign = 1;
+    bool littleEndian = true;
     int argIdx = 1;
 
     for (size_t i = 0; i < fmt.length(); i++) {
@@ -1060,136 +1263,260 @@ bool native_string_pack(VM* vm, int argCount) {
         if (spec == ' ') continue;
         if (spec == '<') { littleEndian = true; continue; }
         if (spec == '>') { littleEndian = false; continue; }
-        if (spec == '=') { littleEndian = true; continue; } // Assume native is little for now
-        
+        if (spec == '=') { littleEndian = true; continue; }
+
         if (spec == '!') {
-            if (i + 1 < fmt.length() && isdigit((unsigned char)fmt[i+1])) {
-                currentAlignment = fmt[i+1] - '0';
-                i++;
+            int64_t num = parse_format_num(fmt, i);
+            if (num == -2) {
+                maxalign = sizeof(void*);
+            } else if (num < 1 || num > 16) {
+                vm->runtimeError("integral size (" + std::to_string(num) + ") out of limits [1,16]");
+                return false;
+            } else if ((num & (num - 1)) != 0) {
+                vm->runtimeError("alignment " + std::to_string(num) + " is not power of 2");
+                return false;
             } else {
-                currentAlignment = 8;
+                maxalign = static_cast<size_t>(num);
             }
             continue;
         }
 
         if (spec == 'X') {
-            if (i + 1 < fmt.length()) {
-                size_t next_i = i + 1;
-                char nextSpec = fmt[next_i];
-                int dummy;
-                size_t xSize = get_spec_size(fmt, next_i, nextSpec, dummy);
-                if (xSize > 0 && nextSpec != 'x') {
-                    size_t align = std::min(xSize, currentAlignment);
-                    maxAlignment = std::max(maxAlignment, align);
-                    size_t offset = result.length();
-                    apply_alignment(offset, align, &result);
-                }
-                i = next_i; // Skip the next specifier
+            if (i + 1 >= fmt.length()) {
+                vm->runtimeError("invalid next option for option 'X'");
+                return false;
             }
+            char nextSpec = fmt[i + 1];
+            if (nextSpec == ' ' || nextSpec == 'X' || nextSpec == '<' || nextSpec == '>' ||
+                nextSpec == '=' || nextSpec == '!' || nextSpec == 'c' || nextSpec == 's' || nextSpec == 'z') {
+                vm->runtimeError("invalid next option for option 'X'");
+                return false;
+            }
+            i++;
+            size_t xsize = 0;
+            switch (nextSpec) {
+                case 'b': case 'B': xsize = 1; break;
+                case 'h': case 'H': xsize = 2; break;
+                case 'l': case 'L': xsize = sizeof(long); break;
+                case 'j': case 'J': xsize = sizeof(int64_t); break;
+                case 'T': xsize = sizeof(size_t); break;
+                case 'f': xsize = sizeof(float); break;
+                case 'd': case 'n': xsize = sizeof(double); break;
+                case 'i': case 'I': {
+                    int64_t num = parse_format_num(fmt, i);
+                    if (num == -2) {
+                        xsize = sizeof(int);
+                    } else if (num < 1 || num > 16) {
+                        vm->runtimeError("integral size (" + std::to_string(num) + ") out of limits [1,16]");
+                        return false;
+                    } else {
+                        xsize = static_cast<size_t>(num);
+                    }
+                    break;
+                }
+                default:
+                    vm->runtimeError("invalid next option for option 'X'");
+                    return false;
+            }
+            size_t align = (xsize <= maxalign) ? xsize : maxalign;
+            if ((align & (align - 1)) != 0) {
+                vm->runtimeError("format asks for alignment not power of 2");
+                return false;
+            }
+            size_t offset = result.length();
+            apply_pack_alignment(offset, align, &result);
             continue;
         }
 
         if (spec == 'x') {
+            if (result.length() > MAX_PACK_SIZE - 1) {
+                vm->runtimeError("resulting string too long");
+                return false;
+            }
             result.push_back('\0');
             continue;
         }
 
-        int size;
-        size_t specSize = get_spec_size(fmt, i, spec, size);
-        if (specSize > 0 || spec == 's' || spec == 'z') {
-            if (argIdx >= argCount) { vm->runtimeError("bad argument to 'pack' (no value)"); return false; }
-            Value val = vm->peek(argCount - 1 - argIdx);
-            
-            if (specSize > 0) {
-                size_t align = (spec == 'c') ? 1 : std::min(specSize, currentAlignment);
-                maxAlignment = std::max(maxAlignment, align);
-                size_t offset = result.length();
-                apply_alignment(offset, align, &result);
-                
-                size_t start = result.length();
-                if (spec == 'c') {
-                    std::string s = vm->getStringValue(val);
-                    if (s.length() > specSize) {
-                        vm->runtimeError("string longer than given size");
-                        return false;
-                    }
-                    result.append(s);
-                    for (size_t p = s.length(); p < specSize; p++) {
-                        result.push_back('\0');
-                    }
-                } else if (spec == 'b') {
-                    int8_t v = static_cast<int8_t>(val.asNumber());
-                    result.append(reinterpret_cast<char*>(&v), 1);
-                } else if (spec == 'B') {
-                    uint8_t v = static_cast<uint8_t>(val.asNumber());
-                    result.append(reinterpret_cast<char*>(&v), 1);
-                } else if (spec == 'h') {
-                    int16_t v = static_cast<int16_t>(val.asNumber());
-                    result.append(reinterpret_cast<char*>(&v), 2);
-                } else if (spec == 'H') {
-                    uint16_t v = static_cast<uint16_t>(val.asNumber());
-                    result.append(reinterpret_cast<char*>(&v), 2);
-                } else if (spec == 'l') {
-                    int32_t v = static_cast<int32_t>(val.asInteger());
-                    result.append(reinterpret_cast<char*>(&v), sizeof(int32_t));
-                } else if (spec == 'L') {
-                    uint32_t v = static_cast<uint32_t>(val.asNumber());
-                    result.append(reinterpret_cast<char*>(&v), sizeof(uint32_t));
-                } else if (spec == 'i' || spec == 'I') {
-                    uint64_t v = (spec == 'I') ? static_cast<uint64_t>(val.asNumber()) : static_cast<uint64_t>(val.asInteger());
-                    if (size == 1) {
-                        uint8_t v8 = static_cast<uint8_t>(v);
-                        result.append(reinterpret_cast<char*>(&v8), 1);
-                    } else if (size == 2) {
-                        uint16_t v16 = static_cast<uint16_t>(v);
-                        result.append(reinterpret_cast<char*>(&v16), 2);
-                    } else if (size == 4) {
-                        uint32_t v32 = static_cast<uint32_t>(v);
-                        result.append(reinterpret_cast<char*>(&v32), 4);
-                    } else {
-                        result.append(reinterpret_cast<char*>(&v), 8);
-                    }
-                } else if (spec == 'j') {
-                    int64_t v = val.asInteger();
-                    result.append(reinterpret_cast<char*>(&v), sizeof(int64_t));
-                } else if (spec == 'J') {
-                    uint64_t v = static_cast<uint64_t>(val.asInteger());
-                    result.append(reinterpret_cast<char*>(&v), sizeof(uint64_t));
-                } else if (spec == 'T') {
-                    size_t v = static_cast<size_t>(val.asNumber());
-                    result.append(reinterpret_cast<char*>(&v), sizeof(size_t));
-                } else if (spec == 'f') {
-                    float v = static_cast<float>(val.asNumber());
-                    result.append(reinterpret_cast<char*>(&v), 4);
-                } else if (spec == 'n' || spec == 'd') {
-                    double v = val.asNumber();
-                    result.append(reinterpret_cast<char*>(&v), 8);
-                }
-                
-                if (!littleEndian && specSize > 1) {
-                    swap_endian(&result[start], specSize);
-                }
-            } else if (spec == 's') {
-                std::string s = vm->getStringValue(val);
-                uint64_t len = s.length();
-                size_t start = result.length();
-                result.append(reinterpret_cast<char*>(&len), 8);
-                if (!littleEndian) swap_endian(&result[start], 8);
-                result.append(s);
-            } else if (spec == 'z') {
-                std::string s = vm->getStringValue(val);
-                result.append(s);
-                result.push_back('\0');
+        if (spec == 'c') {
+            int64_t num = parse_format_num(fmt, i);
+            if (num == -2) {
+                vm->runtimeError("missing size for format 'c'");
+                return false;
+            } else if (num < 0) {
+                vm->runtimeError("invalid format (width or height out of limits)");
+                return false;
             }
+            size_t csize = static_cast<size_t>(num);
+            if (result.length() > MAX_PACK_SIZE - csize) {
+                vm->runtimeError("resulting string too long");
+                return false;
+            }
+            if (argIdx >= argCount) {
+                vm->runtimeError("bad argument to 'pack' (no value)");
+                return false;
+            }
+            Value val = vm->peek(argCount - 1 - argIdx);
             argIdx++;
+
+            std::string s = vm->getStringValue(val);
+            if (s.length() > csize) {
+                vm->runtimeError("string longer than given size");
+                return false;
+            }
+            result.append(s);
+            if (s.length() < csize) {
+                result.append(csize - s.length(), '\0');
+            }
+            continue;
+        }
+
+        if (spec == 's') {
+            int64_t num = parse_format_num(fmt, i);
+            size_t lensize = 0;
+            if (num == -2) {
+                lensize = sizeof(size_t);
+            } else if (num < 1 || num > 16) {
+                vm->runtimeError("integral size (" + std::to_string(num) + ") out of limits [1,16]");
+                return false;
+            } else {
+                lensize = static_cast<size_t>(num);
+            }
+            size_t align = (lensize <= maxalign) ? lensize : maxalign;
+            if ((align & (align - 1)) != 0) {
+                vm->runtimeError("format asks for alignment not power of 2");
+                return false;
+            }
+            size_t offset = result.length();
+            apply_pack_alignment(offset, align, &result);
+
+            if (argIdx >= argCount) {
+                vm->runtimeError("bad argument to 'pack' (no value)");
+                return false;
+            }
+            Value val = vm->peek(argCount - 1 - argIdx);
+            argIdx++;
+
+            std::string s = vm->getStringValue(val);
+            size_t slen = s.length();
+            if (lensize < 8 && slen >= (1ULL << (8 * lensize))) {
+                vm->runtimeError("string length does not fit in given size");
+                return false;
+            }
+            if (!pack_integer(vm, result, static_cast<int64_t>(slen), static_cast<int>(lensize), false, littleEndian)) {
+                return false;
+            }
+            result.append(s);
+            continue;
+        }
+
+        if (spec == 'z') {
+            if (argIdx >= argCount) {
+                vm->runtimeError("bad argument to 'pack' (no value)");
+                return false;
+            }
+            Value val = vm->peek(argCount - 1 - argIdx);
+            argIdx++;
+
+            std::string s = vm->getStringValue(val);
+            if (s.find('\0') != std::string::npos) {
+                vm->runtimeError("string contains zeros");
+                return false;
+            }
+            result.append(s);
+            result.push_back('\0');
+            continue;
+        }
+
+        // Numeric formats: b, B, h, H, l, L, j, J, T, i, I, f, d, n
+        size_t specSize = 0;
+        bool isInt = true;
+        bool isSigned = true;
+        if (spec == 'b') { specSize = 1; isSigned = true; }
+        else if (spec == 'B') { specSize = 1; isSigned = false; }
+        else if (spec == 'h') { specSize = 2; isSigned = true; }
+        else if (spec == 'H') { specSize = 2; isSigned = false; }
+        else if (spec == 'l') { specSize = sizeof(long); isSigned = true; }
+        else if (spec == 'L') { specSize = sizeof(long); isSigned = false; }
+        else if (spec == 'j') { specSize = sizeof(int64_t); isSigned = true; }
+        else if (spec == 'J') { specSize = sizeof(uint64_t); isSigned = false; }
+        else if (spec == 'T') { specSize = sizeof(size_t); isSigned = false; }
+        else if (spec == 'i' || spec == 'I') {
+            isSigned = (spec == 'i');
+            int64_t num = parse_format_num(fmt, i);
+            if (num == -2) {
+                specSize = sizeof(int);
+            } else if (num < 1 || num > 16) {
+                vm->runtimeError("integral size (" + std::to_string(num) + ") out of limits [1,16]");
+                return false;
+            } else {
+                specSize = static_cast<size_t>(num);
+            }
+        } else if (spec == 'f') {
+            specSize = sizeof(float);
+            isInt = false;
+        } else if (spec == 'd' || spec == 'n') {
+            specSize = sizeof(double);
+            isInt = false;
+        } else {
+            vm->runtimeError("invalid format option '" + std::string(1, spec) + "'");
+            return false;
+        }
+
+        size_t itemAlign = (specSize <= maxalign) ? specSize : maxalign;
+        if ((itemAlign & (itemAlign - 1)) != 0) {
+            vm->runtimeError("format asks for alignment not power of 2");
+            return false;
+        }
+        size_t offset = result.length();
+        apply_pack_alignment(offset, itemAlign, &result);
+
+        if (argIdx >= argCount) {
+            vm->runtimeError("bad argument to 'pack' (no value)");
+            return false;
+        }
+        Value val = vm->peek(argCount - 1 - argIdx);
+        argIdx++;
+
+        if (isInt) {
+            int64_t ival = 0;
+            if (val.isInteger()) {
+                ival = val.asInteger();
+            } else if (val.isNumber()) {
+                double d = val.asNumber();
+                ival = static_cast<int64_t>(d);
+                if (static_cast<double>(ival) != d) {
+                    vm->runtimeError("number has no integer representation");
+                    return false;
+                }
+            } else {
+                vm->runtimeError("bad argument to 'pack' (number expected)");
+                return false;
+            }
+            if (!pack_integer(vm, result, ival, static_cast<int>(specSize), isSigned, littleEndian)) {
+                return false;
+            }
+        } else {
+            if (!val.isNumber()) {
+                vm->runtimeError("bad argument to 'pack' (number expected)");
+                return false;
+            }
+            double d = val.asNumber();
+            if (spec == 'f') {
+                float f = static_cast<float>(d);
+                char buf[4];
+                std::memcpy(buf, &f, 4);
+                if (!littleEndian) swap_bytes(buf, 4);
+                result.append(buf, 4);
+            } else {
+                char buf[8];
+                std::memcpy(buf, &d, 8);
+                if (!littleEndian) swap_bytes(buf, 8);
+                result.append(buf, 8);
+            }
         }
     }
 
-    // Tail padding
-    size_t finalOffset = result.length();
-    apply_alignment(finalOffset, currentAlignment, &result);
-
-    for (int i = 0; i < argCount; i++) vm->pop();
+    for (int k = 0; k < argCount; k++) vm->pop();
     vm->push(Value::runtimeString(vm->internString(result)));
     vm->currentCoroutine()->lastResultCount = 1;
     return true;
@@ -1199,18 +1526,21 @@ bool native_string_unpack(VM* vm, int argCount) {
     if (argCount < 2) { vm->runtimeError("string.unpack expects format and string"); return false; }
     std::string fmt = vm->getStringValue(vm->peek(argCount - 1));
     std::string data = vm->getStringValue(vm->peek(argCount - 2));
-    int pos = (argCount >= 3) ? static_cast<int>(vm->peek(argCount - 3).asNumber()) : 1;
-    
-    if (pos < 1 || pos > (int)data.length() + 1) {
-        vm->runtimeError("initial position out of bounds");
+    int64_t pos = (argCount >= 3) ? vm->peek(argCount - 3).asInteger() : 1;
+
+    if (pos < 0) {
+        pos = static_cast<int64_t>(data.length()) + pos + 1;
+    }
+
+    if (pos < 1 || pos > static_cast<int64_t>(data.length()) + 1) {
+        vm->runtimeError("initial position out of string");
         return false;
     }
 
-    size_t current = pos - 1;
-    size_t currentAlignment = 1;
-    size_t maxAlignment = 1;
+    size_t current = static_cast<size_t>(pos - 1);
+    size_t maxalign = 1;
     bool littleEndian = true;
-    int results = 0;
+    std::vector<Value> results;
 
     for (size_t i = 0; i < fmt.length(); i++) {
         char spec = fmt[i];
@@ -1218,152 +1548,223 @@ bool native_string_unpack(VM* vm, int argCount) {
         if (spec == '<') { littleEndian = true; continue; }
         if (spec == '>') { littleEndian = false; continue; }
         if (spec == '=') { littleEndian = true; continue; }
-        
+
         if (spec == '!') {
-            if (i + 1 < fmt.length() && isdigit((unsigned char)fmt[i+1])) {
-                currentAlignment = fmt[i+1] - '0';
-                i++;
+            int64_t num = parse_format_num(fmt, i);
+            if (num == -2) {
+                maxalign = sizeof(void*);
+            } else if (num < 1 || num > 16) {
+                vm->runtimeError("integral size (" + std::to_string(num) + ") out of limits [1,16]");
+                return false;
+            } else if ((num & (num - 1)) != 0) {
+                vm->runtimeError("alignment " + std::to_string(num) + " is not power of 2");
+                return false;
             } else {
-                currentAlignment = 8;
+                maxalign = static_cast<size_t>(num);
             }
             continue;
         }
 
         if (spec == 'X') {
-            if (i + 1 < fmt.length()) {
-                size_t next_i = i + 1;
-                char nextSpec = fmt[next_i];
-                int dummy;
-                size_t xSize = get_spec_size(fmt, next_i, nextSpec, dummy);
-                if (xSize > 0 && nextSpec != 'x') {
-                    size_t align = std::min(xSize, currentAlignment);
-                    maxAlignment = std::max(maxAlignment, align);
-                    apply_alignment(current, align);
-                }
-                i = next_i; // Skip the next specifier
+            if (i + 1 >= fmt.length()) {
+                vm->runtimeError("invalid next option for option 'X'");
+                return false;
             }
+            char nextSpec = fmt[i + 1];
+            if (nextSpec == ' ' || nextSpec == 'X' || nextSpec == '<' || nextSpec == '>' ||
+                nextSpec == '=' || nextSpec == '!' || nextSpec == 'c' || nextSpec == 's' || nextSpec == 'z') {
+                vm->runtimeError("invalid next option for option 'X'");
+                return false;
+            }
+            i++;
+            size_t xsize = 0;
+            switch (nextSpec) {
+                case 'b': case 'B': xsize = 1; break;
+                case 'h': case 'H': xsize = 2; break;
+                case 'l': case 'L': xsize = sizeof(long); break;
+                case 'j': case 'J': xsize = sizeof(int64_t); break;
+                case 'T': xsize = sizeof(size_t); break;
+                case 'f': xsize = sizeof(float); break;
+                case 'd': case 'n': xsize = sizeof(double); break;
+                case 'i': case 'I': {
+                    int64_t num = parse_format_num(fmt, i);
+                    if (num == -2) {
+                        xsize = sizeof(int);
+                    } else if (num < 1 || num > 16) {
+                        vm->runtimeError("integral size (" + std::to_string(num) + ") out of limits [1,16]");
+                        return false;
+                    } else {
+                        xsize = static_cast<size_t>(num);
+                    }
+                    break;
+                }
+                default:
+                    vm->runtimeError("invalid next option for option 'X'");
+                    return false;
+            }
+            size_t align = (xsize <= maxalign) ? xsize : maxalign;
+            if ((align & (align - 1)) != 0) {
+                vm->runtimeError("format asks for alignment not power of 2");
+                return false;
+            }
+            apply_pack_alignment(current, align);
             continue;
         }
 
         if (spec == 'x') {
+            if (current + 1 > data.length()) {
+                vm->runtimeError("data string too short");
+                return false;
+            }
             current += 1;
             continue;
         }
 
-        int size;
-        size_t specSize = get_spec_size(fmt, i, spec, size);
-        if (specSize > 0) {
-            size_t align = (spec == 'c') ? 1 : std::min(specSize, currentAlignment);
-            maxAlignment = std::max(maxAlignment, align);
-            apply_alignment(current, align);
-            
-            if (current + specSize > data.length()) { vm->runtimeError("data string too short"); return false; }
-
-            if (spec == 'c') {
-                std::string s = data.substr(current, specSize);
-                vm->push(Value::runtimeString(vm->internString(s)));
-                current += specSize;
-                results++;
-                continue;
+        if (spec == 'c') {
+            int64_t num = parse_format_num(fmt, i);
+            if (num == -2) {
+                vm->runtimeError("missing size for format 'c'");
+                return false;
+            } else if (num < 0) {
+                vm->runtimeError("invalid format (width or height out of limits)");
+                return false;
             }
+            size_t csize = static_cast<size_t>(num);
+            if (current + csize > data.length()) {
+                vm->runtimeError("data string too short");
+                return false;
+            }
+            std::string s = data.substr(current, csize);
+            results.push_back(Value::runtimeString(vm->internString(s)));
+            current += csize;
+            continue;
+        }
 
-            char buf[8];
-            std::memcpy(buf, &data[current], specSize);
-            if (!littleEndian && specSize > 1) swap_endian(buf, specSize);
+        if (spec == 's') {
+            int64_t num = parse_format_num(fmt, i);
+            size_t lensize = 0;
+            if (num == -2) {
+                lensize = sizeof(size_t);
+            } else if (num < 1 || num > 16) {
+                vm->runtimeError("integral size (" + std::to_string(num) + ") out of limits [1,16]");
+                return false;
+            } else {
+                lensize = static_cast<size_t>(num);
+            }
+            size_t align = (lensize <= maxalign) ? lensize : maxalign;
+            if ((align & (align - 1)) != 0) {
+                vm->runtimeError("format asks for alignment not power of 2");
+                return false;
+            }
+            apply_pack_alignment(current, align);
 
-            if (spec == 'b') {
-                vm->push(Value::integer(static_cast<int64_t>(static_cast<signed char>(buf[0]))));
-            } else if (spec == 'B') {
-                vm->push(Value::integer(static_cast<int64_t>(static_cast<unsigned char>(buf[0]))));
-            } else if (spec == 'h') {
-                int16_t v; std::memcpy(&v, buf, 2);
-                vm->push(Value::integer(v));
-            } else if (spec == 'H') {
-                uint16_t v; std::memcpy(&v, buf, 2);
-                vm->push(Value::integer(v));
-            } else if (spec == 'l') {
-                int32_t v; std::memcpy(&v, buf, sizeof(int32_t));
-                vm->push(Value::integer(v));
-            } else if (spec == 'L') {
-                uint32_t v; std::memcpy(&v, buf, sizeof(uint32_t));
-                vm->push(Value::integer(v));
-            } else if (spec == 'i') {
-                if (size == 1) {
-                    vm->push(Value::integer(static_cast<int8_t>(buf[0])));
-                } else if (size == 2) {
-                    int16_t v; std::memcpy(&v, buf, 2);
-                    vm->push(Value::integer(v));
-                } else if (size == 4) {
-                    int32_t v; std::memcpy(&v, buf, 4);
-                    vm->push(Value::integer(v));
-                } else {
-                    int64_t v; std::memcpy(&v, buf, 8);
-                    vm->push(Value::integer(v));
-                }
-            } else if (spec == 'I') {
-                if (size == 1) {
-                    vm->push(Value::integer(static_cast<uint8_t>(buf[0])));
-                } else if (size == 2) {
-                    uint16_t v; std::memcpy(&v, buf, 2);
-                    vm->push(Value::integer(v));
-                } else if (size == 4) {
-                    uint32_t v; std::memcpy(&v, buf, 4);
-                    vm->push(Value::integer(static_cast<int64_t>(v)));
-                } else {
-                    uint64_t v; std::memcpy(&v, buf, 8);
-                    vm->push(Value::number(static_cast<double>(v)));
-                }
-            } else if (spec == 'j') {
-                int64_t v; std::memcpy(&v, buf, sizeof(int64_t));
-                vm->push(Value::integer(v));
-            } else if (spec == 'J') {
-                uint64_t v; std::memcpy(&v, buf, sizeof(uint64_t));
-                vm->push(Value::integer(static_cast<int64_t>(v)));
-            } else if (spec == 'T') {
-                size_t v; std::memcpy(&v, buf, sizeof(size_t));
-                vm->push(Value::number(static_cast<double>(v)));
-            } else if (spec == 'f') {
-                float v; std::memcpy(&v, buf, 4);
-                vm->push(Value::number(v));
-            } else if (spec == 'n' || spec == 'd') {
-                double v; std::memcpy(&v, buf, 8);
-                vm->push(Value::number(v));
+            int64_t slen = 0;
+            if (!unpack_integer(vm, data, current, static_cast<int>(lensize), false, littleEndian, slen)) {
+                return false;
+            }
+            current += lensize;
+            if (slen < 0 || current + static_cast<size_t>(slen) > data.length()) {
+                vm->runtimeError("data string too short");
+                return false;
+            }
+            std::string s = data.substr(current, static_cast<size_t>(slen));
+            results.push_back(Value::runtimeString(vm->internString(s)));
+            current += static_cast<size_t>(slen);
+            continue;
+        }
+
+        if (spec == 'z') {
+            size_t null_pos = data.find('\0', current);
+            if (null_pos == std::string::npos) {
+                vm->runtimeError("unfinished string for format 'z'");
+                return false;
+            }
+            std::string s = data.substr(current, null_pos - current);
+            results.push_back(Value::runtimeString(vm->internString(s)));
+            current = null_pos + 1;
+            continue;
+        }
+
+        // Numeric formats
+        size_t specSize = 0;
+        bool isInt = true;
+        bool isSigned = true;
+        if (spec == 'b') { specSize = 1; isSigned = true; }
+        else if (spec == 'B') { specSize = 1; isSigned = false; }
+        else if (spec == 'h') { specSize = 2; isSigned = true; }
+        else if (spec == 'H') { specSize = 2; isSigned = false; }
+        else if (spec == 'l') { specSize = sizeof(long); isSigned = true; }
+        else if (spec == 'L') { specSize = sizeof(long); isSigned = false; }
+        else if (spec == 'j') { specSize = sizeof(int64_t); isSigned = true; }
+        else if (spec == 'J') { specSize = sizeof(uint64_t); isSigned = false; }
+        else if (spec == 'T') { specSize = sizeof(size_t); isSigned = false; }
+        else if (spec == 'i' || spec == 'I') {
+            isSigned = (spec == 'i');
+            int64_t num = parse_format_num(fmt, i);
+            if (num == -2) {
+                specSize = sizeof(int);
+            } else if (num < 1 || num > 16) {
+                vm->runtimeError("integral size (" + std::to_string(num) + ") out of limits [1,16]");
+                return false;
+            } else {
+                specSize = static_cast<size_t>(num);
+            }
+        } else if (spec == 'f') {
+            specSize = sizeof(float);
+            isInt = false;
+        } else if (spec == 'd' || spec == 'n') {
+            specSize = sizeof(double);
+            isInt = false;
+        } else {
+            vm->runtimeError("invalid format option '" + std::string(1, spec) + "'");
+            return false;
+        }
+
+        size_t itemAlign = (specSize <= maxalign) ? specSize : maxalign;
+        if ((itemAlign & (itemAlign - 1)) != 0) {
+            vm->runtimeError("format asks for alignment not power of 2");
+            return false;
+        }
+        apply_pack_alignment(current, itemAlign);
+
+        if (isInt) {
+            int64_t ival = 0;
+            if (!unpack_integer(vm, data, current, static_cast<int>(specSize), isSigned, littleEndian, ival)) {
+                return false;
+            }
+            results.push_back(vm->makeInteger(ival));
+            current += specSize;
+        } else {
+            if (current + specSize > data.length()) {
+                vm->runtimeError("data string too short");
+                return false;
+            }
+            if (spec == 'f') {
+                char buf[4];
+                std::memcpy(buf, &data[current], 4);
+                if (!littleEndian) swap_bytes(buf, 4);
+                float f;
+                std::memcpy(&f, buf, 4);
+                results.push_back(Value::number(static_cast<double>(f)));
+            } else {
+                char buf[8];
+                std::memcpy(buf, &data[current], 8);
+                if (!littleEndian) swap_bytes(buf, 8);
+                double d;
+                std::memcpy(&d, buf, 8);
+                results.push_back(Value::number(d));
             }
             current += specSize;
-            results++;
-        } else if (spec == 's') {
-            if (current + 8 > data.length()) { vm->runtimeError("data string too short"); return false; }
-            uint64_t len;
-            std::memcpy(&len, &data[current], 8);
-            if (!littleEndian) swap_endian(reinterpret_cast<char*>(&len), 8);
-            current += 8;
-            if (current + len > data.length()) { vm->runtimeError("data string too short"); return false; }
-            vm->push(Value::runtimeString(vm->internString(data.substr(current, len))));
-            current += len;
-            results++;
-        } else if (spec == 'z') {
-            size_t null_pos = data.find('\0', current);
-            if (null_pos == std::string::npos) { vm->runtimeError("unfinished string for format 'z'"); return false; }
-            vm->push(Value::runtimeString(vm->internString(data.substr(current, null_pos - current))));
-            current = null_pos + 1;
-            results++;
         }
     }
 
-    // Final tail alignment for unpack too
-    apply_alignment(current, currentAlignment);
+    results.push_back(vm->makeInteger(static_cast<int64_t>(current + 1)));
 
-    vm->push(Value::number(static_cast<double>(current + 1)));
-    results++;
-    
-    // Manual stack management to handle native return
-    std::vector<Value> res_vals;
-    for(int i=0; i<results; i++) res_vals.push_back(vm->pop());
-    std::reverse(res_vals.begin(), res_vals.end());
-    
-    for(int i=0; i<argCount; i++) vm->pop();
-    for(const auto& v : res_vals) vm->push(v);
-    vm->currentCoroutine()->lastResultCount = results;
+    for (int k = 0; k < argCount; k++) vm->pop();
+    for (const auto& val : results) {
+        vm->push(val);
+    }
+    vm->currentCoroutine()->lastResultCount = static_cast<int>(results.size());
     return true;
 }
 

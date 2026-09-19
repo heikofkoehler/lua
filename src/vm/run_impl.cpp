@@ -1794,6 +1794,189 @@ bool VM::run(size_t targetFrameCount) {
                 return true; // Return to resumer
             }
 
+            case OpCode::OP_FORPREP: {
+                uint8_t base = readByte();
+                uint16_t offset = readByte() | (readByte() << 8);
+                size_t actualBase = currentCoroutine_->frames.empty() ? base : (currentFrame().stackBase + base);
+                if (actualBase + 3 >= currentCoroutine_->stack.size()) {
+                    runtimeError("Invalid stack for numeric for");
+                    break;
+                }
+                Value& v_init = currentCoroutine_->stack[actualBase];
+                Value& v_limit = currentCoroutine_->stack[actualBase + 1];
+                Value& v_step = currentCoroutine_->stack[actualBase + 2];
+                Value& v_ext = currentCoroutine_->stack[actualBase + 3];
+
+                auto convertVal = [this](const Value& v, const char* name, int64_t& outI, double& outD, bool& isInt) -> bool {
+                    if (v.isInteger()) {
+                        outI = v.asInteger();
+                        outD = static_cast<double>(outI);
+                        isInt = true;
+                        return true;
+                    } else if (v.isNumber()) {
+                        outD = v.asNumber();
+                        isInt = false;
+                        return true;
+                    } else if (v.isString()) {
+                        if (stringToNumber(getStringValue(v), outD, outI, isInt)) {
+                            return true;
+                        }
+                    }
+                    runtimeError(std::string("'for' ") + name + " must be a number");
+                    return false;
+                };
+
+                int64_t initI = 0, limitI = 0, stepI = 0;
+                double initD = 0.0, limitD = 0.0, stepD = 0.0;
+                bool initIsInt = false, limitIsInt = false, stepIsInt = false;
+
+                if (!convertVal(v_init, "initial value", initI, initD, initIsInt)) break;
+                if (!convertVal(v_limit, "limit", limitI, limitD, limitIsInt)) break;
+                if (!convertVal(v_step, "step", stepI, stepD, stepIsInt)) break;
+
+                if ((stepIsInt && stepI == 0) || (!stepIsInt && stepD == 0.0)) {
+                    runtimeError("'for' step is zero");
+                    break;
+                }
+
+                if (initIsInt && stepIsInt) {
+                    bool skipLoop = false;
+                    if (limitIsInt) {
+                        if (stepI > 0 ? (initI > limitI) : (initI < limitI)) {
+                            skipLoop = true;
+                        }
+                    } else {
+                        if (std::isnan(limitD)) {
+                            skipLoop = true;
+                        } else if (stepI > 0) {
+                            if (limitD < static_cast<double>(std::numeric_limits<int64_t>::min())) {
+                                skipLoop = true;
+                            } else if (limitD >= static_cast<double>(std::numeric_limits<int64_t>::max())) {
+                                limitI = std::numeric_limits<int64_t>::max();
+                                if (initI > limitI) skipLoop = true;
+                            } else {
+                                limitI = static_cast<int64_t>(std::floor(limitD));
+                                if (initI > limitI) skipLoop = true;
+                            }
+                        } else {
+                            if (limitD > static_cast<double>(std::numeric_limits<int64_t>::max())) {
+                                skipLoop = true;
+                            } else if (limitD <= static_cast<double>(std::numeric_limits<int64_t>::min())) {
+                                limitI = std::numeric_limits<int64_t>::min();
+                                if (initI < limitI) skipLoop = true;
+                            } else {
+                                limitI = static_cast<int64_t>(std::ceil(limitD));
+                                if (initI < limitI) skipLoop = true;
+                            }
+                        }
+                    }
+
+                    if (skipLoop) {
+                        currentFrame().ip += offset;
+                        break;
+                    }
+
+                    v_init = makeInteger(initI);
+                    v_limit = makeInteger(limitI);
+                    v_step = makeInteger(stepI);
+                    if (v_init.isObj()) writeBarrierBackward(currentCoroutine_, v_init.asObj());
+                    if (v_limit.isObj()) writeBarrierBackward(currentCoroutine_, v_limit.asObj());
+                    if (v_step.isObj()) writeBarrierBackward(currentCoroutine_, v_step.asObj());
+                    v_ext = v_init;
+                } else {
+                    double initF = initIsInt ? static_cast<double>(initI) : initD;
+                    double limitF = limitIsInt ? static_cast<double>(limitI) : limitD;
+                    double stepF = stepIsInt ? static_cast<double>(stepI) : stepD;
+
+                    bool skipLoop = false;
+                    if (std::isnan(initF) || std::isnan(limitF) || std::isnan(stepF)) {
+                        skipLoop = true;
+                    } else if (stepF > 0 ? (initF > limitF) : (initF < limitF)) {
+                        skipLoop = true;
+                    }
+
+                    if (skipLoop) {
+                        currentFrame().ip += offset;
+                        break;
+                    }
+
+                    v_init = Value::number(initF);
+                    v_limit = Value::number(limitF);
+                    v_step = Value::number(stepF);
+                    v_ext = v_init;
+                }
+                break;
+            }
+
+            case OpCode::OP_FORLOOP: {
+                uint8_t base = readByte();
+                uint16_t offset = readByte() | (readByte() << 8);
+                size_t actualBase = currentCoroutine_->frames.empty() ? base : (currentFrame().stackBase + base);
+                if (actualBase + 3 >= currentCoroutine_->stack.size()) {
+                    runtimeError("Invalid stack for numeric for loop");
+                    break;
+                }
+                Value& v_init = currentCoroutine_->stack[actualBase];
+                Value& v_limit = currentCoroutine_->stack[actualBase + 1];
+                Value& v_step = currentCoroutine_->stack[actualBase + 2];
+                Value& v_ext = currentCoroutine_->stack[actualBase + 3];
+
+                bool canContinue = false;
+                if (v_init.isInteger() && v_step.isInteger()) {
+                    int64_t initI = v_init.asInteger();
+                    int64_t stepI = v_step.asInteger();
+                    int64_t limitI = v_limit.asInteger();
+
+                    int64_t nextI;
+                    bool overflow = __builtin_add_overflow(initI, stepI, &nextI);
+                    if (!overflow) {
+                        canContinue = (stepI > 0) ? (nextI <= limitI) : (nextI >= limitI);
+                    }
+                    if (canContinue) {
+                        v_init = makeInteger(nextI);
+                        if (v_init.isObj()) writeBarrierBackward(currentCoroutine_, v_init.asObj());
+                        v_ext = v_init;
+                        currentFrame().ip -= offset;
+
+                        // JIT Hotness tracking
+                        if (currentFrame().closure) {
+                            FunctionObject* func = currentFrame().closure->function();
+                            if (isJitEnabled() && !func->getJITCode() && func->incrementHotness() >= 50) {
+#ifdef USE_JIT
+                                if (!jit()->compile(func)) {
+                                    func->resetHotness(-1000);
+                                }
+#endif
+                            }
+                        }
+                    }
+                } else {
+                    double initF = v_init.asNumber();
+                    double stepF = v_step.asNumber();
+                    double limitF = v_limit.asNumber();
+                    double nextF = initF + stepF;
+                    canContinue = (stepF > 0) ? (nextF <= limitF) : (nextF >= limitF);
+                    if (canContinue) {
+                        v_init = Value::number(nextF);
+                        v_ext = v_init;
+                        currentFrame().ip -= offset;
+
+                        // JIT Hotness tracking
+                        if (currentFrame().closure) {
+                            FunctionObject* func = currentFrame().closure->function();
+                            if (isJitEnabled() && !func->getJITCode() && func->incrementHotness() >= 50) {
+#ifdef USE_JIT
+                                if (!jit()->compile(func)) {
+                                    func->resetHotness(-1000);
+                                }
+#endif
+                            }
+                        }
+                    }
+                }
+                break;
+            }
+
             case OpCode::OP_RETURN: {
                 size_t stackBase = currentFrame().stackBase;
                 currentFrame().ip -= 1;

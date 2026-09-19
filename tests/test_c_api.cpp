@@ -35,12 +35,9 @@ int main() {
     assert(lua_gettop(L) == 4);
     assert(lua_tonumber(L, -1) == 42.5);
     
-    // C Function test
     auto my_cfunc = [](lua_State* L) -> int {
         // arg 1 should be 10
-        int top = lua_gettop(L);
         double n = lua_tonumber(L, 1);
-        std::cout << "DEBUG cfunc: top=" << top << " arg1=" << n << std::endl;
         lua_pushnumber(L, n * 2);
         return 1;
     };
@@ -49,7 +46,6 @@ int main() {
     lua_pcall(L, 1, 1, 0);
     
     // Result should be 20
-    std::cout << "DEBUG post-call: top=" << lua_gettop(L) << " result=" << lua_tonumber(L, -1) << std::endl;
     assert(lua_tonumber(L, -1) == 20);
     
     // Table tests

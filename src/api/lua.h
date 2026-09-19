@@ -38,11 +38,14 @@ void lua_insert(lua_State *L, int idx);
 void lua_replace(lua_State *L, int idx);
 void lua_copy(lua_State *L, int fromidx, int toidx);
 
+#include "luaconf.h"
+
 // Push functions
 void lua_pushnil(lua_State *L);
 void lua_pushnumber(lua_State *L, double n);
 void lua_pushinteger(lua_State *L, long long n);
 void lua_pushstring(lua_State *L, const char *s);
+const char *lua_pushfstring(lua_State *L, const char *fmt, ...);
 void lua_pushboolean(lua_State *L, int b);
 void lua_pushcfunction(lua_State *L, lua_CFunction f);
 
@@ -86,8 +89,22 @@ int lua_setmetatable(lua_State *L, int objindex);
 // Userdata
 void *lua_newuserdata(lua_State *L, size_t size);
 
-// Calls
+// Memory allocation
+typedef void * (*lua_Alloc) (void *ud, void *ptr, size_t osize, size_t nsize);
+lua_Alloc lua_getallocf(lua_State *L, void **ud);
+
+// Additional push functions
+const char *lua_pushlstring(lua_State *L, const char *s, size_t len);
+#define lua_pushliteral(L, s) lua_pushstring(L, "" s)
+typedef void * (*lua_Free) (void *ud, void *ptr, size_t osize, size_t nsize);
+const char *lua_pushexternalstring(lua_State *L, const char *s, size_t len, lua_Free falloc, void *ud);
+
+// Error and Calls
+int lua_error(lua_State *L);
 int lua_pcall(lua_State *L, int nargs, int nresults, int errfunc);
+#define lua_call(L, n, r) lua_pcall(L, (n), (r), 0)
+
+#define LUA_REGISTRYINDEX (-1001000)
 
 // Auxiliary library (combined for now)
 #define luaL_newstate() lua_newstate()
