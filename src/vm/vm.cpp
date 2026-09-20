@@ -1968,6 +1968,50 @@ Value VM::getMetamethod(const Value& obj, const std::string& method) {
     return mm;
 }
 
+Value VM::getTable(const Value& tableVal, const Value& key) {
+    Value t = tableVal;
+    for (int loop = 0; loop < 100; loop++) {
+        if (t.isTable()) {
+            TableObject* table = t.asTableObj();
+            Value value = table->get(key);
+            if (!value.isNil() || table->getMetatable().isNil()) {
+                return value;
+            }
+        }
+
+        if (key.isString()) {
+            Value mm = getMetamethod(t, getStringValue(key));
+            if (!mm.isNil()) {
+                return mm;
+            }
+        }
+
+        Value indexMethod = getMetamethod(t, "__index");
+        if (indexMethod.isNil()) {
+            if (!t.isTable()) {
+                runtimeError("attempt to index a " + t.typeToString() + " value");
+            }
+            return Value::nil();
+        } else if (indexMethod.isFunction()) {
+            push(indexMethod);
+            push(t);
+            push(key);
+            size_t prevFrames = currentCoroutine_->frames.size();
+            if (!callValue(2, 2)) return Value::nil();
+            if (currentCoroutine_->frames.size() > prevFrames) {
+                if (!run(prevFrames)) return Value::nil();
+            }
+            return pop();
+        } else if (indexMethod.isTable()) {
+            t = indexMethod;
+        } else {
+            t = indexMethod;
+        }
+    }
+    runtimeError("'__index' chain too long; possible loop");
+    return Value::nil();
+}
+
 bool VM::callBinaryMetamethod(const Value& a, const Value& b, const std::string& method) {
     Value mm = getMetamethod(a, method);
     if (mm.isNil()) {

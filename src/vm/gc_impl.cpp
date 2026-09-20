@@ -14,10 +14,10 @@ void VM::addObject(GCObject* object) {
     gcObjects_ = object;
     bytesAllocated_ += object->size();
 
-    // If we're in the MARK phase, new objects must be grayed 
-    // to ensure they are not swept at the end of the cycle.
-    if (gcState_ == GCState::MARK || gcState_ == GCState::ATOMIC) {
-        grayObject(object);
+    // In incremental GC: if a cycle is in progress (MARK, ATOMIC, or SWEEP),
+    // newly allocated objects must be marked black so they are not swept prematurely.
+    if (gcState_ != GCState::PAUSE) {
+        object->setColor(GCObject::Color::BLACK);
     }
 }
 
@@ -50,18 +50,26 @@ void VM::markRoots() {
         markValue(val);
     }
 
-    if (mainCoroutine_) {
-        markObject(mainCoroutine_);
-        for (const auto& vec : mainCoroutine_->pendingReturns) {
+    auto markCoroutineRoot = [this](CoroutineObject* co) {
+        if (!co || co->color() == GCObject::Color::GRAY) return;
+        co->setColor(GCObject::Color::GRAY);
+        grayStack_.push_back(co);
+        for (const auto& vec : co->pendingReturns) {
             for (const auto& val : vec) markValue(val);
         }
+    };
+
+    for (CoroutineObject* co : coroutines_) {
+        markCoroutineRoot(co);
     }
-    if (currentCoroutine_) {
-        markObject(currentCoroutine_);
-        for (const auto& vec : currentCoroutine_->pendingReturns) {
-            for (const auto& val : vec) markValue(val);
-        }
-    }
+    markCoroutineRoot(mainCoroutine_);
+    markCoroutineRoot(currentCoroutine_);
+}
+
+static void blackenObject(VM* vm, GCObject* object);
+
+static inline bool isCollectableWeak(const Value& val) {
+    return val.isObj() && !val.isString() && !val.isInt64();
 }
 
 void VM::processWeakTables() {
@@ -69,6 +77,7 @@ void VM::processWeakTables() {
     do {
         changed = false;
         for (TableObject* table : weakTables_) {
+            if (table->color() == GCObject::Color::WHITE) continue;
             Value modeVal = getMetamethod(Value::table(table), "__mode");
             bool weakKeys = false;
             bool weakValues = false;
@@ -79,10 +88,10 @@ void VM::processWeakTables() {
             }
 
             if (weakKeys && !weakValues) {
-                // Ephemeron logic: if key is marked but value is not, mark value
+                // Ephemeron logic: if key is marked (or not collectable) but value is not, mark value
                 for (const auto& pair : table->data()) {
                     bool keyMarked = true;
-                    if (pair.first.isObj() && pair.first.asObj()->color() == GCObject::Color::WHITE) {
+                    if (isCollectableWeak(pair.first) && pair.first.asObj()->color() == GCObject::Color::WHITE) {
                         keyMarked = false;
                     }
 
@@ -95,11 +104,17 @@ void VM::processWeakTables() {
                 }
             }
         }
+        while (!grayStack_.empty()) {
+            GCObject* object = grayStack_.back();
+            grayStack_.pop_back();
+            blackenObject(this, object);
+        }
     } while (changed);
 }
 
 void VM::removeUnmarkedWeakEntries() {
     for (TableObject* table : weakTables_) {
+        if (table->color() == GCObject::Color::WHITE) continue;
         Value modeVal = getMetamethod(Value::table(table), "__mode");
         bool weakKeys = false;
         bool weakValues = false;
@@ -113,10 +128,10 @@ void VM::removeUnmarkedWeakEntries() {
         std::vector<Value> toRemove;
         for (const auto& pair : table->data()) {
             bool remove = false;
-            if (weakKeys && pair.first.isObj() && pair.first.asObj()->color() == GCObject::Color::WHITE) {
+            if (weakKeys && isCollectableWeak(pair.first) && pair.first.asObj()->color() == GCObject::Color::WHITE) {
                 remove = true;
             }
-            if (weakValues && pair.second.isObj() && pair.second.asObj()->color() == GCObject::Color::WHITE) {
+            if (weakValues && isCollectableWeak(pair.second) && pair.second.asObj()->color() == GCObject::Color::WHITE) {
                 remove = true;
             }
             if (remove) {
@@ -171,6 +186,10 @@ void VM::freeObject(GCObject* object) {
         case GCObject::Type::INT64: delete static_cast<Int64Object*>(object); break;
         case GCObject::Type::COROUTINE: {
             CoroutineObject* co = static_cast<CoroutineObject*>(object);
+            // Close any open upvalues to prevent dangling pointers into freed stack
+            if (!co->openUpvalues.empty()) {
+                closeUpvalues(0, co);
+            }
             for (auto it = coroutines_.begin(); it != coroutines_.end(); ++it) {
                 if (*it == co) {
                     coroutines_.erase(it);
@@ -237,8 +256,8 @@ static void blackenObject(VM* vm, GCObject* object) {
             }
 
             for (const auto& pair : table->data()) {
-                if (!weakKeys) vm->markValue(pair.first);
-                if (!weakValues) vm->markValue(pair.second);
+                if (!weakKeys || !isCollectableWeak(pair.first)) vm->markValue(pair.first);
+                if ((!weakValues && !weakKeys) || !isCollectableWeak(pair.second)) vm->markValue(pair.second);
             }
             break;
         }
@@ -311,6 +330,26 @@ void VM::gcStep() {
                     grayStack_.pop_back();
                     blackenObject(this, object);
                 } else {
+                    // All objects marked; now process weak tables before sweeping
+                    weakTables_.clear();
+                    GCObject* obj = gcObjects_;
+                    while (obj) {
+                        if (obj->type() == GCObject::Type::TABLE) {
+                            TableObject* table = static_cast<TableObject*>(obj);
+                            Value modeVal = getMetamethod(Value::table(table), "__mode");
+                            if (modeVal.isString()) {
+                                weakTables_.push_back(table);
+                            }
+                        }
+                        obj = obj->next();
+                    }
+                    processWeakTables();
+                    while (!grayStack_.empty()) {
+                        GCObject* object = grayStack_.back();
+                        grayStack_.pop_back();
+                        blackenObject(this, object);
+                    }
+                    removeUnmarkedWeakEntries();
                     gcState_ = GCState::SWEEP;
                 }
                 break;
@@ -358,11 +397,14 @@ void VM::gcStep() {
             break;
         }
         case GCState::MARK: {
-            if (!grayStack_.empty()) {
+            size_t batch = 0;
+            while (!grayStack_.empty() && batch < 16) {
                 GCObject* object = grayStack_.back();
                 grayStack_.pop_back();
                 blackenObject(this, object);
-            } else {
+                batch++;
+            }
+            if (grayStack_.empty()) {
                 gcState_ = GCState::ATOMIC;
             }
             break;
@@ -382,7 +424,7 @@ void VM::gcStep() {
             weakTables_.clear();
             GCObject* obj = gcObjects_;
             while (obj) {
-                if (obj->type() == GCObject::Type::TABLE && obj->color() == GCObject::Color::BLACK) {
+                if (obj->type() == GCObject::Type::TABLE) {
                     TableObject* table = static_cast<TableObject*>(obj);
                     Value modeVal = getMetamethod(Value::table(table), "__mode");
                     if (modeVal.isString()) {

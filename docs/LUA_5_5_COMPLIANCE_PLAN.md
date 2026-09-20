@@ -285,11 +285,11 @@ Each test file in `lua-5.5.0-tests/` was systematically evaluated against `./bui
 - *Milestone Check:* `sort.lua`, `nextvar.lua`, `utf8.lua`, `tpack.lua`, `attrib.lua` pass (100% Clean PASS). Phase 1-3 milestone tests (14 suites) and all 207 internal tests continue to pass 100%.
 
 ### Phase 5: Garbage Collector & Memory Hardening
-- [ ] Refactor `blackenObject()` in `src/vm/gc_impl.cpp` to respect weak table keys/values (`__mode`).
-- [ ] Verify ephemeron table processing and sweep cleanup in `removeUnmarkedWeakEntries()`.
-- [ ] Add open upvalue closing during coroutine finalization / GC sweep to eliminate dangling pointers.
-- [ ] Wrap runtime execution hooks to ensure Lua errors in `__close` metamethods are caught by enclosing `pcall` protected frames.
-- *Milestone Check:* `closure.lua`, `gengc.lua`, `gc.lua`, `cstack.lua` pass without timeouts or segfaults.
+- [x] Refactor `blackenObject()` in `src/vm/gc_impl.cpp` to respect weak table keys/values (`__mode`).
+- [x] Verify ephemeron table processing and sweep cleanup in `removeUnmarkedWeakEntries()`.
+- [x] Add open upvalue closing during coroutine finalization / GC sweep to eliminate dangling pointers.
+- [x] Wrap runtime execution hooks to ensure Lua errors in `__close` metamethods are caught by enclosing `pcall` protected frames.
+- *Milestone Check:* `closure.lua`, `gengc.lua`, `gc.lua`, `cstack.lua` pass without timeouts or segfaults (100% Clean PASS). Phase 1-4 milestone tests (19 suites) and all 207 internal tests continue to pass 100%.
 
 ### Phase 6: Master Suite Verification & Regression Testing
 - [ ] Run complete master suite: `./build/lua lua-5.5.0-tests/all.lua`.

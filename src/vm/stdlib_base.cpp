@@ -63,9 +63,43 @@ bool native_collectgarbage(VM* vm, int argCount) {
         vm->currentCoroutine()->lastResultCount = 1;
         return true;
     } else if (opt == "step") {
-        vm->collectGarbage();
+        if (vm->gcMode() == VM::GCMode::GENERATIONAL) {
+            do {
+                vm->gcStep();
+            } while (vm->gcState() != VM::GCState::PAUSE);
+            for(int i=0; i<argCount; i++) vm->pop();
+            vm->push(Value::boolean(true));
+            vm->currentCoroutine()->lastResultCount = 1;
+            return true;
+        }
+
+        // Get step size hint (default 0 = just one step)
+        int64_t siz = 0;
+        if (argCount >= 2) {
+            Value szVal = vm->peek(0);
+            if (szVal.isInteger()) siz = szVal.asInteger();
+            else if (szVal.isNumber()) siz = static_cast<int64_t>(szVal.asNumber());
+        }
         for(int i=0; i<argCount; i++) vm->pop();
-        vm->push(Value::boolean(true));
+
+        // Perform incremental GC work. The 'siz' controls how many steps.
+        // A step size of 0 means one single step; larger sizes mean more work.
+        // We return true when a complete collection cycle finishes (state->PAUSE).
+        // In Lua, the step size parameter 'siz' is given in Kbytes.
+        // A value of 0 means a basic minimal step (1 step).
+        // Each basic step processes ~256 bytes, so 1 KB corresponds to ~4 steps.
+        int steps = (siz <= 0) ? 1 : static_cast<int>(siz * 4);
+
+        bool completed = false;
+        for (int i = 0; i < steps; i++) {
+            vm->gcStep();
+            if (vm->gcState() == VM::GCState::PAUSE) {
+                completed = true;
+                break;
+            }
+        }
+
+        vm->push(Value::boolean(completed));
         vm->currentCoroutine()->lastResultCount = 1;
         return true;
     } else if (opt == "stop") {

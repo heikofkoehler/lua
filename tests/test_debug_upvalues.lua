@@ -37,8 +37,7 @@ assert(f1() == 42)
 assert(f2() == 42)
 
 -- 2. Error cases for upvalueid and upvaluejoin
-local ok, err = pcall(debug.upvalueid, f1, 99)
-assert(ok == false, "out-of-bounds upvalueid should error")
+assert(debug.upvalueid(f1, 99) == nil, "out-of-bounds upvalueid should return nil")
 
 ok, err = pcall(debug.upvaluejoin, f1, 10, f2, 2)
 assert(ok == false, "out-of-bounds f1 upvaluejoin should error")

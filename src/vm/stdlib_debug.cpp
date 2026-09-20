@@ -297,8 +297,10 @@ bool native_debug_upvalueid(VM* vm, int argCount) {
         vm->push(Value::number(reinterpret_cast<uint64_t>(upvalue)));
         vm->currentCoroutine()->lastResultCount = 1;
     } else {
-        vm->runtimeError("invalid upvalue index");
-        return false;
+        // Out-of-range: return nil (reference Lua returns nil, not an error)
+        vm->pop(); vm->pop();
+        vm->push(Value::nil());
+        vm->currentCoroutine()->lastResultCount = 1;
     }
     return true;
 }

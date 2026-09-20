@@ -247,6 +247,7 @@ public:
 
     // Metamethod helper
     Value getMetamethod(const Value& obj, const std::string& method);
+    Value getTable(const Value& tableVal, const Value& key);
     bool callBinaryMetamethod(const Value& a, const Value& b, const std::string& method);
     bool callValue(int argCount, int retCount, bool isTailCall = false, const char* metamethodName = nullptr, int extraArgs = 0);
     void callHook(const char* event, int line = -1);

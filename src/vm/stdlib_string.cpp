@@ -17,12 +17,15 @@
 namespace {
 
 // Lua Pattern Matching Implementation
+#define MAXCCALLS 200  // maximum recursion depth in pattern matching
+
 struct MatchState {
     VM* vm;
     const char* src_init;  // init of source string
     const char* src_end;   // end of source string
     const char* p_end;     // end of pattern
     int level;             // total number of captures
+    int matchdepth;        // current recursion depth
     struct {
         const char* init;
         ptrdiff_t len;
@@ -184,7 +187,10 @@ const char* match_frontier(MatchState* ms, const char* s, const char* p) {
 }
 
 const char* match(MatchState* ms, const char* s, const char* p) {
-    if (p == ms->p_end) return s;
+    if (ms->matchdepth-- == 0)
+        ms->vm->runtimeError("pattern too complex");
+    const char* res;
+    if (p == ms->p_end) { res = s; goto ret; }
     
     switch (*p) {
         case '(':
@@ -194,47 +200,51 @@ const char* match(MatchState* ms, const char* s, const char* p) {
                 ms->capture[level].init = s;
                 ms->capture[level].len = -1;
                 ms->level = level + 1;
-                const char* res = match(ms, s, p + 2);
+                res = match(ms, s, p + 2);
                 if (!res) ms->level--;
-                return res;
+                goto ret;
             }
-            return start_capture(ms, s, p + 1);
+            res = start_capture(ms, s, p + 1); goto ret;
         case ')':
-            return end_capture(ms, s, p + 1);
+            res = end_capture(ms, s, p + 1); goto ret;
         case '%':
             if (p[1] == 'b') { // balanced string
                 if (p + 3 >= ms->p_end) ms->vm->runtimeError("malformed pattern (missing arguments to '%b')");
-                const char* res = match_balanced(ms, s, p + 2);
-                if (res) return match(ms, res, p + 4);
-                return nullptr;
+                res = match_balanced(ms, s, p + 2);
+                if (res) res = match(ms, res, p + 4);
+                goto ret;
             }
             if (p[1] == 'f') { // frontier pattern
                 p += 2;
                 if (*p != '[') ms->vm->runtimeError("missing '[' after '%f' in pattern");
                 const char* ep = class_end(ms, p);
-                const char* res = match_frontier(ms, s, p);
-                if (res) return match(ms, res, ep);
-                return nullptr;
+                res = match_frontier(ms, s, p);
+                if (res) res = match(ms, res, ep);
+                goto ret;
             }
             if (isdigit((unsigned char)p[1])) {
-                const char* res = match_capture(ms, s, p[1]);
-                if (res) return match(ms, res, p + 2);
-                return nullptr;
+                res = match_capture(ms, s, p[1]);
+                if (res) res = match(ms, res, p + 2);
+                goto ret;
             }
             [[fallthrough]];
         case '$':
-            if (p + 1 == ms->p_end) return (s == ms->src_end) ? s : nullptr;
+            if (p + 1 == ms->p_end) { res = (s == ms->src_end) ? s : nullptr; goto ret; }
             [[fallthrough]];
         default: {
             const char* ep = class_end(ms, p);
             bool m = (s < ms->src_end && single_match(*s, p, ep));
             if (ep < ms->p_end && strchr("*+-?", *ep)) {
-                return match_quant(ms, s, p, ep);
+                res = match_quant(ms, s, p, ep);
             } else {
-                return m ? match(ms, s + 1, ep) : nullptr;
+                res = m ? match(ms, s + 1, ep) : nullptr;
             }
+            goto ret;
         }
     }
+  ret:
+    ms->matchdepth++;
+    return res;
 }
 
 void push_captures(MatchState* ms, const char* s, const char* e) {
@@ -433,6 +443,7 @@ bool native_string_find(VM* vm, int argCount) {
         ms.src_init = s;
         ms.src_end = s + s_len;
         ms.p_end = p + p_str.length();
+        ms.matchdepth = MAXCCALLS;
         
         bool anchor = (*p == '^');
         if (anchor) p++;
@@ -440,6 +451,7 @@ bool native_string_find(VM* vm, int argCount) {
         const char* s1 = s + start - 1;
         do {
             ms.level = 0;
+            ms.matchdepth = MAXCCALLS;
             const char* res = match(&ms, s1, p);
             if (res) {
                 for (int i = 0; i < argCount; i++) vm->pop();
@@ -482,6 +494,7 @@ bool native_string_match(VM* vm, int argCount) {
     ms.src_init = s;
     ms.src_end = s + s_len;
     ms.p_end = p + p_str.length();
+    ms.matchdepth = MAXCCALLS;
     
     bool anchor = (*p == '^');
     if (anchor) p++;
@@ -489,6 +502,7 @@ bool native_string_match(VM* vm, int argCount) {
     const char* s1 = s + start - 1;
     do {
         ms.level = 0;
+        ms.matchdepth = MAXCCALLS;
         const char* res = match(&ms, s1, p);
         if (res) {
             for (int i = 0; i < argCount; i++) vm->pop();
@@ -526,9 +540,11 @@ bool native_string_gmatch_step(VM* vm, int argCount) {
     ms.src_init = s;
     ms.src_end = s + s_len;
     ms.p_end = p + p_str.length();
+    ms.matchdepth = MAXCCALLS;
 
     for (const char* s1 = s + start - 1; s1 <= ms.src_end; s1++) {
         ms.level = 0;
+        ms.matchdepth = MAXCCALLS;
         const char* res = match(&ms, s1, p);
         if (res) {
             int next_pos = (res == s1) ? (static_cast<int>(res - s) + 2) : (static_cast<int>(res - s) + 1);
@@ -614,6 +630,7 @@ bool native_string_gsub(VM* vm, int argCount) {
     ms.src_init = s;
     ms.src_end = s + s_len;
     ms.p_end = p + p_str.length();
+    ms.matchdepth = MAXCCALLS;
 
     bool anchor = (*p == '^');
     if (anchor) p++;
@@ -623,6 +640,7 @@ bool native_string_gsub(VM* vm, int argCount) {
     const char* s1 = s;
     while (s1 <= ms.src_end && (max_subs < 0 || count < max_subs)) {
         ms.level = 0;
+        ms.matchdepth = MAXCCALLS;
         const char* res = match(&ms, s1, p);
         if (res) {
             count++;
@@ -643,9 +661,20 @@ bool native_string_gsub(VM* vm, int argCount) {
                 Value key = (ms.level == 0) ? 
                     Value::runtimeString(vm->internString(std::string(s1, res - s1))) :
                     Value::runtimeString(vm->internString(std::string(ms.capture[0].init, ms.capture[0].len)));
-                Value val = replVal.asTableObj()->get(key);
-                if (!val.isNil()) result.append(val.toString());
-                else result.append(s1, res - s1);
+                struct NonYieldableGuard {
+                    CoroutineObject* co;
+                    NonYieldableGuard(CoroutineObject* c) : co(c) { if (co) co->nonYieldableCount++; }
+                    ~NonYieldableGuard() { if (co) co->nonYieldableCount--; }
+                } nyGuard(vm->currentCoroutine());
+                Value val = vm->getTable(replVal, key);
+                if (val.isString() || val.isNumber()) {
+                    result.append(val.toString());
+                } else if (val.isFalsey()) {
+                    result.append(s1, res - s1);
+                } else {
+                    vm->runtimeError("invalid replacement value (a " + val.typeToString() + ")");
+                    return false;
+                }
             } else if (replVal.isFunction()) {
                 int ncaps = (ms.level == 0) ? 1 : ms.level;
                 vm->push(replVal);
@@ -664,11 +693,17 @@ bool native_string_gsub(VM* vm, int argCount) {
 
                 if (vm->callValue(ncaps, 2)) {
                     if (vm->currentCoroutine()->frames.size() > baseFrames) {
-                        vm->run(baseFrames);
+                        if (!vm->run(baseFrames)) return false;
                     }
                     Value v = vm->pop();
-                    if (!v.isNil()) result.append(v.toString());
-                    else result.append(s1, res - s1);
+                    if (v.isString() || v.isNumber()) {
+                        result.append(v.toString());
+                    } else if (v.isFalsey()) {
+                        result.append(s1, res - s1);
+                    } else {
+                        vm->runtimeError("invalid replacement value (a " + v.typeToString() + ")");
+                        return false;
+                    }
                 } else return false;
             }
             if (res == s1) { if (s1 < ms.src_end) result.push_back(*s1); s1++; }

@@ -1933,6 +1933,9 @@ bool VM::run(size_t targetFrameCount) {
                         canContinue = (stepI > 0) ? (nextI <= limitI) : (nextI >= limitI);
                     }
                     if (canContinue) {
+                        // Close any upvalues capturing the loop variable (slot base+3)
+                        // so each iteration's closures capture separate copies of 'i'
+                        closeUpvalues(actualBase + 3);
                         v_init = makeInteger(nextI);
                         if (v_init.isObj()) writeBarrierBackward(currentCoroutine_, v_init.asObj());
                         v_ext = v_init;
@@ -1957,6 +1960,7 @@ bool VM::run(size_t targetFrameCount) {
                     double nextF = initF + stepF;
                     canContinue = (stepF > 0) ? (nextF <= limitF) : (nextF >= limitF);
                     if (canContinue) {
+                        closeUpvalues(actualBase + 3);
                         v_init = Value::number(nextF);
                         v_ext = v_init;
                         currentFrame().ip -= offset;
