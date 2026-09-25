@@ -40,6 +40,9 @@ public:
 
     void set(const std::string& key, const Value& value);
 
+    void erase(const Value& key);
+    void cleanNilEntries();
+
     Value get(const Value& key) const {
         if (key.isNil() || (key.isFloat() && std::isnan(key.asNumber()))) {
             return Value::nil();
@@ -61,17 +64,7 @@ public:
         return it != map_.end() && !it->second.isNil();
     }
 
-    size_t length() const {
-        size_t n = 0;
-        while (true) {
-            auto it = map_.find(Value::number(static_cast<double>(n + 1)));
-            if (it == map_.end() || it->second.isNil()) {
-                break;
-            }
-            n++;
-        }
-        return n;
-    }
+    size_t length() const;
 
     // Iteration support
     // Returns pair<key, value>. If key is nil, returns first pair.
@@ -106,6 +99,7 @@ private:
     std::unordered_map<Value, Value, ValueHash, ValueEqual> map_;
     Value metatable_ = Value::nil();
     size_t capacity_ = 0;
+    mutable size_t lastLen_ = 0;
 
     Value getByString(const Value& key) const;
 };

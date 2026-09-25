@@ -36,8 +36,10 @@ public:
     // Generational state
     uint8_t age() const { return age_; }
     void setAge(uint8_t age) { age_ = age; }
-    bool isOld() const { return age_ >= 2; }
-    void setOld() { age_ = 2; }
+    bool isOld() const { return age_ >= 1; }
+    void setOld() { age_ = 1; }
+    bool isRemembered() const { return isRemembered_; }
+    void setRemembered(bool r) { isRemembered_ = r; }
 
     // Tri-color marking colors
     Color color() const { return color_; }
@@ -68,6 +70,7 @@ private:
     GCObject* next_;  // Intrusive linked list
     bool isFinalized_;
     uint8_t age_;
+    bool isRemembered_ = false;
 };
 
 #endif // LUA_GC_HPP

@@ -348,7 +348,9 @@ bool native_table_unpack(VM* vm, int argCount) {
     }
     
     uint64_t n = static_cast<uint64_t>(j) - static_cast<uint64_t>(i);
-    if (n >= static_cast<uint64_t>(INT32_MAX) || n >= 1000000) {
+    size_t stackLimit = !vm->isHandlingError() ? VM::STACK_LIMIT : VM::STACK_MAX;
+    if (n >= static_cast<uint64_t>(INT32_MAX) || 
+        (vm->currentCoroutine()->stack.size() + n + 1 >= stackLimit)) {
         vm->runtimeError("too many results to unpack");
         return false;
     }
@@ -512,18 +514,13 @@ static bool auxsort(VM* vm, const Value& compVal, std::vector<Value>& arr, int64
 }
 
 bool native_table_sort(VM* vm, int argCount) {
-    if (argCount < 1) {
-        vm->runtimeError("table.sort expects at least 1 argument");
+    Value tableVal = (argCount >= 1) ? vm->peek(argCount - 1) : Value::nil();
+    if (!tableVal.isTable()) {
+        vm->typeError(1, "table", tableVal, argCount, "sort");
         return false;
     }
 
     Value compVal = (argCount >= 2) ? vm->peek(argCount - 2) : Value::nil();
-    Value tableVal = vm->peek(argCount - 1);
-
-    if (!tableVal.isTable()) {
-        vm->runtimeError("table.sort expects table as first argument");
-        return false;
-    }
 
     int64_t n = 0;
     if (!get_table_length(vm, tableVal, n)) return false;

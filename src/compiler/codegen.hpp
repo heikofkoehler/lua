@@ -66,6 +66,7 @@ private:
         bool isClose;
         size_t startPC;   // Instruction offset where local enters scope
         uint32_t seq = 0; // Declaration sequence
+        size_t locVarIndex = 0;
     };
 
     // Upvalue tracking
@@ -90,6 +91,7 @@ private:
         int activeVarCount;
         std::vector<ActiveVar> activeVars;
         int blockDepth;
+        int line;
     };
 
     struct Goto {
@@ -126,6 +128,7 @@ private:
     // Compiler state for nested function compilation
     struct CompilerState {
         std::unique_ptr<Chunk> chunk;
+        int currentLine = 1;
         std::vector<Local> locals;
         std::vector<Upvalue> upvalues;
         std::vector<LocalVarInfo> finishedLocals;
@@ -146,6 +149,7 @@ private:
         std::unordered_set<std::string> shadowedLocals;
         bool envDeclaredGlobal = false;
         uint32_t varSequence = 0;
+        int lineDefined = 0;
     };
 
     std::unique_ptr<Chunk> chunk_;
@@ -172,11 +176,13 @@ private:
     std::unordered_set<std::string> shadowedLocals_;
     bool envDeclaredGlobal_ = false;
     uint32_t varSequence_ = 0;
+    int lineDefined_ = 0;
 
     // Context for expression return values
     uint8_t expectedRetCount_; // 0=all (multires), 1=single (default), >1=specific count
     bool isTailCall_ = false;  // Whether current call should be compiled as tail call
     std::string expectedName_ = ""; // For naming anonymous functions assigned to variables
+    int exprLineOverride_ = 0;
 
     // Loop context for break statements
     struct LoopContext {

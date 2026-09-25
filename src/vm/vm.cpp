@@ -111,7 +111,7 @@ void VM::close() {
     }
 
     // 3. Run all finalizers
-    runFinalizers();
+    runFinalizers(true);
 }
 
 VM::~VM() {
@@ -248,8 +248,8 @@ TableObject* VM::createTable(size_t nseq, size_t nrec) {
     return allocateObject<TableObject>(nseq, nrec);
 }
 
-UserdataObject* VM::createUserdata(void* data) {
-    return allocateObject<UserdataObject>(data);
+UserdataObject* VM::createUserdata(void* data, int numUserValues, bool isLight) {
+    return allocateObject<UserdataObject>(data, numUserValues, isLight);
 }
 
 ClosureObject* VM::createClosure(FunctionObject* function) {
@@ -273,6 +273,14 @@ ClosureObject* VM::createClosure(FunctionObject* function) {
     }
 }
 
+ClosureObject* VM::createCClosure(NativeFunction nativeFunc, const std::vector<Value>& upvalues) {
+    return allocateObject<ClosureObject>(nativeFunc, upvalues);
+}
+
+ClosureObject* VM::createCClosure(lua_CFunction cFunc, const std::vector<Value>& upvalues) {
+    return allocateObject<ClosureObject>(cFunc, upvalues);
+}
+
 CoroutineObject* VM::createCoroutine(ClosureObject* closure) {
     return createCoroutine(closure ? Value::closure(closure) : Value::nil());
 }
@@ -281,7 +289,7 @@ CoroutineObject* VM::createCoroutine(const Value& func) {
     CoroutineObject* co = allocateObject<CoroutineObject>();
     coroutines_.push_back(co);
 
-    if (func.isClosure()) {
+    if (func.isClosure() && !func.asClosureObj()->isC()) {
         ClosureObject* closure = func.asClosureObj();
         co->stack.push_back(func);
         
@@ -296,7 +304,7 @@ CoroutineObject* VM::createCoroutine(const Value& func) {
         
         co->chunk = closure->function()->chunk();
         co->rootChunk = closure->function()->chunk();
-    } else if (func.isNativeFunction() || func.isCFunction()) {
+    } else if (func.isNativeFunction() || func.isCFunction() || (func.isClosure() && func.asClosureObj()->isC())) {
         co->initialFunc = func;
         co->chunk = nullptr;
         co->rootChunk = nullptr;
@@ -785,6 +793,7 @@ bool VM::pcall(int argCount) {
     size_t stackSizeBefore = currentCoroutine_->stack.size() - argCount;
 
     bool prevPcall = inPcall_;
+    bool prevHandling = isHandlingError_;
     inPcall_ = true;
     
     bool success = false;
@@ -797,12 +806,14 @@ bool VM::pcall(int argCount) {
         
         if (currentCoroutine_->status == CoroutineObject::Status::SUSPENDED) {
             inPcall_ = prevPcall;
+            isHandlingError_ = prevHandling;
             return true;
         }
 
         if (hadError_) success = false;
     } catch (const CoroutineCloseSelfException&) {
         inPcall_ = prevPcall;
+        isHandlingError_ = prevHandling;
         throw;
     } catch (const RuntimeError&) {
         success = false;
@@ -815,7 +826,6 @@ bool VM::pcall(int argCount) {
     }
     
     inPcall_ = prevPcall;
-    isHandlingError_ = false;
     hadError_ = false;
 
     if (!success) {
@@ -848,6 +858,7 @@ bool VM::pcall(int argCount) {
         
         if (currentCoroutine_->status == CoroutineObject::Status::SUSPENDED) {
             inPcall_ = prevPcall;
+            isHandlingError_ = prevHandling;
             return true;
         }
 
@@ -863,7 +874,7 @@ bool VM::pcall(int argCount) {
         push(Value::boolean(false));
         push(lastErrorObject_.isNil() ? errorObj : lastErrorObject_);
         hadError_ = false;
-        isHandlingError_ = false;
+        isHandlingError_ = prevHandling;
         lastErrorObject_ = Value::nil();
         currentCoroutine_->lastResultCount = 2;
     } else {
@@ -884,6 +895,7 @@ bool VM::pcall(int argCount) {
             push(res);
         }
         currentCoroutine_->lastResultCount = resultCount + 1;
+        isHandlingError_ = prevHandling;
     }
     
     return true;
@@ -899,6 +911,7 @@ bool VM::xpcall(int argCount) {
     size_t stackSizeBefore = currentCoroutine_->stack.size() - argCount;
 
     bool prevPcall = inPcall_;
+    bool prevHandling = isHandlingError_;
     inPcall_ = true;
 
     std::vector<Value> args;
@@ -918,13 +931,14 @@ bool VM::xpcall(int argCount) {
         }
         if (currentCoroutine_->status == CoroutineObject::Status::SUSPENDED) {
             inPcall_ = prevPcall;
+            isHandlingError_ = prevHandling;
             return true;
         }
     } catch (const CoroutineCloseSelfException&) {
         inPcall_ = prevPcall;
+        isHandlingError_ = prevHandling;
         throw;
     } catch (const RuntimeError& e) {
-        isHandlingError_ = false;
         hadError_ = false;
         success = false;
     }
@@ -961,6 +975,7 @@ bool VM::xpcall(int argCount) {
 
         if (currentCoroutine_->status == CoroutineObject::Status::SUSPENDED) {
             inPcall_ = prevPcall;
+            isHandlingError_ = prevHandling;
             return true;
         }
 
@@ -976,7 +991,7 @@ bool VM::xpcall(int argCount) {
         push(Value::boolean(false));
         push(lastErrorObject_.isNil() ? errObj : lastErrorObject_);
         hadError_ = false;
-        isHandlingError_ = false;
+        isHandlingError_ = prevHandling;
         lastErrorObject_ = Value::nil();
         currentCoroutine_->lastResultCount = 2;
     } else {
@@ -997,6 +1012,7 @@ bool VM::xpcall(int argCount) {
             push(res);
         }
         currentCoroutine_->lastResultCount = resultCount + 1;
+        isHandlingError_ = prevHandling;
     }
     
     return true;
@@ -1035,7 +1051,13 @@ FunctionObject* VM::compileSource(const std::string& source, const std::string& 
 }
 
 void VM::push(const Value& value) {
-    if (currentCoroutine_->stack.size() >= (!isHandlingError_ ? STACK_LIMIT : STACK_MAX)) {
+    if (currentCoroutine_->stack.size() >= STACK_MAX) {
+        hadError_ = true;
+        lastErrorMessage_ = "error in error handling";
+        lastErrorObject_ = Value::runtimeString(internString(lastErrorMessage_));
+        if (isJitExecuting_) return;
+        throw RuntimeError(lastErrorMessage_);
+    } else if (currentCoroutine_->stack.size() >= (!isHandlingError_ ? STACK_LIMIT : STACK_MAX)) {
         runtimeError("stack overflow");
         return;
     }
@@ -1092,9 +1114,20 @@ Value VM::readConstant() {
 }
 
 void VM::runtimeError(const std::string& message, int level) {
-    if (isRunningErrorHandler_) {
+    if (isHandlingStackError_ && (message == "C stack overflow" || message == "stack overflow")) {
+        hadError_ = true;
         lastErrorMessage_ = "error in error handling";
         lastErrorObject_ = Value::runtimeString(internString(lastErrorMessage_));
+        if (isJitExecuting_) return;
+        throw RuntimeError(lastErrorMessage_);
+    }
+    if ((currentCoroutine_ && currentCoroutine_->nCcalls >= 220) ||
+        (currentCoroutine_ && currentCoroutine_->frames.size() >= FRAMES_MAX) ||
+        errorHandlerDepth_ >= 220) {
+        hadError_ = true;
+        lastErrorMessage_ = "error in error handling";
+        lastErrorObject_ = Value::runtimeString(internString(lastErrorMessage_));
+        if (isJitExecuting_) return;
         throw RuntimeError(lastErrorMessage_);
     }
     isHandlingError_ = true;
@@ -1113,6 +1146,7 @@ void VM::runtimeError(const std::string& message, int level) {
         }
     }
 
+    std::string prefix = "";
     if (targetFrame >= 0 && targetFrame < static_cast<int>(currentCoroutine_->frames.size())) {
         const CallFrame& frame = currentCoroutine_->frames[targetFrame];
         const Chunk* chunk = frame.chunk;
@@ -1121,24 +1155,11 @@ void VM::runtimeError(const std::string& message, int level) {
             if (frame.ip > 0) {
                 line = chunk->getLine(frame.ip - 1);
             }
-        }
-    }
-
-    std::string prefix = "";
-    if (level > 0) {
-        if (line != -1) {
-            std::string displaySource = source;
-            if (!displaySource.empty() && (displaySource[0] == '@' || displaySource[0] == '=')) {
-                displaySource = displaySource.substr(1);
-            }
-            prefix = displaySource + ":" + std::to_string(line) + ": ";
-        } else if (targetFrame >= 0) {
-            std::string displaySource = source;
-            if (!displaySource.empty() && (displaySource[0] == '@' || displaySource[0] == '=')) {
-                displaySource = displaySource.substr(1);
-            }
-            if (!displaySource.empty()) {
-                prefix = displaySource + ": ";
+            if (level > 0) {
+                std::string displaySource = formatChunkId(source);
+                if (displaySource.empty()) displaySource = "?";
+                std::string displayLine = (line != -1) ? std::to_string(line) : "?";
+                prefix = displaySource + ":" + displayLine + ": ";
             }
         }
     }
@@ -1147,21 +1168,24 @@ void VM::runtimeError(const std::string& message, int level) {
     lastErrorObject_ = Value::runtimeString(internString(lastErrorMessage_));
 
     Value handler = Value::nil();
-    int handlerFrameIndex = -1;
     for (int i = (int)currentCoroutine_->frames.size() - 1; i >= 0; i--) {
         if (currentCoroutine_->frames[i].isPcall) {
             handler = currentCoroutine_->frames[i].errorHandler;
-            handlerFrameIndex = i;
             break;
         }
     }
 
     if (!handler.isNil()) {
-        currentCoroutine_->frames[handlerFrameIndex].errorHandler = Value::nil();
         bool prevHadError = hadError_;
         hadError_ = false;
         bool prevRunning = isRunningErrorHandler_;
         isRunningErrorHandler_ = true;
+        errorHandlerDepth_++;
+        bool prevStackError = isHandlingStackError_;
+        if (message == "C stack overflow" || message == "stack overflow" || lastErrorMessage_.find("stack overflow") != std::string::npos) {
+            isHandlingStackError_ = true;
+        }
+
         push(handler);
         push(lastErrorObject_);
         size_t prevFrames = currentCoroutine_->frames.size();
@@ -1178,9 +1202,21 @@ void VM::runtimeError(const std::string& message, int level) {
                     lastErrorMessage_ = lastErrorObject_.isString() ? getStringValue(lastErrorObject_) : lastErrorObject_.toString();
                 }
             }
+        } catch (const CoroutineCloseSelfException&) {
+            isHandlingStackError_ = prevStackError;
+            errorHandlerDepth_--;
+            isRunningErrorHandler_ = prevRunning;
+            throw;
+        } catch (const RuntimeError&) {
+            isHandlingStackError_ = prevStackError;
+            errorHandlerDepth_--;
+            isRunningErrorHandler_ = prevRunning;
+            throw;
         } catch (...) {
             handlerSuccess = false;
         }
+        isHandlingStackError_ = prevStackError;
+        errorHandlerDepth_--;
         isRunningErrorHandler_ = prevRunning;
         if (!handlerSuccess) {
             while (currentCoroutine_->frames.size() > prevFrames) {
@@ -1203,9 +1239,13 @@ void VM::runtimeError(const Value& errorObj, int level) {
     if (errorObj.isString()) {
         runtimeError(getStringValue(errorObj), level);
     } else {
-        if (isRunningErrorHandler_) {
+        if ((currentCoroutine_ && currentCoroutine_->nCcalls >= 220) ||
+            (currentCoroutine_ && currentCoroutine_->frames.size() >= FRAMES_MAX) ||
+            errorHandlerDepth_ >= 220) {
+            hadError_ = true;
             lastErrorMessage_ = "error in error handling";
             lastErrorObject_ = Value::runtimeString(internString(lastErrorMessage_));
+            if (isJitExecuting_) return;
             throw RuntimeError(lastErrorMessage_);
         }
         isHandlingError_ = true;
@@ -1224,11 +1264,13 @@ void VM::runtimeError(const Value& errorObj, int level) {
 
         if (handlerFrameIndex != -1) {
             if (!handler.isNil()) {
-                currentCoroutine_->frames[handlerFrameIndex].errorHandler = Value::nil();
                 bool prevHadError = hadError_;
                 hadError_ = false;
                 bool prevRunning = isRunningErrorHandler_;
                 isRunningErrorHandler_ = true;
+                errorHandlerDepth_++;
+                bool prevStackError = isHandlingStackError_;
+
                 push(handler);
                 push(lastErrorObject_);
                 size_t prevFrames = currentCoroutine_->frames.size();
@@ -1245,9 +1287,21 @@ void VM::runtimeError(const Value& errorObj, int level) {
                             lastErrorMessage_ = lastErrorObject_.isString() ? getStringValue(lastErrorObject_) : lastErrorObject_.toString();
                         }
                     }
+                } catch (const CoroutineCloseSelfException&) {
+                    isHandlingStackError_ = prevStackError;
+                    errorHandlerDepth_--;
+                    isRunningErrorHandler_ = prevRunning;
+                    throw;
+                } catch (const RuntimeError&) {
+                    isHandlingStackError_ = prevStackError;
+                    errorHandlerDepth_--;
+                    isRunningErrorHandler_ = prevRunning;
+                    throw;
                 } catch (...) {
                     handlerSuccess = false;
                 }
+                isHandlingStackError_ = prevStackError;
+                errorHandlerDepth_--;
                 isRunningErrorHandler_ = prevRunning;
                 if (!handlerSuccess) {
                     while (currentCoroutine_->frames.size() > prevFrames) {
@@ -1325,6 +1379,145 @@ void VM::runtimeError(const Value& errorObj, int level) {
         if (isJitExecuting_) return;
         throw RuntimeError(lastErrorMessage_);
     }
+}
+
+std::string VM::findGlobalFuncName(const Value& funcVal) {
+    if (funcVal.isNil()) return "";
+
+    auto matches = [this](const Value& a, const Value& b) -> bool {
+        if (a == b) return true;
+        if (a.isClosure() && b.isClosure()) {
+            ClosureObject* ca = a.asClosureObj();
+            ClosureObject* cb = b.asClosureObj();
+            if (ca->isC() && cb->isC()) {
+                if (ca->cFunc() && ca->cFunc() == cb->cFunc()) return true;
+                if (ca->nativeFunc() && ca->nativeFunc() == cb->nativeFunc()) return true;
+            }
+        }
+        if (a.isClosure() && a.asClosureObj()->isC()) {
+            ClosureObject* ca = a.asClosureObj();
+            if (b.isNativeFunction() && b.asNativeFunctionIndex() < nativeFunctions_.size() && 
+                ca->nativeFunc() == nativeFunctions_[b.asNativeFunctionIndex()].func) return true;
+            if (b.isCFunction() && ca->cFunc() == reinterpret_cast<lua_CFunction>(b.asCFunction())) return true;
+        }
+        if (b.isClosure() && b.asClosureObj()->isC()) {
+            ClosureObject* cb = b.asClosureObj();
+            if (a.isNativeFunction() && a.asNativeFunctionIndex() < nativeFunctions_.size() && 
+                cb->nativeFunc() == nativeFunctions_[a.asNativeFunctionIndex()].func) return true;
+            if (a.isCFunction() && cb->cFunc() == reinterpret_cast<lua_CFunction>(a.asCFunction())) return true;
+        }
+        return false;
+    };
+
+    // 1. Search directly in globals
+    for (const auto& [name, val] : globals_) {
+        if (name == "_G" || name == "_ENV") continue;
+        if (matches(val, funcVal)) {
+            return name;
+        }
+    }
+
+    auto itG = globals_.find("_G");
+    if (itG != globals_.end() && itG->second.isTable()) {
+        TableObject* gTable = itG->second.asTableObj();
+        for (const auto& [k, v] : gTable->data()) {
+            if (k.isString()) {
+                std::string kname = getStringValue(k);
+                if (kname == "_G" || kname == "_ENV") continue;
+                if (matches(v, funcVal)) {
+                    return kname;
+                }
+            }
+        }
+    }
+
+    // 2. Search in 1st level tables in globals (e.g., table.sort, string.sub, io.read, math.sin)
+    for (const auto& [tableName, tableVal] : globals_) {
+        if (tableName == "_G" || tableName == "_ENV") continue;
+        if (tableVal.isTable()) {
+            TableObject* t = tableVal.asTableObj();
+            for (const auto& [fieldName, fieldVal] : t->data()) {
+                if (fieldName.isString() && matches(fieldVal, funcVal)) {
+                    return tableName + "." + getStringValue(fieldName);
+                }
+            }
+        }
+    }
+
+    if (itG != globals_.end() && itG->second.isTable()) {
+        TableObject* gTable = itG->second.asTableObj();
+        for (const auto& [subName, subVal] : gTable->data()) {
+            if (subName.isString() && subVal.isTable()) {
+                std::string sname = getStringValue(subName);
+                if (sname == "_G" || sname == "_ENV") continue;
+                TableObject* t = subVal.asTableObj();
+                for (const auto& [fieldName, fieldVal] : t->data()) {
+                    if (fieldName.isString() && matches(fieldVal, funcVal)) {
+                        return sname + "." + getStringValue(fieldName);
+                    }
+                }
+            }
+        }
+    }
+
+    // 3. Search in loaded modules table if present
+    Value loadedVal = getRegistry("_LOADED");
+    if (loadedVal.isTable()) {
+        TableObject* loaded = loadedVal.asTableObj();
+        for (const auto& [modKey, modVal] : loaded->data()) {
+            if (modKey.isString() && modVal.isTable()) {
+                std::string modName = getStringValue(modKey);
+                for (const auto& [fnKey, fnVal] : modVal.asTableObj()->data()) {
+                    if (fnKey.isString() && matches(fnVal, funcVal)) {
+                        return modName + "." + getStringValue(fnKey);
+                    }
+                }
+            }
+        }
+    }
+    return "";
+}
+
+bool VM::argError(int argNum, const std::string& extramsg, const char* funcNameFallback) {
+    CallingFuncInfo info = getCallingFuncInfo();
+    std::string funcName = "";
+    if (info.isMethod) {
+        funcName = info.name;
+        argNum--;
+        if (argNum == 0) {
+            runtimeError("calling '" + funcName + "' on bad self (" + extramsg + ")");
+            return false;
+        }
+    } else {
+        if (!info.name.empty()) {
+            funcName = info.name;
+        } else {
+            if (!currentCoroutine_->frames.empty() && !currentCoroutine_->frames.back().cFunc.isNil()) {
+                funcName = findGlobalFuncName(currentCoroutine_->frames.back().cFunc);
+            }
+            if (funcName.empty() && funcNameFallback) {
+                funcName = funcNameFallback;
+            }
+            if (funcName.empty()) {
+                funcName = "?";
+            }
+        }
+    }
+    runtimeError("bad argument #" + std::to_string(argNum) + " to '" + funcName + "' (" + extramsg + ")");
+    return false;
+}
+
+bool VM::typeError(int argNum, const std::string& expectedType, const Value& actualVal, int totalArgCount, const char* funcNameFallback) {
+    std::string actualType;
+    if (argNum > totalArgCount) {
+        actualType = "no value";
+    } else if (actualVal.isNil()) {
+        actualType = "nil";
+    } else {
+        actualType = typeName(actualVal);
+    }
+    std::string msg = expectedType + " expected, got " + actualType;
+    return argError(argNum, msg, funcNameFallback);
 }
 
 void VM::traceExecution() {
@@ -1838,6 +2031,29 @@ std::string VM::getStringValue(const Value& value) {
     return value.toString();
 }
 
+std::string VM::typeName(const Value& val) {
+    if (val.isUserdata()) {
+        UserdataObject* ud = val.asUserdataObj();
+        if (ud && ud->isLight()) return "light userdata";
+        if (ud && !ud->metatable().isNil() && ud->metatable().isTable()) {
+            Value nameVal = ud->metatable().asTableObj()->get("__name");
+            if (nameVal.isString()) return getStringValue(nameVal);
+        }
+        return "userdata";
+    }
+    Value mtVal = Value::nil();
+    if (val.isTable()) {
+        mtVal = val.asTableObj()->getMetatable();
+    } else {
+        mtVal = getTypeMetatable(val.type());
+    }
+    if (!mtVal.isNil() && mtVal.isTable()) {
+        Value nameVal = mtVal.asTableObj()->get("__name");
+        if (nameVal.isString()) return getStringValue(nameVal);
+    }
+    return val.typeToString();
+}
+
 const void* VM::valueToPointer(const Value& val) const {
     if (val.isNil() || val.isBool() || val.isNumber()) {
         return nullptr;
@@ -1918,21 +2134,7 @@ bool VM::toLString(const Value& val, std::string& out) {
         return true;
     }
 
-    std::string kind;
-    Value mtVal = Value::nil();
-    if (val.isTable()) mtVal = val.asTableObj()->getMetatable();
-    else if (val.isUserdata()) mtVal = val.asUserdataObj()->metatable();
-    else mtVal = getTypeMetatable(val.type());
-
-    if (!mtVal.isNil() && mtVal.isTable()) {
-        Value nameVal = mtVal.asTableObj()->get("__name");
-        if (nameVal.isString()) {
-            kind = getStringValue(nameVal);
-        }
-    }
-    if (kind.empty()) {
-        kind = val.typeToString();
-    }
+    std::string kind = typeName(val);
 
     const void* ptr = valueToPointer(val);
     char buf[64];
@@ -1989,7 +2191,7 @@ Value VM::getTable(const Value& tableVal, const Value& key) {
         Value indexMethod = getMetamethod(t, "__index");
         if (indexMethod.isNil()) {
             if (!t.isTable()) {
-                runtimeError("attempt to index a " + t.typeToString() + " value");
+                runtimeError("attempt to index a " + typeName(t) + " value");
             }
             return Value::nil();
         } else if (indexMethod.isFunction()) {
@@ -2023,28 +2225,31 @@ bool VM::callBinaryMetamethod(const Value& a, const Value& b, const std::string&
     push(mm);
     push(a);
     push(b);
-    return callValue(2, 2);
+    std::string mname = (method.rfind("__", 0) == 0) ? method.substr(2) : method;
+    return callValue(2, 2, false, mname.c_str());
 }
 
 bool VM::callValue(int argCount, int retCount, bool isTailCall, const char* metamethodName, int extraArgs) {
-    if (!isTailCall && currentCoroutine_->frames.size() >= (!isHandlingError_ ? FRAMES_LIMIT : FRAMES_MAX)) {
-        runtimeError("stack overflow");
-        return false;
+    if (!isTailCall) {
+        if (currentCoroutine_->frames.size() >= FRAMES_MAX) {
+            hadError_ = true;
+            lastErrorMessage_ = "error in error handling";
+            lastErrorObject_ = Value::runtimeString(internString(lastErrorMessage_));
+            if (isJitExecuting_) return false;
+            throw RuntimeError(lastErrorMessage_);
+        } else if (currentCoroutine_->frames.size() >= (!isHandlingError_ ? FRAMES_LIMIT : FRAMES_MAX)) {
+            runtimeError("stack overflow");
+            return false;
+        }
     }
     Value callee = peek(argCount);
     
-    if (callee.isNativeFunction() || callee.isCFunction()) {
-        int maxCCalls = !isHandlingError_ ? 200 : 250;
-        if (currentCoroutine_->nCcalls >= maxCCalls) {
-            runtimeError("C stack overflow");
-            return false;
-        }
-
+    if (callee.isNativeFunction() || callee.isCFunction() || (callee.isClosure() && callee.asClosureObj()->isC())) {
         size_t funcPosition = currentCoroutine_->stack.size() - argCount - 1;
         currentCoroutine_->lastResultCount = 1;
 
         CallFrame cframe;
-        cframe.closure = nullptr;
+        cframe.closure = callee.isClosure() ? callee.asClosureObj() : nullptr;
         cframe.chunk = nullptr;
         cframe.callerChunk = nullptr;
         cframe.ip = 0;
@@ -2057,6 +2262,7 @@ bool VM::callValue(int argCount, int retCount, bool isTailCall, const char* meta
         cframe.isTailCall = isTailCall;
         cframe.extraargs = extraArgs;
         cframe.errorHandler = Value::nil();
+        if (metamethodName) cframe.metamethodName = metamethodName;
         if (callee.isNativeFunction()) {
             size_t funcIndex = callee.asNativeFunctionIndex();
             const std::string& fname = nativeFunctions_[funcIndex].name;
@@ -2080,7 +2286,10 @@ bool VM::callValue(int argCount, int retCount, bool isTailCall, const char* meta
             }
             ~FrameGuard() {
                 co->nCcalls--;
-                if (co->status == CoroutineObject::Status::SUSPENDED && frames.size() > cframeIndex + 1) {
+                if (co->status == CoroutineObject::Status::SUSPENDED && frames.size() >= cframeIndex + 1) {
+                    return;
+                }
+                if (std::uncaught_exceptions() > 0) {
                     return;
                 }
                 if (frames.size() > cframeIndex) {
@@ -2089,11 +2298,43 @@ bool VM::callValue(int argCount, int retCount, bool isTailCall, const char* meta
             }
         } guard(currentCoroutine_->frames, cframe, cframeIndex, currentCoroutine_);
 
-        if (currentCoroutine_->hookMask & CoroutineObject::MASK_CALL) {
-            callHook("call");
+        if (currentCoroutine_->nCcalls >= 220) {
+            hadError_ = true;
+            lastErrorMessage_ = "error in error handling";
+            lastErrorObject_ = Value::runtimeString(internString(lastErrorMessage_));
+            if (isJitExecuting_) return false;
+            throw RuntimeError(lastErrorMessage_);
+        } else if (currentCoroutine_->nCcalls == 200 || (currentCoroutine_->nCcalls >= 200 && !isHandlingError_)) {
+            runtimeError("C stack overflow", 0);
+            return false;
         }
 
-        if (callee.isNativeFunction()) {
+        if (currentCoroutine_->hookMask & CoroutineObject::MASK_CALL) {
+            callHook("call", -1, 1, argCount);
+        }
+
+        if (callee.isClosure() && callee.asClosureObj()->isC()) {
+            ClosureObject* ccl = callee.asClosureObj();
+            if (ccl->nativeFunc()) {
+                if (!ccl->nativeFunc()(this, argCount)) {
+                    return false;
+                }
+            } else if (ccl->cFunc()) {
+                lua_CFunction function = ccl->cFunc();
+                lua_State L;
+                L.vm = this;
+                L.is_owned = false;
+                L.stackBase = funcPosition + 1;
+                L.argCount = argCount;
+                
+                lua_State* oldL = currentL_;
+                currentL_ = &L;
+                int nres = function(&L);
+                currentL_ = oldL;
+                
+                currentCoroutine_->lastResultCount = nres;
+            }
+        } else if (callee.isNativeFunction()) {
             NativeFunction function = nativeFunctions_[callee.asNativeFunctionIndex()].func;
             if (!function(this, argCount)) {
                 return false;
@@ -2115,10 +2356,15 @@ bool VM::callValue(int argCount, int retCount, bool isTailCall, const char* meta
         }
 
         if (currentCoroutine_->hookMask & CoroutineObject::MASK_RET) {
-            callHook("return");
+            callHook("return", -1, 1, static_cast<int>(currentCoroutine_->lastResultCount));
         }
 
-        if (currentCoroutine_->status == CoroutineObject::Status::SUSPENDED && currentCoroutine_->frames.size() > cframeIndex + 1) {
+        if (currentCoroutine_->status == CoroutineObject::Status::SUSPENDED) {
+            if (currentCoroutine_->frames.size() == cframeIndex + 1) {
+                while (currentCoroutine_->stack.size() > funcPosition) {
+                    pop();
+                }
+            }
             return true;
         }
 
@@ -2193,6 +2439,7 @@ bool VM::callValue(int argCount, int retCount, bool isTailCall, const char* meta
             frame.varargs.clear();
             frame.isTailCall = true;
             frame.extraargs = extraArgs;
+            if (metamethodName) frame.metamethodName = metamethodName;
 
             int arity = function->arity();
             if (argCount < arity) {
@@ -2224,6 +2471,7 @@ bool VM::callValue(int argCount, int retCount, bool isTailCall, const char* meta
         frame.callerChunk = currentCoroutine_->frames.empty() ? nullptr : currentFrame().chunk;
         frame.isTailCall = false;
         frame.extraargs = extraArgs;
+        if (metamethodName) frame.metamethodName = metamethodName;
         
         int arity = function->arity();
         if (argCount < arity) {
@@ -2259,9 +2507,26 @@ bool VM::callValue(int argCount, int retCount, bool isTailCall, const char* meta
         return callValue(argCount + 1, retCount, isTailCall, nullptr, extraArgs + 1);
     }
     
-    std::string err = "attempt to call a " + callee.typeToString() + " value";
+    std::string err = "attempt to call a " + typeName(callee) + " value";
     if (metamethodName) {
         err += " (metamethod '" + std::string(metamethodName) + "')";
+    } else if (!currentCoroutine_->frames.empty()) {
+        const CallFrame& frame = currentFrame();
+        if (frame.chunk && frame.ip >= 2) {
+            const auto& code = frame.chunk->code();
+            size_t opIp = (size_t)-1;
+            int callArgCount = argCount;
+            if (frame.ip >= 3 && (static_cast<OpCode>(code[frame.ip - 3]) == OpCode::OP_CALL ||
+                                 static_cast<OpCode>(code[frame.ip - 3]) == OpCode::OP_CALL_MULTI)) {
+                opIp = frame.ip - 3;
+            } else if (frame.ip >= 2 && (static_cast<OpCode>(code[frame.ip - 2]) == OpCode::OP_TAILCALL ||
+                                        static_cast<OpCode>(code[frame.ip - 2]) == OpCode::OP_TAILCALL_MULTI)) {
+                opIp = frame.ip - 2;
+            }
+            if (opIp != (size_t)-1) {
+                err += getCallVarInfo(opIp, callArgCount);
+            }
+        }
     }
     runtimeError(err);
     return false;
@@ -2324,6 +2589,9 @@ bool VM::resumeCoroutine(CoroutineObject* co) {
                 }
             }
         } else {
+            if (!co->frames.empty() && co->frames.back().isC) {
+                co->frames.pop_back();
+            }
             if (!co->frames.empty() && co->frames[0].ip == 0 && (co->hookMask & CoroutineObject::MASK_CALL)) {
                 callHook("call");
             }
@@ -2455,7 +2723,7 @@ CallFrame* VM::getFrame(int level) {
     return &currentCoroutine_->frames[currentCoroutine_->frames.size() - 1 - level];
 }
 
-void VM::callHook(const char* event, int line) {
+void VM::callHook(const char* event, int line, int ftransfer, int ntransfer) {
     if (currentCoroutine_->inHook) return;
     struct HookGuard {
         CoroutineObject* co;
@@ -2463,21 +2731,43 @@ void VM::callHook(const char* event, int line) {
         CoroutineObject::Status prevStatus;
         size_t savedLastResultCount;
         const Chunk* savedChunk;
+        size_t interruptedFrameIdx;
+        bool prevInterrupted;
         HookGuard(CoroutineObject* c) 
             : co(c), prevInHook(c->inHook), prevStatus(c->status),
-              savedLastResultCount(c->lastResultCount), savedChunk(c->chunk) {
+              savedLastResultCount(c->lastResultCount), savedChunk(c->chunk),
+              interruptedFrameIdx(c->frames.empty() ? static_cast<size_t>(-1) : c->frames.size() - 1),
+              prevInterrupted(false) {
             co->inHook = true;
             co->status = CoroutineObject::Status::RUNNING;
+            if (interruptedFrameIdx < co->frames.size()) {
+                prevInterrupted = co->frames[interruptedFrameIdx].isInterruptedByHook;
+                co->frames[interruptedFrameIdx].isInterruptedByHook = true;
+            }
         }
         ~HookGuard() {
             co->inHook = prevInHook;
             co->status = prevStatus;
             co->lastResultCount = savedLastResultCount;
             co->chunk = savedChunk;
+            if (interruptedFrameIdx < co->frames.size()) {
+                co->frames[interruptedFrameIdx].isInterruptedByHook = prevInterrupted;
+            }
         }
     } guard(currentCoroutine_);
     
     if (currentCoroutine_->hook.isFunction()) {
+        if (!currentCoroutine_->frames.empty()) {
+            if (ftransfer == 0 && ntransfer == 0) {
+                if (std::string_view(event) == "call" || std::string_view(event) == "tail call") {
+                    FunctionObject* func = currentFrame().closure ? currentFrame().closure->function() : nullptr;
+                    ftransfer = 1;
+                    ntransfer = func ? func->arity() : 0;
+                }
+            }
+            currentCoroutine_->frames.back().ftransfer = ftransfer;
+            currentCoroutine_->frames.back().ntransfer = ntransfer;
+        }
         push(currentCoroutine_->hook);
         push(Value::runtimeString(internString(event)));
         if (line != -1) {
@@ -2487,6 +2777,9 @@ void VM::callHook(const char* event, int line) {
         }
         
         if (callValue(2, 1)) {
+            if (!currentCoroutine_->frames.empty()) {
+                currentCoroutine_->frames.back().isHook = true;
+            }
             run(currentCoroutine_->frames.size() - 1);
         }
     }
@@ -2517,7 +2810,7 @@ void VM::jitGetTable(VM* vm, uint32_t nextIp) {
     Value indexMethod = vm->getMetamethod(tableValue, "__index");
     if (indexMethod.isNil()) {
         if (!tableValue.isTable()) {
-            vm->runtimeError("attempt to index a " + tableValue.typeToString() + " value");
+            vm->runtimeError("attempt to index a " + vm->typeName(tableValue) + " value" + vm->getVarInfo(nextIp - 1, 0));
         }
         vm->push(Value::nil());
     } else {
@@ -2525,7 +2818,7 @@ void VM::jitGetTable(VM* vm, uint32_t nextIp) {
             vm->push(indexMethod);
             vm->push(tableValue);
             vm->push(key);
-            vm->callValue(2, 2); 
+            vm->callValue(2, 2, false, "index"); 
         } else if (indexMethod.isTable()) {
             TableObject* indexTable = indexMethod.asTableObj();
             Value result = key.isString() ? indexTable->get(vm->getStringValue(key)) : indexTable->get(key);
@@ -2572,14 +2865,14 @@ void VM::jitSetTable(VM* vm, uint32_t nextIp) {
             }
             tableValue.asTableObj()->set(key, value);
         } else {
-            vm->runtimeError("attempt to index a " + tableValue.typeToString() + " value");
+            vm->runtimeError("attempt to index a " + vm->typeName(tableValue) + " value" + vm->getVarInfo(nextIp - 1, 2));
         }
         vm->pop(); vm->pop(); vm->pop();
     } else {
         vm->getFrame(0)->ip = nextIp;
         if (newIndex.isFunction()) {
             vm->currentCoroutine_->stack.insert(vm->currentCoroutine_->stack.end() - 3, newIndex);
-            vm->callValue(3, 1);
+            vm->callValue(3, 1, false, "newindex");
         } else if (newIndex.isTable()) {
             TableObject* niTable = newIndex.asTableObj();
             if (key.isString()) {
@@ -2592,7 +2885,7 @@ void VM::jitSetTable(VM* vm, uint32_t nextIp) {
             if (tableValue.isTable()) {
                 tableValue.asTableObj()->set(key, value);
             } else {
-                vm->runtimeError("attempt to index a " + tableValue.typeToString() + " value");
+                vm->runtimeError("attempt to index a " + vm->typeName(tableValue) + " value" + vm->getVarInfo(nextIp - 1, 2));
             }
             vm->pop(); vm->pop(); vm->pop();
         }
@@ -2635,7 +2928,8 @@ void VM::jitConcat(VM* vm, uint32_t nextIp) {
     } else {
         vm->getFrame(0)->ip = nextIp;
         if (!vm->callBinaryMetamethod(a, b, "__concat")) {
-            vm->runtimeError("attempt to concatenate " + a.typeToString() + " and " + b.typeToString());
+            Value badVal = !(a.isString() || a.isNumber()) ? a : b;
+            vm->runtimeError("attempt to concatenate a " + vm->typeName(badVal) + " value");
         }
     }
 }

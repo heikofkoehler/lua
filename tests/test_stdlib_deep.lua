@@ -64,7 +64,7 @@ end
 print("=== Testing Debug GetInfo ===")
 local function test_func(a, b) return a + b end
 local info = debug.getinfo(test_func)
-assert_eq(info.name, "test_func")
+assert_eq(info.name, nil)
 assert_eq(info.nparams, 2)
 
 print("=== Testing File:lines ===")

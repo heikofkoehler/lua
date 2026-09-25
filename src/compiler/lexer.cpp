@@ -431,7 +431,9 @@ Token Lexer::string() {
     // Closing quote
     advance();
 
-    return Token(TokenType::STRING, value, line_);
+    Token tok(TokenType::STRING, value, line_);
+    tok.near = source_.substr(start_, current_ - start_);
+    return tok;
 }
 
 Token Lexer::longString() {
@@ -470,7 +472,9 @@ Token Lexer::longString() {
             }
             if (peek() == ']' && closingLevel == level) {
                 advance(); // consume ']'
-                return Token(TokenType::STRING, value, line_);
+                Token tok(TokenType::STRING, value, line_);
+                tok.near = source_.substr(start_, current_ - start_);
+                return tok;
             }
             // Not a match, add the ']' and '=' back to the string
             value += ']';

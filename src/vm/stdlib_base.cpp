@@ -21,7 +21,7 @@
 namespace {
 
 bool native_collectgarbage(VM* vm, int argCount) {
-    if (vm->isClosing()) {
+    if (vm->isClosing() || vm->isRunningFinalizers()) {
         for (int i = 0; i < argCount; i++) vm->pop();
         vm->push(Value::boolean(false));
         vm->currentCoroutine()->lastResultCount = 1;
@@ -31,9 +31,22 @@ bool native_collectgarbage(VM* vm, int argCount) {
     std::string opt = "collect";
     if (argCount >= 1) {
         Value var = vm->peek(argCount - 1);
-        if (var.isString()) {
+        if (!var.isNil()) {
+            if (!var.isString()) {
+                vm->runtimeError("bad argument #1 to 'collectgarbage' (string expected, got " + vm->typeName(var) + ")");
+                return false;
+            }
             opt = vm->getStringValue(var);
         }
+    }
+
+    static const std::unordered_set<std::string> validOpts = {
+        "collect", "stop", "restart", "count", "step", "isrunning",
+        "incremental", "generational", "param", "setmemorylimit"
+    };
+    if (validOpts.find(opt) == validOpts.end()) {
+        vm->runtimeError("bad argument #1 to 'collectgarbage' (invalid option '" + opt + "')");
+        return false;
     }
 
     if (opt == "count") {
@@ -49,13 +62,19 @@ bool native_collectgarbage(VM* vm, int argCount) {
         return true;
     } else if (opt == "incremental") {
         VM::GCMode old = vm->gcMode();
+        vm->collectGarbage();
         vm->setGCMode(VM::GCMode::INCREMENTAL);
+        vm->setGCState(VM::GCState::PAUSE);
         for(int i=0; i<argCount; i++) vm->pop();
         vm->push(Value::runtimeString(vm->internString(old == VM::GCMode::INCREMENTAL ? "incremental" : "generational")));
         vm->currentCoroutine()->lastResultCount = 1;
         return true;
     } else if (opt == "generational") {
         VM::GCMode old = vm->gcMode();
+        vm->collectGarbage();
+        for (GCObject* obj = vm->gcObjects(); obj != nullptr; obj = obj->next()) {
+            obj->setOld();
+        }
         vm->setGCMode(VM::GCMode::GENERATIONAL);
         vm->setGCState(VM::GCState::PAUSE); // Reset to allow fresh generational cycle
         for(int i=0; i<argCount; i++) vm->pop();
@@ -153,20 +172,20 @@ bool native_collectgarbage(VM* vm, int argCount) {
 }
 
 bool native_setmetatable(VM* vm, int argCount) {
-    if (argCount != 2) {
-        vm->runtimeError("setmetatable expects 2 arguments");
-        return false;
-    }
-    Value metatable = vm->peek(0);
-    Value tableValue = vm->peek(1);
-
+    Value tableValue = (argCount >= 1) ? vm->peek(argCount - 1) : Value::nil();
     if (!tableValue.isTable()) {
-        vm->runtimeError("bad argument #1 to 'setmetatable' (table expected)");
+        vm->typeError(1, "table", tableValue, argCount, "setmetatable");
         return false;
     }
 
+    if (argCount < 2) {
+        vm->typeError(2, "nil or table", Value::nil(), argCount, "setmetatable");
+        return false;
+    }
+
+    Value metatable = vm->peek(argCount - 2);
     if (!metatable.isNil() && !metatable.isTable()) {
-        vm->runtimeError("bad argument #2 to 'setmetatable' (nil or table expected)");
+        vm->typeError(2, "nil or table", metatable, argCount, "setmetatable");
         return false;
     }
 
@@ -510,13 +529,17 @@ bool native_ipairs(VM* vm, int argCount) {
 bool native_error(VM* vm, int argCount) {
     if (argCount >= 1) {
         Value val = vm->peek(argCount - 1);
+        if (val.isNil()) {
+            vm->runtimeError(Value::runtimeString(vm->internString("<no error object>")), 0);
+            return false;
+        }
         int level = 1;
         if (argCount >= 2 && vm->peek(argCount - 2).isNumber()) {
             level = static_cast<int>(vm->peek(argCount - 2).asNumber());
         }
         vm->runtimeError(val, level);
     } else {
-        vm->runtimeError(Value::nil(), 1);
+        vm->runtimeError(Value::runtimeString(vm->internString("<no error object>")), 0);
     }
     return false;
 }
@@ -528,8 +551,11 @@ bool native_assert(VM* vm, int argCount) {
     }
     Value cond = vm->peek(argCount - 1);
     if (cond.isFalsey()) {
-        std::string msg = (argCount >= 2) ? vm->peek(argCount - 2).toString() : "assertion failed!";
-        vm->runtimeError(msg, 1);
+        Value msgVal = (argCount >= 2) ? vm->peek(argCount - 2) : Value::runtimeString(vm->internString("assertion failed!"));
+        if (msgVal.isNil()) {
+            msgVal = Value::runtimeString(vm->internString("assertion failed!"));
+        }
+        vm->runtimeError(msgVal, 1);
         return false;
     }
     // Success: return all arguments
@@ -890,10 +916,14 @@ bool native_load(VM* vm, int argCount) {
     }
     Value sourceVal = vm->peek(argCount - 1);
     
-    std::string sourceName = "[string \"load\"]";
+    std::string sourceName;
+    bool explicitName = false;
     if (argCount >= 2) {
         Value nameVal = vm->peek(argCount - 2);
-        if (!nameVal.isNil()) sourceName = vm->getStringValue(nameVal);
+        if (!nameVal.isNil()) {
+            sourceName = vm->getStringValue(nameVal);
+            explicitName = true;
+        }
     }
 
     Value env = Value::nil();
@@ -922,12 +952,12 @@ bool native_load(VM* vm, int argCount) {
     std::string source;
     if (sourceVal.isString()) {
         source = vm->getStringValue(sourceVal);
-        if (argCount < 2) {
+        if (!explicitName) {
             sourceName = source;
         }
     } else if (sourceVal.isClosure() || sourceVal.isNativeFunction() || sourceVal.isCFunction() ||
                !vm->getMetamethod(sourceVal, "__call").isNil()) {
-        if (argCount < 2) {
+        if (!explicitName) {
             sourceName = "=(load)";
         }
         while (true) {

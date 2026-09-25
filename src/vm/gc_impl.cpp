@@ -59,11 +59,10 @@ void VM::markRoots() {
         }
     };
 
-    for (CoroutineObject* co : coroutines_) {
+    markCoroutineRoot(mainCoroutine_);
+    for (CoroutineObject* co = currentCoroutine_; co != nullptr; co = co->caller) {
         markCoroutineRoot(co);
     }
-    markCoroutineRoot(mainCoroutine_);
-    markCoroutineRoot(currentCoroutine_);
 }
 
 static void blackenObject(VM* vm, GCObject* object);
@@ -72,10 +71,30 @@ static inline bool isCollectableWeak(const Value& val) {
     return val.isObj() && !val.isString() && !val.isInt64();
 }
 
+void VM::collectWeakTables() {
+    weakTables_.clear();
+    auto scan = [this](GCObject* head) {
+        for (GCObject* obj = head; obj != nullptr; obj = obj->next()) {
+            if (obj->type() == GCObject::Type::TABLE) {
+                TableObject* table = static_cast<TableObject*>(obj);
+                if (table->color() != GCObject::Color::WHITE && !table->getMetatable().isNil()) {
+                    Value modeVal = getMetamethod(Value::table(table), "__mode");
+                    if (modeVal.isString()) {
+                        weakTables_.push_back(table);
+                    }
+                }
+            }
+        }
+    };
+    scan(gcObjects_);
+    scan(toBeFinalized_);
+}
+
 void VM::processWeakTables() {
     bool changed;
     do {
         changed = false;
+        collectWeakTables();
         for (TableObject* table : weakTables_) {
             if (table->color() == GCObject::Color::WHITE) continue;
             Value modeVal = getMetamethod(Value::table(table), "__mode");
@@ -90,6 +109,7 @@ void VM::processWeakTables() {
             if (weakKeys && !weakValues) {
                 // Ephemeron logic: if key is marked (or not collectable) but value is not, mark value
                 for (const auto& pair : table->data()) {
+                    if (pair.second.isNil()) continue;
                     bool keyMarked = true;
                     if (isCollectableWeak(pair.first) && pair.first.asObj()->color() == GCObject::Color::WHITE) {
                         keyMarked = false;
@@ -112,40 +132,53 @@ void VM::processWeakTables() {
     } while (changed);
 }
 
-void VM::removeUnmarkedWeakEntries() {
+void VM::clearWeakValues() {
+    collectWeakTables();
     for (TableObject* table : weakTables_) {
         if (table->color() == GCObject::Color::WHITE) continue;
         Value modeVal = getMetamethod(Value::table(table), "__mode");
-        bool weakKeys = false;
-        bool weakValues = false;
-        if (modeVal.isString()) {
-            std::string mode = getStringValue(modeVal);
-            if (mode.find('k') != std::string::npos) weakKeys = true;
-            if (mode.find('v') != std::string::npos) weakValues = true;
-        }
+        if (!modeVal.isString()) continue;
+        std::string mode = getStringValue(modeVal);
+        if (mode.find('v') == std::string::npos) continue;
 
-        // Collect keys to remove
         std::vector<Value> toRemove;
         for (const auto& pair : table->data()) {
-            bool remove = false;
-            if (weakKeys && isCollectableWeak(pair.first) && pair.first.asObj()->color() == GCObject::Color::WHITE) {
-                remove = true;
-            }
-            if (weakValues && isCollectableWeak(pair.second) && pair.second.asObj()->color() == GCObject::Color::WHITE) {
-                remove = true;
-            }
-            if (remove) {
+            if (pair.second.isNil() || (isCollectableWeak(pair.second) && pair.second.asObj()->color() == GCObject::Color::WHITE)) {
                 toRemove.push_back(pair.first);
             }
         }
-
-        // Remove entries
         for (const auto& key : toRemove) {
-            table->set(key, Value::nil());
+            table->erase(key);
         }
     }
-    weakTables_.clear();
 }
+
+void VM::clearWeakKeys() {
+    collectWeakTables();
+    for (TableObject* table : weakTables_) {
+        if (table->color() == GCObject::Color::WHITE) continue;
+        Value modeVal = getMetamethod(Value::table(table), "__mode");
+        if (!modeVal.isString()) continue;
+        std::string mode = getStringValue(modeVal);
+        if (mode.find('k') == std::string::npos) continue;
+
+        std::vector<Value> toRemove;
+        for (const auto& pair : table->data()) {
+            if (pair.second.isNil() || (isCollectableWeak(pair.first) && pair.first.asObj()->color() == GCObject::Color::WHITE)) {
+                toRemove.push_back(pair.first);
+            }
+        }
+        for (const auto& key : toRemove) {
+            table->erase(key);
+        }
+    }
+}
+
+void VM::removeUnmarkedWeakEntries() {
+    clearWeakKeys();
+    clearWeakValues();
+}
+
 
 void VM::sweep() {
     // 1. Sync runtimeStrings_ BEFORE freeing objects
@@ -166,6 +199,13 @@ void VM::sweep() {
             *current = unreached->next();
             freeObject(unreached);
         } else {
+            if ((*current)->type() == GCObject::Type::TABLE) {
+                TableObject* tbl = static_cast<TableObject*>(*current);
+                Value mt = tbl->getMetatable();
+                if (!mt.isNil() && mt.isTable() && !mt.asTableObj()->get("__mode").isNil()) {
+                    tbl->cleanNilEntries();
+                }
+            }
             (*current)->setColor(GCObject::Color::WHITE); // Reset for next cycle
             current = &((*current)->nextRef());
         }
@@ -186,10 +226,7 @@ void VM::freeObject(GCObject* object) {
         case GCObject::Type::INT64: delete static_cast<Int64Object*>(object); break;
         case GCObject::Type::COROUTINE: {
             CoroutineObject* co = static_cast<CoroutineObject*>(object);
-            // Close any open upvalues to prevent dangling pointers into freed stack
-            if (!co->openUpvalues.empty()) {
-                closeUpvalues(0, co);
-            }
+            co->openUpvalues.clear();
             for (auto it = coroutines_.begin(); it != coroutines_.end(); ++it) {
                 if (*it == co) {
                     coroutines_.erase(it);
@@ -221,7 +258,10 @@ void VM::writeBarrier(GCObject* object, GCObject* value) {
     // 2. Generational Barrier
     // if old object points to young object, add old object to remembered set
     if (gcMode_ == GCMode::GENERATIONAL && object->isOld() && !value->isOld()) {
-        rememberedSet_.push_back(object);
+        if (!object->isRemembered()) {
+            object->setRemembered(true);
+            rememberedSet_.push_back(object);
+        }
     }
 }
 
@@ -256,6 +296,12 @@ static void blackenObject(VM* vm, GCObject* object) {
             }
 
             for (const auto& pair : table->data()) {
+                if (pair.second.isNil()) {
+                    if (!weakKeys && !weakValues) {
+                        vm->markValue(pair.first);
+                    }
+                    continue;
+                }
                 if (!weakKeys || !isCollectableWeak(pair.first)) vm->markValue(pair.first);
                 if ((!weakValues && !weakKeys) || !isCollectableWeak(pair.second)) vm->markValue(pair.second);
             }
@@ -264,8 +310,14 @@ static void blackenObject(VM* vm, GCObject* object) {
 
         case GCObject::Type::CLOSURE: {
             ClosureObject* closure = static_cast<ClosureObject*>(object);
-            for (size_t i = 0; i < closure->upvalueCount(); i++) {
-                vm->markObject(closure->getUpvalueObj(i));
+            if (closure->isC()) {
+                for (size_t i = 0; i < closure->upvalueCount(); i++) {
+                    vm->markValue(closure->getCUpvalue(i));
+                }
+            } else {
+                for (size_t i = 0; i < closure->upvalueCount(); i++) {
+                    vm->markObject(closure->getUpvalueObj(i));
+                }
             }
             break;
         }
@@ -318,6 +370,7 @@ void VM::gcStep() {
                 // Minor collection: mark roots and remembered set
                 markRoots();
                 for (GCObject* obj : rememberedSet_) {
+                    obj->setRemembered(false);
                     blackenObject(this, obj);
                 }
                 rememberedSet_.clear();
@@ -330,26 +383,11 @@ void VM::gcStep() {
                     grayStack_.pop_back();
                     blackenObject(this, object);
                 } else {
-                    // All objects marked; now process weak tables before sweeping
-                    weakTables_.clear();
-                    GCObject* obj = gcObjects_;
-                    while (obj) {
-                        if (obj->type() == GCObject::Type::TABLE) {
-                            TableObject* table = static_cast<TableObject*>(obj);
-                            Value modeVal = getMetamethod(Value::table(table), "__mode");
-                            if (modeVal.isString()) {
-                                weakTables_.push_back(table);
-                            }
-                        }
-                        obj = obj->next();
-                    }
+                    // All objects marked; process weak tables before sweeping
+                    clearWeakValues();
                     processWeakTables();
-                    while (!grayStack_.empty()) {
-                        GCObject* object = grayStack_.back();
-                        grayStack_.pop_back();
-                        blackenObject(this, object);
-                    }
-                    removeUnmarkedWeakEntries();
+                    clearWeakKeys();
+                    clearWeakValues();
                     gcState_ = GCState::SWEEP;
                 }
                 break;
@@ -360,6 +398,16 @@ void VM::gcStep() {
             }
             case GCState::SWEEP: {
                 // Minor sweep: collect unreachable young objects, promote survivors
+                // 1. Sync runtimeStrings_ BEFORE freeing young strings
+                auto sit = runtimeStrings_.begin();
+                while (sit != runtimeStrings_.end()) {
+                    if (sit->second->color() == GCObject::Color::WHITE && !sit->second->isOld()) {
+                        sit = runtimeStrings_.erase(sit);
+                    } else {
+                        ++sit;
+                    }
+                }
+
                 GCObject** current = &gcObjects_;
                 size_t newBytes = 0;
                 while (*current != nullptr) {
@@ -371,6 +419,13 @@ void VM::gcStep() {
                     } else {
                         // Survivor or already old -> keep
                         if (!obj->isOld()) obj->setAge(obj->age() + 1);
+                        if (obj->type() == GCObject::Type::TABLE) {
+                            TableObject* tbl = static_cast<TableObject*>(obj);
+                            Value mt = tbl->getMetatable();
+                            if (!mt.isNil() && mt.isTable() && !mt.asTableObj()->get("__mode").isNil()) {
+                                tbl->cleanNilEntries();
+                            }
+                        }
                         obj->setColor(GCObject::Color::WHITE);
                         newBytes += obj->size();
                         current = &(obj->nextRef());
@@ -420,59 +475,63 @@ void VM::gcStep() {
                 blackenObject(this, object);
             }
 
-            // Handle weak tables
-            weakTables_.clear();
-            GCObject* obj = gcObjects_;
-            while (obj) {
-                if (obj->type() == GCObject::Type::TABLE) {
-                    TableObject* table = static_cast<TableObject*>(obj);
-                    Value modeVal = getMetamethod(Value::table(table), "__mode");
-                    if (modeVal.isString()) {
-                        weakTables_.push_back(table);
-                    }
-                }
-                obj = obj->next();
-            }
+            // 1. Clear weak values from reachable weak tables before finalization
+            clearWeakValues();
 
-            processWeakTables();
-            while (!grayStack_.empty()) {
-                GCObject* object = grayStack_.back();
-                grayStack_.pop_back();
-                blackenObject(this, object);
-            }
-            removeUnmarkedWeakEntries();
-
-            // 3. Find objects to be finalized
+            // 2. Find objects to be finalized
             // Objects that are white but have a __gc metamethod should be moved 
             // to the toBeFinalized_ list and marked black (and their references).
             GCObject** p = &gcObjects_;
+            GCObject** tbfTail = &toBeFinalized_;
+            while (*tbfTail != nullptr) {
+                tbfTail = &((*tbfTail)->nextRef());
+            }
             while (*p != nullptr) {
                 GCObject* obj = *p;
                 if (obj->color() == GCObject::Color::WHITE && !obj->isFinalized()) {
-                    Value mm = getMetamethod(Value::fromObj(obj), "__gc");
-                    if (!mm.isNil()) {
-                        // Move to toBeFinalized_
-                        *p = obj->next();
-                        obj->setNext(toBeFinalized_);
-                        toBeFinalized_ = obj;
-                        
-                        // Resurrect: mark it gray so its references are caught
-                        grayObject(obj);
-                        continue;
+                    bool canHaveGC = false;
+                    if (obj->type() == GCObject::Type::TABLE) {
+                        canHaveGC = !static_cast<TableObject*>(obj)->getMetatable().isNil();
+                    } else if (obj->type() == GCObject::Type::USERDATA) {
+                        canHaveGC = !static_cast<UserdataObject*>(obj)->metatable().isNil();
+                    }
+                    if (canHaveGC) {
+                        Value mm = getMetamethod(Value::fromObj(obj), "__gc");
+                        if (!mm.isNil()) {
+                            // Move to end of toBeFinalized_ (preserves LIFO order since gcObjects_ is newest-first)
+                            *p = obj->next();
+                            obj->setNext(*tbfTail);
+                            *tbfTail = obj;
+                            tbfTail = &(obj->nextRef());
+                            
+                            // Resurrect: mark it gray so its references are caught
+                            grayObject(obj);
+                            continue;
+                        }
                     }
                 }
                 p = &(obj->nextRef());
             }
             
-            // Process the newly grayed objects
+            // Process the newly grayed objects (resurrection propagation)
             while (!grayStack_.empty()) {
                 GCObject* object = grayStack_.back();
                 grayStack_.pop_back();
                 blackenObject(this, object);
             }
 
+            // 3. Ephemeron convergence (including resurrected weak tables)
+            processWeakTables();
+
+            // 4. Clear weak keys from all weak tables
+            clearWeakKeys();
+
+            // 5. Clear weak values from resurrected weak tables
+            clearWeakValues();
+
             gcState_ = GCState::SWEEP;
             break;
+
         }
         case GCState::SWEEP: {
             sweep();
@@ -494,18 +553,35 @@ void VM::gcStep() {
 }
 
 void VM::collectGarbage() {
-    if (!gcEnabled_) return;
+    if (isRunningFinalizers_ || isHandlingError_) return;
 
-    // Run until we finish a cycle
+    for (GCObject* obj : rememberedSet_) {
+        obj->setRemembered(false);
+    }
+    rememberedSet_.clear();
+
+    // If there is already a cycle in progress, finish it first so all
+    // objects allocated during that cycle (marked black) are swept or reset to white.
+    while (gcState_ != GCState::PAUSE) {
+        gcStep();
+    }
+
+    // Run a complete new cycle
     do {
         gcStep();
     } while (gcState_ != GCState::PAUSE);
 }
 
 void VM::checkGC(size_t additionalBytes) {
-    if (!gcEnabled_ || isHandlingError_) return;
+    if (!gcEnabled_ || isRunningFinalizers_ || isHandlingError_) return;
 
     if (bytesAllocated_ + additionalBytes > nextGC_ || gcState_ != GCState::PAUSE) {
+        if (gcMode_ == GCMode::GENERATIONAL) {
+            do {
+                gcStep();
+            } while (gcState_ != GCState::PAUSE);
+            return;
+        }
 
         // Perform steps of GC work
         // More aggressive: 4 steps per KB allocated
@@ -524,12 +600,12 @@ void VM::checkGC(size_t additionalBytes) {
     }
 }
 
-void VM::runFinalizers() {
+void VM::runFinalizers(bool force) {
     if (toBeFinalized_ == nullptr) return;
+    if (isRunningFinalizers_ && !force) return;
     
-    bool oldEnabled = gcEnabled_;
-    gcEnabled_ = false;
-    
+    bool wasRunning = isRunningFinalizers_;
+    isRunningFinalizers_ = true;
     while (toBeFinalized_ != nullptr) {
         GCObject* obj = toBeFinalized_;
         toBeFinalized_ = obj->next();
@@ -540,6 +616,7 @@ void VM::runFinalizers() {
         
         // Mark as finalized so we don't do it again
         obj->setFinalized(true);
+        obj->setColor(GCObject::Color::WHITE);
         
         // Call __gc
         Value val = Value::fromObj(obj);
@@ -554,7 +631,7 @@ void VM::runFinalizers() {
                 currentCoroutine_->status = CoroutineObject::Status::RUNNING;
             }
             try {
-                if (callValue(1, 0)) {
+                if (callValue(1, 0, false, "__gc")) {
                     if (currentCoroutine_->frames.size() > baseFrames) {
                         run(baseFrames);
                     }
@@ -580,5 +657,5 @@ void VM::runFinalizers() {
         }
     }
     
-    gcEnabled_ = oldEnabled;
+    isRunningFinalizers_ = wasRunning;
 }

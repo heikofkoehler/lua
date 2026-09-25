@@ -9,45 +9,73 @@
 #include <iostream>
 #include <algorithm>
 
-std::string VM::getVarInfo(size_t opIp, int operandIndex) {
-    if (currentCoroutine_->frames.empty() || !currentFrame().closure || !currentFrame().chunk) {
-        return "";
-    }
-    FunctionObject* func = currentFrame().closure->function();
-    const Chunk* chunk = currentFrame().chunk;
-    const auto& code = chunk->code();
-    if (opIp >= code.size()) return "";
+namespace {
 
-    struct AbstractVal {
-        enum Source { UNKNOWN, GLOBAL, LOCAL, UPVALUE, FIELD };
-        Source source = UNKNOWN;
-        std::string name;
-        bool isConstStr = false;
-        std::string constStr;
-    };
+struct AbstractVal {
+    enum Source { UNKNOWN, GLOBAL, LOCAL, UPVALUE, FIELD, METHOD };
+    Source source = UNKNOWN;
+    std::string name;
+    bool isConstStr = false;
+    std::string constStr;
+    bool isLong = false;
+};
+
+std::vector<AbstractVal> simulateStack(VM* vm, const CallFrame& frame, size_t opIp) {
+    if (!frame.closure || !frame.chunk) {
+        return {};
+    }
+    FunctionObject* func = frame.closure->function();
+    const Chunk* chunk = frame.chunk;
+    const auto& code = chunk->code();
+    if (opIp >= code.size()) return {};
+
+    std::vector<bool> jumpTargets(code.size() + 65536, false);
+    for (size_t i = 0; i < code.size(); ) {
+        size_t ilen = chunk->instructionLength(i);
+        if (ilen == 0) break;
+        OpCode iop = static_cast<OpCode>(code[i]);
+        if (iop == OpCode::OP_JUMP || iop == OpCode::OP_JUMP_IF_FALSE) {
+            if (i + 2 < code.size()) {
+                uint16_t offset = static_cast<uint8_t>(code[i + 1]) | (static_cast<uint8_t>(code[i + 2]) << 8);
+                size_t target = i + 3 + offset;
+                if (target < jumpTargets.size()) jumpTargets[target] = true;
+            }
+        }
+        i += ilen;
+    }
 
     std::vector<AbstractVal> astack;
     size_t cur = 0;
     while (cur < opIp && cur < code.size()) {
+        if (cur < jumpTargets.size() && jumpTargets[cur] && !astack.empty()) {
+            astack.back() = {AbstractVal::UNKNOWN, "", false, ""};
+        }
         size_t len = chunk->instructionLength(cur);
         if (len == 0) break;
         OpCode op = static_cast<OpCode>(code[cur]);
         switch (op) {
+            case OpCode::OP_JUMP:
+            case OpCode::OP_JUMP_IF_FALSE: {
+                if (!astack.empty()) {
+                    astack.back() = {AbstractVal::UNKNOWN, "", false, ""};
+                }
+                break;
+            }
             case OpCode::OP_CONSTANT: {
                 uint8_t c = code[cur + 1];
                 if (c < chunk->constants().size() && chunk->constants()[c].isString()) {
-                    astack.push_back({AbstractVal::UNKNOWN, "", true, getStringValue(chunk->constants()[c])});
+                    astack.push_back({AbstractVal::UNKNOWN, "", true, vm->getStringValue(chunk->constants()[c]), false});
                 } else {
-                    astack.push_back({AbstractVal::UNKNOWN, "", false, ""});
+                    astack.push_back({AbstractVal::UNKNOWN, "", false, "", false});
                 }
                 break;
             }
             case OpCode::OP_CONSTANT_LONG: {
                 uint32_t c = code[cur + 1] | (code[cur + 2] << 8) | (code[cur + 3] << 16);
                 if (c < chunk->constants().size() && chunk->constants()[c].isString()) {
-                    astack.push_back({AbstractVal::UNKNOWN, "", true, getStringValue(chunk->constants()[c])});
+                    astack.push_back({AbstractVal::UNKNOWN, "", true, vm->getStringValue(chunk->constants()[c]), true});
                 } else {
-                    astack.push_back({AbstractVal::UNKNOWN, "", false, ""});
+                    astack.push_back({AbstractVal::UNKNOWN, "", false, "", true});
                 }
                 break;
             }
@@ -105,7 +133,7 @@ std::string VM::getVarInfo(size_t opIp, int operandIndex) {
                 uint8_t constIndex = code[cur + 2];
                 std::string kname;
                 if (constIndex < chunk->constants().size() && chunk->constants()[constIndex].isString()) {
-                    kname = getStringValue(chunk->constants()[constIndex]);
+                    kname = vm->getStringValue(chunk->constants()[constIndex]);
                 }
                 std::string upname = func->getUpvalueName(upIndex);
                 if (upIndex == 0 || upname == "_ENV") {
@@ -124,7 +152,7 @@ std::string VM::getVarInfo(size_t opIp, int operandIndex) {
                 uint32_t constIndex = code[cur + 2] | (code[cur + 3] << 8) | (code[cur + 4] << 16);
                 std::string kname;
                 if (constIndex < chunk->constants().size() && chunk->constants()[constIndex].isString()) {
-                    kname = getStringValue(chunk->constants()[constIndex]);
+                    kname = vm->getStringValue(chunk->constants()[constIndex]);
                 }
                 std::string upname = func->getUpvalueName(upIndex);
                 if (upIndex == 0 || upname == "_ENV") {
@@ -141,11 +169,14 @@ std::string VM::getVarInfo(size_t opIp, int operandIndex) {
             case OpCode::OP_GET_TABLE: {
                 AbstractVal key = astack.empty() ? AbstractVal{} : astack.back();
                 if (!astack.empty()) astack.pop_back();
+                AbstractVal tbl = astack.empty() ? AbstractVal{} : astack.back();
                 if (!astack.empty()) astack.pop_back();
-                if (key.isConstStr) {
-                    astack.push_back({AbstractVal::FIELD, key.constStr, false, ""});
+                if (tbl.source == AbstractVal::LOCAL && tbl.name == "_ENV" && key.isConstStr) {
+                    astack.push_back({AbstractVal::GLOBAL, key.constStr, false, "", false});
+                } else if (key.isConstStr) {
+                    astack.push_back({AbstractVal::FIELD, key.constStr, false, "", key.isLong});
                 } else {
-                    astack.push_back({AbstractVal::UNKNOWN, "", false, ""});
+                    astack.push_back({AbstractVal::UNKNOWN, "", false, "", false});
                 }
                 break;
             }
@@ -164,7 +195,12 @@ std::string VM::getVarInfo(size_t opIp, int operandIndex) {
                 break;
             }
             case OpCode::OP_SWAP: {
-                if (astack.size() >= 2) std::swap(astack[astack.size() - 1], astack[astack.size() - 2]);
+                if (astack.size() >= 2) {
+                    if (astack.back().source == AbstractVal::FIELD && !astack.back().isLong) {
+                        astack.back().source = AbstractVal::METHOD;
+                    }
+                    std::swap(astack[astack.size() - 1], astack[astack.size() - 2]);
+                }
                 break;
             }
             case OpCode::OP_ROTATE: {
@@ -258,11 +294,33 @@ std::string VM::getVarInfo(size_t opIp, int operandIndex) {
         cur += len;
     }
 
+    if (opIp < jumpTargets.size() && jumpTargets[opIp] && !astack.empty()) {
+        astack.back() = {AbstractVal::UNKNOWN, "", false, ""};
+    }
+    return astack;
+}
+
+} // anonymous namespace
+
+std::string VM::getVarInfo(size_t opIp, int operandIndex) {
+    if (currentCoroutine_->frames.empty() || !currentFrame().closure || !currentFrame().chunk) {
+        return "";
+    }
+    std::vector<AbstractVal> astack = simulateStack(this, currentFrame(), opIp);
+
     AbstractVal target;
-    if (operandIndex == 1) {
+    if (operandIndex < 0) {
+        int argCount = -(operandIndex + 1);
+        if (astack.size() > static_cast<size_t>(argCount)) {
+            target = astack[astack.size() - 1 - argCount];
+        }
+    } else if (operandIndex == 1) {
         if (!astack.empty()) target = astack.back();
-    } else {
+    } else if (operandIndex == 0) {
         if (astack.size() >= 2) target = astack[astack.size() - 2];
+        else if (!astack.empty()) target = astack.back();
+    } else if (operandIndex == 2) {
+        if (astack.size() >= 3) target = astack[astack.size() - 3];
         else if (!astack.empty()) target = astack.back();
     }
 
@@ -274,8 +332,114 @@ std::string VM::getVarInfo(size_t opIp, int operandIndex) {
         return " (upvalue '" + target.name + "')";
     } else if (target.source == AbstractVal::FIELD && !target.name.empty()) {
         return " (field '" + target.name + "')";
+    } else if (target.source == AbstractVal::METHOD && !target.name.empty()) {
+        return " (method '" + target.name + "')";
     }
     return "";
+}
+
+VM::CallingFuncInfo VM::getFrameFuncInfo(int frameIndex, CoroutineObject* co) {
+    if (!co) co = currentCoroutine_;
+    CallingFuncInfo info;
+    if (frameIndex < 0 || frameIndex >= static_cast<int>(co->frames.size())) {
+        return info;
+    }
+    const CallFrame& frame = co->frames[frameIndex];
+    if (frame.isHook) {
+        info.name = "?";
+        info.namewhat = "hook";
+        return info;
+    }
+    if (!frame.metamethodName.empty()) {
+        info.name = frame.metamethodName;
+        info.namewhat = "metamethod";
+        return info;
+    }
+    if (frame.isCloseMetamethod) {
+        info.name = "close";
+        info.namewhat = "metamethod";
+        return info;
+    }
+
+    if (frameIndex > 0) {
+        const CallFrame& callerFrame = co->frames[frameIndex - 1];
+        if (!callerFrame.isC && callerFrame.closure && callerFrame.chunk) {
+            const Chunk* chunk = callerFrame.chunk;
+            const auto& code = chunk->code();
+            size_t ip = callerFrame.ip;
+            if (ip > 0 && ip <= code.size()) {
+                size_t callIp = (size_t)-1;
+                int argCount = 0;
+                if (ip >= 3 && (code[ip - 3] == static_cast<uint8_t>(OpCode::OP_CALL) || 
+                                code[ip - 3] == static_cast<uint8_t>(OpCode::OP_CALL_MULTI))) {
+                    callIp = ip - 3;
+                    argCount = code[callIp + 1];
+                } else if (ip >= 2 && (code[ip - 2] == static_cast<uint8_t>(OpCode::OP_TAILCALL) || 
+                                       code[ip - 2] == static_cast<uint8_t>(OpCode::OP_TAILCALL_MULTI))) {
+                    callIp = ip - 2;
+                    argCount = code[callIp + 1];
+                }
+                if (callIp != (size_t)-1) {
+                    std::vector<AbstractVal> astack = simulateStack(this, callerFrame, callIp);
+                    if (astack.size() > static_cast<size_t>(argCount)) {
+                        const AbstractVal& target = astack[astack.size() - 1 - argCount];
+                        if (target.source == AbstractVal::GLOBAL && !target.name.empty()) {
+                            info.name = target.name;
+                            info.namewhat = "global";
+                            return info;
+                        } else if (target.source == AbstractVal::LOCAL && !target.name.empty()) {
+                            if (target.name == "(for iterator)" || target.name == "for iterator") {
+                                info.name = "for iterator";
+                                info.namewhat = "for iterator";
+                                return info;
+                            }
+                            info.name = target.name;
+                            info.namewhat = "local";
+                            return info;
+                        } else if (target.source == AbstractVal::UPVALUE && !target.name.empty()) {
+                            info.name = target.name;
+                            info.namewhat = "upvalue";
+                            return info;
+                        } else if (target.source == AbstractVal::FIELD && !target.name.empty()) {
+                            info.name = target.name;
+                            info.namewhat = "field";
+                            return info;
+                        } else if (target.source == AbstractVal::METHOD && !target.name.empty()) {
+                            info.name = target.name;
+                            info.namewhat = "method";
+                            info.isMethod = true;
+                            return info;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+
+    if (frame.isC && !frame.cFunc.isNil()) {
+        std::string cname = findGlobalFuncName(frame.cFunc);
+        if (cname.empty() && frame.cFunc.isNativeFunction()) {
+            cname = getNativeFunctionName(frame.cFunc.asNativeFunctionIndex());
+        }
+        if (!cname.empty()) {
+            info.name = cname;
+            info.namewhat = "global";
+            return info;
+        }
+    }
+    return info;
+}
+
+VM::CallingFuncInfo VM::getCallingFuncInfo() {
+    if (currentCoroutine_->frames.size() < 2) {
+        return CallingFuncInfo{};
+    }
+    return getFrameFuncInfo(static_cast<int>(currentCoroutine_->frames.size()) - 1);
+}
+
+std::string VM::getCallVarInfo(size_t opIp, int argCount) {
+    return getVarInfo(opIp, -(argCount + 1));
 }
 
 bool VM::run(size_t targetFrameCount) {
@@ -309,10 +473,23 @@ bool VM::run(size_t targetFrameCount) {
 
             if (currentCoroutine_->hookMask & CoroutineObject::MASK_LINE) {
                 if (!currentCoroutine_->frames.empty()) {
-                    currentLine = currentFrame().chunk->getLine(currentFrame().ip);
-                    if (currentLine != currentCoroutine_->lastLine) {
-                        triggerLine = true;
-                        currentCoroutine_->lastLine = currentLine;
+                    CallFrame& frame = currentFrame();
+                    if (frame.chunk) {
+                        currentLine = frame.chunk->getLine(frame.ip);
+                        if (currentLine > 0) {
+                            if (frame.lastLine == -1 ||
+                                frame.ip < frame.lastIp ||
+                                currentLine != frame.lastLine) {
+                                triggerLine = true;
+                                frame.lastLine = currentLine;
+                            }
+                        } else {
+                            if (frame.lastLine == -1 || frame.ip < frame.lastIp) {
+                                triggerLine = true;
+                                frame.lastLine = -2;
+                            }
+                        }
+                        frame.lastIp = frame.ip;
                     }
                 }
             }
@@ -333,9 +510,10 @@ bool VM::run(size_t targetFrameCount) {
             JITFunc jitCode = currentFrame().closure->function()->getJITCode();
             if (isJitEnabled() && jitCode) {
                 size_t entryIp = currentFrame().ip;
+                bool prevJitExecuting = isJitExecuting_;
                 isJitExecuting_ = true;
                 int64_t res = jitCode(this);
-                isJitExecuting_ = false;
+                isJitExecuting_ = prevJitExecuting;
                 if (hadError_) {
                     throw RuntimeError(lastErrorMessage_);
                 }
@@ -431,7 +609,7 @@ bool VM::run(size_t targetFrameCount) {
                 uint8_t slot = readByte();
                 // Add stackBase offset if inside a function
                 size_t actualSlot = currentCoroutine_->frames.empty() ? slot : (currentFrame().stackBase + slot);
-                Value val = peek(0);
+                Value val = pop();
                 if (val.isObj()) writeBarrierBackward(currentCoroutine_, val.asObj());
                 currentCoroutine_->stack[actualSlot] = val;
                 break;
@@ -513,7 +691,9 @@ bool VM::run(size_t targetFrameCount) {
                     Value indexMethod = getMetamethod(t, "__index");
                     if (indexMethod.isNil()) {
                         if (!t.isTable()) {
-                            runtimeError("attempt to index a " + t.typeToString() + " value");
+                            std::string uname = currentFrame().closure->function()->getUpvalueName(upIndex);
+                            std::string info = uname.empty() ? "" : " (upvalue '" + uname + "')";
+                            runtimeError("attempt to index a " + typeName(t) + " value" + (loop == 0 ? info : ""));
                         }
                         push(Value::nil());
                         done = true;
@@ -522,7 +702,7 @@ bool VM::run(size_t targetFrameCount) {
                         push(indexMethod);
                         push(t);
                         push(key);
-                        callValue(2, 2);
+                        callValue(2, 2, false, "index");
                         done = true;
                         break;
                     } else if (indexMethod.isTable()) {
@@ -585,7 +765,9 @@ bool VM::run(size_t targetFrameCount) {
                         if (t.isTable()) {
                             t.asTableObj()->set(key, value);
                         } else {
-                            runtimeError("attempt to index a " + t.typeToString() + " value");
+                            std::string uname = currentFrame().closure->function()->getUpvalueName(upIndex);
+                            std::string info = uname.empty() ? "" : " (upvalue '" + uname + "')";
+                            runtimeError("attempt to index a " + typeName(t) + " value" + (loop == 0 ? info : ""));
                         }
                         pop();
                         done = true;
@@ -596,7 +778,7 @@ bool VM::run(size_t targetFrameCount) {
                         push(t);
                         push(key);
                         push(value);
-                        callValue(3, 1);
+                        callValue(3, 1, false, "newindex");
                         done = true;
                         break;
                     } else if (newIndex.isTable()) {
@@ -658,7 +840,10 @@ bool VM::run(size_t targetFrameCount) {
                 if (coerceToNumber(ca) && coerceToNumber(cb)) {
                     push(add(ca, cb));
                 } else if (!callBinaryMetamethod(a, b, "__add")) {
-                    runtimeError("attempt to perform arithmetic on " + a.typeToString() + " and " + b.typeToString());
+                    if (hadError_) return false;
+                    Value badVal = !coerceToNumber(ca) ? a : b;
+                    int opIdx = !coerceToNumber(ca) ? 0 : 1;
+                    runtimeError("attempt to perform arithmetic on a " + typeName(badVal) + " value" + getVarInfo(currentFrame().ip - 1, opIdx));
                 }
                 break;
             }
@@ -670,7 +855,10 @@ bool VM::run(size_t targetFrameCount) {
                 if (coerceToNumber(ca) && coerceToNumber(cb)) {
                     push(subtract(ca, cb));
                 } else if (!callBinaryMetamethod(a, b, "__sub")) {
-                    runtimeError("attempt to perform arithmetic on " + a.typeToString() + " and " + b.typeToString());
+                    if (hadError_) return false;
+                    Value badVal = !coerceToNumber(ca) ? a : b;
+                    int opIdx = !coerceToNumber(ca) ? 0 : 1;
+                    runtimeError("attempt to perform arithmetic on a " + typeName(badVal) + " value" + getVarInfo(currentFrame().ip - 1, opIdx));
                 }
                 break;
             }
@@ -682,7 +870,10 @@ bool VM::run(size_t targetFrameCount) {
                 if (coerceToNumber(ca) && coerceToNumber(cb)) {
                     push(multiply(ca, cb));
                 } else if (!callBinaryMetamethod(a, b, "__mul")) {
-                    runtimeError("attempt to perform arithmetic on " + a.typeToString() + " and " + b.typeToString());
+                    if (hadError_) return false;
+                    Value badVal = !coerceToNumber(ca) ? a : b;
+                    int opIdx = !coerceToNumber(ca) ? 0 : 1;
+                    runtimeError("attempt to perform arithmetic on a " + typeName(badVal) + " value" + getVarInfo(currentFrame().ip - 1, opIdx));
                 }
                 break;
             }
@@ -694,7 +885,10 @@ bool VM::run(size_t targetFrameCount) {
                 if (coerceToNumber(ca) && coerceToNumber(cb)) {
                     push(divide(ca, cb));
                 } else if (!callBinaryMetamethod(a, b, "__div")) {
-                    runtimeError("attempt to perform arithmetic on " + a.typeToString() + " and " + b.typeToString());
+                    if (hadError_) return false;
+                    Value badVal = !coerceToNumber(ca) ? a : b;
+                    int opIdx = !coerceToNumber(ca) ? 0 : 1;
+                    runtimeError("attempt to perform arithmetic on a " + typeName(badVal) + " value" + getVarInfo(currentFrame().ip - 1, opIdx));
                 }
                 break;
             }
@@ -706,7 +900,10 @@ bool VM::run(size_t targetFrameCount) {
                 if (coerceToNumber(ca) && coerceToNumber(cb)) {
                     push(integerDivide(ca, cb));
                 } else if (!callBinaryMetamethod(a, b, "__idiv")) {
-                    runtimeError("attempt to perform arithmetic on " + a.typeToString() + " and " + b.typeToString());
+                    if (hadError_) return false;
+                    Value badVal = !coerceToNumber(ca) ? a : b;
+                    int opIdx = !coerceToNumber(ca) ? 0 : 1;
+                    runtimeError("attempt to perform arithmetic on a " + typeName(badVal) + " value" + getVarInfo(currentFrame().ip - 1, opIdx));
                 }
                 break;
             }
@@ -718,7 +915,10 @@ bool VM::run(size_t targetFrameCount) {
                 if (coerceToNumber(ca) && coerceToNumber(cb)) {
                     push(modulo(ca, cb));
                 } else if (!callBinaryMetamethod(a, b, "__mod")) {
-                    runtimeError("attempt to perform arithmetic on " + a.typeToString() + " and " + b.typeToString());
+                    if (hadError_) return false;
+                    Value badVal = !coerceToNumber(ca) ? a : b;
+                    int opIdx = !coerceToNumber(ca) ? 0 : 1;
+                    runtimeError("attempt to perform arithmetic on a " + typeName(badVal) + " value" + getVarInfo(currentFrame().ip - 1, opIdx));
                 }
                 break;
             }
@@ -730,7 +930,10 @@ bool VM::run(size_t targetFrameCount) {
                 if (coerceToNumber(ca) && coerceToNumber(cb)) {
                     push(power(ca, cb));
                 } else if (!callBinaryMetamethod(a, b, "__pow")) {
-                    runtimeError("attempt to perform arithmetic on " + a.typeToString() + " and " + b.typeToString());
+                    if (hadError_) return false;
+                    Value badVal = !coerceToNumber(ca) ? a : b;
+                    int opIdx = !coerceToNumber(ca) ? 0 : 1;
+                    runtimeError("attempt to perform arithmetic on a " + typeName(badVal) + " value" + getVarInfo(currentFrame().ip - 1, opIdx));
                 }
                 break;
             }
@@ -744,11 +947,14 @@ bool VM::run(size_t targetFrameCount) {
                 if (okA && okB) {
                     push(makeInteger(ia & ib));
                 } else if (!callBinaryMetamethod(a, b, "__band")) {
+                    if (hadError_) return false;
                     if (a.isNumber() && b.isNumber()) {
                         int opIdx = !okA ? 0 : 1;
                         runtimeError("number" + getVarInfo(currentFrame().ip - 1, opIdx) + " has no integer representation");
                     } else {
-                        runtimeError("attempt to perform bitwise operation on " + a.typeToString() + " and " + b.typeToString());
+                        Value badVal = !okA ? a : b;
+                        int opIdx = !okA ? 0 : 1;
+                        runtimeError("attempt to perform bitwise operation on a " + typeName(badVal) + " value" + getVarInfo(currentFrame().ip - 1, opIdx));
                     }
                 }
                 break;
@@ -763,11 +969,14 @@ bool VM::run(size_t targetFrameCount) {
                 if (okA && okB) {
                     push(makeInteger(ia | ib));
                 } else if (!callBinaryMetamethod(a, b, "__bor")) {
+                    if (hadError_) return false;
                     if (a.isNumber() && b.isNumber()) {
                         int opIdx = !okA ? 0 : 1;
                         runtimeError("number" + getVarInfo(currentFrame().ip - 1, opIdx) + " has no integer representation");
                     } else {
-                        runtimeError("attempt to perform bitwise operation on " + a.typeToString() + " and " + b.typeToString());
+                        Value badVal = !okA ? a : b;
+                        int opIdx = !okA ? 0 : 1;
+                        runtimeError("attempt to perform bitwise operation on a " + typeName(badVal) + " value" + getVarInfo(currentFrame().ip - 1, opIdx));
                     }
                 }
                 break;
@@ -782,11 +991,14 @@ bool VM::run(size_t targetFrameCount) {
                 if (okA && okB) {
                     push(makeInteger(ia ^ ib));
                 } else if (!callBinaryMetamethod(a, b, "__bxor")) {
+                    if (hadError_) return false;
                     if (a.isNumber() && b.isNumber()) {
                         int opIdx = !okA ? 0 : 1;
                         runtimeError("number" + getVarInfo(currentFrame().ip - 1, opIdx) + " has no integer representation");
                     } else {
-                        runtimeError("attempt to perform bitwise operation on " + a.typeToString() + " and " + b.typeToString());
+                        Value badVal = !okA ? a : b;
+                        int opIdx = !okA ? 0 : 1;
+                        runtimeError("attempt to perform bitwise operation on a " + typeName(badVal) + " value" + getVarInfo(currentFrame().ip - 1, opIdx));
                     }
                 }
                 break;
@@ -801,11 +1013,14 @@ bool VM::run(size_t targetFrameCount) {
                 if (okA && okB) {
                     push(shiftLeft(a, b));
                 } else if (!callBinaryMetamethod(a, b, "__shl")) {
+                    if (hadError_) return false;
                     if (a.isNumber() && b.isNumber()) {
                         int opIdx = !okA ? 0 : 1;
                         runtimeError("number" + getVarInfo(currentFrame().ip - 1, opIdx) + " has no integer representation");
                     } else {
-                        runtimeError("attempt to perform bitwise operation on " + a.typeToString() + " and " + b.typeToString());
+                        Value badVal = !okA ? a : b;
+                        int opIdx = !okA ? 0 : 1;
+                        runtimeError("attempt to perform bitwise operation on a " + typeName(badVal) + " value" + getVarInfo(currentFrame().ip - 1, opIdx));
                     }
                 }
                 break;
@@ -820,11 +1035,14 @@ bool VM::run(size_t targetFrameCount) {
                 if (okA && okB) {
                     push(shiftRight(a, b));
                 } else if (!callBinaryMetamethod(a, b, "__shr")) {
+                    if (hadError_) return false;
                     if (a.isNumber() && b.isNumber()) {
                         int opIdx = !okA ? 0 : 1;
                         runtimeError("number" + getVarInfo(currentFrame().ip - 1, opIdx) + " has no integer representation");
                     } else {
-                        runtimeError("attempt to perform bitwise operation on " + a.typeToString() + " and " + b.typeToString());
+                        Value badVal = !okA ? a : b;
+                        int opIdx = !okA ? 0 : 1;
+                        runtimeError("attempt to perform bitwise operation on a " + typeName(badVal) + " value" + getVarInfo(currentFrame().ip - 1, opIdx));
                     }
                 }
                 break;
@@ -836,7 +1054,10 @@ bool VM::run(size_t targetFrameCount) {
                 if ((a.isString() || a.isNumber()) && (b.isString() || b.isNumber())) {
                     push(concat(a, b));
                 } else if (!callBinaryMetamethod(a, b, "__concat")) {
-                    runtimeError("attempt to concatenate " + a.typeToString() + " and " + b.typeToString());
+                    if (hadError_) return false;
+                    Value badVal = !(a.isString() || a.isNumber()) ? a : b;
+                    int opIdx = !(a.isString() || a.isNumber()) ? 0 : 1;
+                    runtimeError("attempt to concatenate a " + typeName(badVal) + " value" + getVarInfo(currentFrame().ip - 1, opIdx));
                 }
                 break;
             }
@@ -847,7 +1068,8 @@ bool VM::run(size_t targetFrameCount) {
                 if (coerceToNumber(ca)) {
                     push(negate(ca));
                 } else if (!callBinaryMetamethod(a, a, "__unm")) {
-                    runtimeError("attempt to perform arithmetic on " + a.typeToString());
+                    if (hadError_) return false;
+                    runtimeError("attempt to perform arithmetic on a " + typeName(a) + " value" + getVarInfo(currentFrame().ip - 1, 0));
                 }
                 break;
             }
@@ -864,10 +1086,11 @@ bool VM::run(size_t targetFrameCount) {
                 if (toIntegerNoString(a, ia)) {
                     push(makeInteger(~ia));
                 } else if (!callBinaryMetamethod(a, a, "__bnot")) { // Unary bitwise NOT
+                    if (hadError_) return false;
                     if (a.isNumber()) {
                         runtimeError("number" + getVarInfo(currentFrame().ip - 1, 0) + " has no integer representation");
                     } else {
-                        runtimeError("attempt to perform bitwise operation on " + a.typeToString());
+                        runtimeError("attempt to perform bitwise operation on a " + typeName(a) + " value" + getVarInfo(currentFrame().ip - 1, 0));
                     }
                 }
                 break;
@@ -883,7 +1106,7 @@ bool VM::run(size_t targetFrameCount) {
                         push(mm);
                         push(a);
                         push(a);
-                        callValue(2, 2); // Expect 1 result (1+1=2)
+                        if (!callValue(2, 2, false, "len")) return false; // Expect 1 result (1+1=2)
                     } else {
                         push(Value::integer(static_cast<int64_t>(a.asTableObj()->length())));
                     }
@@ -893,9 +1116,9 @@ bool VM::run(size_t targetFrameCount) {
                         push(mm);
                         push(a);
                         push(a);
-                        callValue(2, 2);
+                        if (!callValue(2, 2, false, "len")) return false;
                     } else {
-                        runtimeError("attempt to get length of a " + a.typeToString() + " value");
+                        runtimeError("attempt to get length of a " + typeName(a) + " value");
                     }
                 }
                 break;
@@ -909,6 +1132,7 @@ bool VM::run(size_t targetFrameCount) {
                 } else if (a.isTable() && b.isTable() && callBinaryMetamethod(a, b, "__eq")) {
                     // Metamethod called, result will be pushed
                 } else {
+                    if (hadError_) return false;
                     push(Value::boolean(false));
                 }
                 break;
@@ -922,7 +1146,14 @@ bool VM::run(size_t targetFrameCount) {
                 } else if ((a.isString() || a.isRuntimeString()) && (b.isString() || b.isRuntimeString())) {
                     push(Value::boolean(getStringValue(a) < getStringValue(b)));
                 } else if (!callBinaryMetamethod(a, b, "__lt")) {
-                    runtimeError("attempt to compare " + a.typeToString() + " and " + b.typeToString());
+                    if (hadError_) return false;
+                    std::string ta = typeName(a);
+                    std::string tb = typeName(b);
+                    if (ta == tb) {
+                        runtimeError("attempt to compare two " + ta + " values");
+                    } else {
+                        runtimeError("attempt to compare " + ta + " with " + tb);
+                    }
                 }
                 break;
             }
@@ -936,7 +1167,14 @@ bool VM::run(size_t targetFrameCount) {
                     push(Value::boolean(getStringValue(a) <= getStringValue(b)));
                 } else {
                     if (!callBinaryMetamethod(a, b, "__le")) {
-                        runtimeError("attempt to compare " + a.typeToString() + " and " + b.typeToString());
+                        if (hadError_) return false;
+                        std::string ta = typeName(a);
+                        std::string tb = typeName(b);
+                        if (ta == tb) {
+                            runtimeError("attempt to compare two " + ta + " values");
+                        } else {
+                            runtimeError("attempt to compare " + ta + " with " + tb);
+                        }
                     }
                 }
                 break;
@@ -951,7 +1189,14 @@ bool VM::run(size_t targetFrameCount) {
                     push(Value::boolean(getStringValue(a) > getStringValue(b)));
                 } else {
                     if (!callBinaryMetamethod(b, a, "__lt")) {
-                        runtimeError("attempt to compare " + a.typeToString() + " and " + b.typeToString());
+                        if (hadError_) return false;
+                        std::string ta = typeName(a);
+                        std::string tb = typeName(b);
+                        if (ta == tb) {
+                            runtimeError("attempt to compare two " + ta + " values");
+                        } else {
+                            runtimeError("attempt to compare " + ta + " with " + tb);
+                        }
                     }
                 }
                 break;
@@ -966,7 +1211,14 @@ bool VM::run(size_t targetFrameCount) {
                     push(Value::boolean(getStringValue(a) >= getStringValue(b)));
                 } else {
                     if (!callBinaryMetamethod(b, a, "__le")) {
-                        runtimeError("attempt to compare " + a.typeToString() + " and " + b.typeToString());
+                        if (hadError_) return false;
+                        std::string ta = typeName(a);
+                        std::string tb = typeName(b);
+                        if (ta == tb) {
+                            runtimeError("attempt to compare two " + ta + " values");
+                        } else {
+                            runtimeError("attempt to compare " + ta + " with " + tb);
+                        }
                     }
                 }
                 break;
@@ -1095,7 +1347,7 @@ bool VM::run(size_t targetFrameCount) {
                 
                 // JIT Hotness tracking
                 Value callee = peek(argCount);
-                if (callee.isClosure()) {
+                if (callee.isClosure() && !callee.asClosureObj()->isC()) {
                     FunctionObject* func = callee.asClosureObj()->function();
                     if (isJitEnabled() && !func->getJITCode() && func->incrementHotness() >= 10) {
 #ifdef USE_JIT
@@ -1127,7 +1379,7 @@ bool VM::run(size_t targetFrameCount) {
 
                 // JIT Hotness tracking
                 Value callee = peek(actualArgCount);
-                if (callee.isClosure()) {
+                if (callee.isClosure() && !callee.asClosureObj()->isC()) {
                     FunctionObject* func = callee.asClosureObj()->function();
                     if (isJitEnabled() && !func->getJITCode() && func->incrementHotness() >= 10) {
 #ifdef USE_JIT
@@ -1158,10 +1410,13 @@ bool VM::run(size_t targetFrameCount) {
                 if (!callValue(argCount, 0, true)) {
                     return false;
                 }
-                // If it was a Lua call, trigger hook
-                if (currentCoroutine_->frames.size() > prevFrames && 
-                    (currentCoroutine_->hookMask & CoroutineObject::MASK_CALL)) {
-                    callHook("call");
+                if (currentCoroutine_->status == CoroutineObject::Status::SUSPENDED) return true;
+                if (currentCoroutine_->hookMask & CoroutineObject::MASK_CALL) {
+                    if (currentCoroutine_->frames.size() > prevFrames) {
+                        callHook("call");
+                    } else if (!currentCoroutine_->frames.empty() && currentFrame().isTailCall) {
+                        callHook("tail call");
+                    }
                 }
                 break;
             }
@@ -1173,10 +1428,13 @@ bool VM::run(size_t targetFrameCount) {
                 if (!callValue(actualArgCount, 0, true)) {
                     return false;
                 }
-                // If it was a Lua call, trigger hook
-                if (currentCoroutine_->frames.size() > prevFrames && 
-                    (currentCoroutine_->hookMask & CoroutineObject::MASK_CALL)) {
-                    callHook("call");
+                if (currentCoroutine_->status == CoroutineObject::Status::SUSPENDED) return true;
+                if (currentCoroutine_->hookMask & CoroutineObject::MASK_CALL) {
+                    if (currentCoroutine_->frames.size() > prevFrames) {
+                        callHook("call");
+                    } else if (!currentCoroutine_->frames.empty() && currentFrame().isTailCall) {
+                        callHook("tail call");
+                    }
                 }
                 break;
             }
@@ -1221,7 +1479,18 @@ bool VM::run(size_t targetFrameCount) {
 
                 // Handle debug hook before returning
                 if (currentCoroutine_->hookMask & CoroutineObject::MASK_RET) {
-                    callHook("return");
+                    size_t retBase = currentCoroutine_->stack.size();
+                    for (const auto& val : returnValues) {
+                        push(val);
+                    }
+                    int ftransfer = static_cast<int>(retBase - stackBase) + 1;
+                    callHook("return", -1, ftransfer, static_cast<int>(returnValues.size()));
+                    for (size_t i = 0; i < returnValues.size(); i++) {
+                        returnValues[i] = currentCoroutine_->stack[retBase + i];
+                    }
+                    while (currentCoroutine_->stack.size() > retBase) {
+                        pop();
+                    }
                 }
 
                 if (currentFrame().isPcall) {
@@ -1441,7 +1710,7 @@ bool VM::run(size_t targetFrameCount) {
                     Value indexMethod = getMetamethod(t, "__index");
                     if (indexMethod.isNil()) {
                         if (!t.isTable()) {
-                            runtimeError("attempt to index a " + t.typeToString() + " value");
+                            runtimeError("attempt to index a " + typeName(t) + " value" + (loop == 0 ? getVarInfo(currentFrame().ip - 1, 0) : ""));
                         }
                         push(Value::nil());
                         done = true;
@@ -1450,7 +1719,7 @@ bool VM::run(size_t targetFrameCount) {
                         push(indexMethod);
                         push(t);
                         push(key);
-                        callValue(2, 2); // Expect 1 result (1 + 1 = 2)
+                        callValue(2, 2, false, "index"); // Expect 1 result (1 + 1 = 2)
                         done = true;
                         break;
                     } else if (indexMethod.isTable()) {
@@ -1514,7 +1783,7 @@ bool VM::run(size_t targetFrameCount) {
                             TableObject* table = t.asTableObj();
                             table->set(key, value);
                         } else {
-                            runtimeError("attempt to index a " + t.typeToString() + " value");
+                            runtimeError("attempt to index a " + typeName(t) + " value" + (loop == 0 ? getVarInfo(currentFrame().ip - 1, 2) : ""));
                         }
                         pop(); pop(); pop();
                         done = true;
@@ -1522,7 +1791,7 @@ bool VM::run(size_t targetFrameCount) {
                     } else if (newIndex.isFunction()) {
                         currentCoroutine_->stack[currentCoroutine_->stack.size() - 3] = t;
                         currentCoroutine_->stack.insert(currentCoroutine_->stack.end() - 3, newIndex);
-                        callValue(3, 1); // Expect 0 results (0 + 1 = 1)
+                        callValue(3, 1, false, "newindex"); // Expect 0 results (0 + 1 = 1)
                         done = true;
                         break;
                     } else if (newIndex.isTable()) {
@@ -1686,7 +1955,7 @@ bool VM::run(size_t targetFrameCount) {
                 Value upTable = upvalue->get(currentCoroutine_->stack);
 
                 if (!upTable.isTable()) {
-                    runtimeError("attempt to index a " + upTable.typeToString() + " value");
+                    runtimeError("attempt to index a " + typeName(upTable) + " value");
                     pop();
                     break;
                 }
@@ -1709,7 +1978,7 @@ bool VM::run(size_t targetFrameCount) {
                 Value value = pop();
 
                 if (!envTable.isTable()) {
-                    runtimeError("attempt to index a " + envTable.typeToString() + " value");
+                    runtimeError("attempt to index a " + typeName(envTable) + " value");
                     break;
                 }
                 TableObject* table = envTable.asTableObj();
@@ -1795,12 +2064,24 @@ bool VM::run(size_t targetFrameCount) {
             }
 
             case OpCode::OP_FORPREP: {
-                uint8_t base = readByte();
+                uint8_t rawBase = readByte();
+                bool stepDefault = (rawBase & 0x80) != 0;
+                uint8_t base = rawBase & 0x7F;
                 uint16_t offset = readByte() | (readByte() << 8);
                 size_t actualBase = currentCoroutine_->frames.empty() ? base : (currentFrame().stackBase + base);
-                if (actualBase + 3 >= currentCoroutine_->stack.size()) {
-                    runtimeError("Invalid stack for numeric for");
-                    break;
+                if (stepDefault) {
+                    if (actualBase + 1 >= currentCoroutine_->stack.size()) {
+                        runtimeError("Invalid stack for numeric for");
+                        break;
+                    }
+                    push(Value::integer(1));
+                    push(Value::nil());
+                } else {
+                    if (actualBase + 2 >= currentCoroutine_->stack.size()) {
+                        runtimeError("Invalid stack for numeric for");
+                        break;
+                    }
+                    push(Value::nil());
                 }
                 Value& v_init = currentCoroutine_->stack[actualBase];
                 Value& v_limit = currentCoroutine_->stack[actualBase + 1];
@@ -1822,7 +2103,7 @@ bool VM::run(size_t targetFrameCount) {
                             return true;
                         }
                     }
-                    runtimeError(std::string("'for' ") + name + " must be a number");
+                    runtimeError(std::string("bad 'for' ") + name + " (number expected, got " + typeName(v) + ")");
                     return false;
                 };
 
@@ -1872,6 +2153,7 @@ bool VM::run(size_t targetFrameCount) {
                     }
 
                     if (skipLoop) {
+                        currentCoroutine_->stack.resize(actualBase);
                         currentFrame().ip += offset;
                         break;
                     }
@@ -1896,6 +2178,7 @@ bool VM::run(size_t targetFrameCount) {
                     }
 
                     if (skipLoop) {
+                        currentCoroutine_->stack.resize(actualBase);
                         currentFrame().ip += offset;
                         break;
                     }
@@ -1978,6 +2261,9 @@ bool VM::run(size_t targetFrameCount) {
                         }
                     }
                 }
+                if (!canContinue) {
+                    currentCoroutine_->stack.resize(actualBase);
+                }
                 break;
             }
 
@@ -1992,7 +2278,8 @@ bool VM::run(size_t targetFrameCount) {
                 currentFrame().ip += 1;
 
                 if (currentCoroutine_->hookMask & CoroutineObject::MASK_RET) {
-                    callHook("return");
+                    int ftransfer = static_cast<int>(currentCoroutine_->stack.size() - stackBase) + 1;
+                    callHook("return", -1, ftransfer, 0);
                 }
 
                 {

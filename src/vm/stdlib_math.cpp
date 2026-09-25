@@ -23,7 +23,7 @@ static bool checkNumber(VM* vm, const Value& val, const char* funcName, int argN
             return true;
         }
     }
-    vm->runtimeError(std::string("bad argument #") + std::to_string(argNum) + " to '" + funcName + "' (number expected, got " + val.typeToString() + ")");
+    vm->runtimeError(std::string("bad argument #") + std::to_string(argNum) + " to '" + funcName + "' (number expected, got " + vm->typeName(val) + ")");
     return false;
 }
 
@@ -60,7 +60,7 @@ static bool checkInteger(VM* vm, const Value& val, const char* funcName, int arg
             return false;
         }
     }
-    vm->runtimeError(std::string("bad argument #") + std::to_string(argNum) + " to '" + funcName + "' (number expected, got " + val.typeToString() + ")");
+    vm->runtimeError(std::string("bad argument #") + std::to_string(argNum) + " to '" + funcName + "' (number expected, got " + vm->typeName(val) + ")");
     return false;
 }
 

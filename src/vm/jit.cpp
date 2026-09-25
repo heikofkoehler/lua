@@ -150,7 +150,8 @@ JITFunc JITCompiler::compile(FunctionObject* function) {
             }
             case OpCode::OP_SET_LOCAL: {
                 uint8_t slot = bytecode[++i];
-                a.ldr(scratch, a64::ptr(top_reg, -8));
+                a.sub(top_reg, top_reg, 8);
+                a.ldr(scratch, a64::ptr(top_reg));
                 a.str(scratch, a64::ptr(local_reg, (uint64_t)slot * 8));
                 break;
             }

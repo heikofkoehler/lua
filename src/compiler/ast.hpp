@@ -17,12 +17,17 @@ public:
     virtual void accept(ASTVisitor& visitor) = 0;
 
     int line() const { return line_; }
+    void setLine(int line) { line_ = line; }
+
+    int lastLine() const { return lastLine_; }
+    void setLastLine(int line) { lastLine_ = line; }
 
 protected:
-    explicit ASTNode(int line) : line_(line) {}
+    explicit ASTNode(int line) : line_(line), lastLine_(line) {}
 
 private:
     int line_;  // Source line number for error reporting
+    int lastLine_;
 };
 
 // Expression Nodes
@@ -97,7 +102,9 @@ class BinaryNode : public ExprNode {
 public:
     BinaryNode(std::unique_ptr<ExprNode> left, TokenType op,
                std::unique_ptr<ExprNode> right, int line)
-        : ExprNode(line), left_(std::move(left)), op_(op), right_(std::move(right)) {}
+        : ExprNode(line), left_(std::move(left)), op_(op), right_(std::move(right)) {
+        if (right_) setLastLine(right_->lastLine());
+    }
 
     void accept(ASTVisitor& visitor) override;
 
@@ -198,7 +205,9 @@ public:
     IndexExprNode(std::unique_ptr<ExprNode> table,
                   std::unique_ptr<ExprNode> key,
                   int line)
-        : ExprNode(line), table_(std::move(table)), key_(std::move(key)) {}
+        : ExprNode(line), table_(std::move(table)), key_(std::move(key)) {
+        if (key_) setLastLine(key_->lastLine());
+    }
 
     void accept(ASTVisitor& visitor) override;
 
@@ -472,17 +481,20 @@ class WhileStmtNode : public StmtNode {
 public:
     WhileStmtNode(std::unique_ptr<ExprNode> condition,
                   std::vector<std::unique_ptr<StmtNode>> body,
-                  int line)
-        : StmtNode(line), condition_(std::move(condition)), body_(std::move(body)) {}
+                  int line, int endLine = 0)
+        : StmtNode(line), condition_(std::move(condition)), body_(std::move(body)),
+          endLine_(endLine ? endLine : line) {}
 
     void accept(ASTVisitor& visitor) override;
 
     ExprNode* condition() const { return condition_.get(); }
     const std::vector<std::unique_ptr<StmtNode>>& body() const { return body_; }
+    int endLine() const { return endLine_; }
 
 private:
     std::unique_ptr<ExprNode> condition_;
     std::vector<std::unique_ptr<StmtNode>> body_;
+    int endLine_ = 0;
 };
 
 // Repeat-until loop: repeat-until
@@ -511,9 +523,10 @@ public:
                 std::unique_ptr<ExprNode> end,
                 std::unique_ptr<ExprNode> step,
                 std::vector<std::unique_ptr<StmtNode>> body,
-                int line)
+                int line, int endLine = 0)
         : StmtNode(line), varName_(varName), start_(std::move(start)),
-          end_(std::move(end)), step_(std::move(step)), body_(std::move(body)) {}
+          end_(std::move(end)), step_(std::move(step)), body_(std::move(body)),
+          endLine_(endLine ? endLine : line) {}
 
     void accept(ASTVisitor& visitor) override;
 
@@ -522,6 +535,7 @@ public:
     ExprNode* end() const { return end_.get(); }
     ExprNode* step() const { return step_.get(); }
     const std::vector<std::unique_ptr<StmtNode>>& body() const { return body_; }
+    int endLine() const { return endLine_; }
 
 private:
     std::string varName_;
@@ -529,6 +543,7 @@ private:
     std::unique_ptr<ExprNode> end_;
     std::unique_ptr<ExprNode> step_;  // Can be nullptr (defaults to 1)
     std::vector<std::unique_ptr<StmtNode>> body_;
+    int endLine_ = 0;
 };
 
 // Generic for loop: for var1, var2 in iterators do body end
@@ -537,9 +552,9 @@ public:
     ForInStmtNode(std::vector<std::string> varNames,
                   std::vector<std::unique_ptr<ExprNode>> iterators,
                   std::vector<std::unique_ptr<StmtNode>> body,
-                  int line)
+                  int line, int endLine = 0)
         : StmtNode(line), varNames_(std::move(varNames)), iterators_(std::move(iterators)),
-          body_(std::move(body)) {}
+          body_(std::move(body)), endLine_(endLine ? endLine : line) {}
 
     void accept(ASTVisitor& visitor) override;
 
@@ -547,11 +562,13 @@ public:
     const std::vector<std::unique_ptr<ExprNode>>& iterators() const { return iterators_; }
     ExprNode* iterator() const { return iterators_.empty() ? nullptr : iterators_[0].get(); }
     const std::vector<std::unique_ptr<StmtNode>>& body() const { return body_; }
+    int endLine() const { return endLine_; }
 
 private:
     std::vector<std::string> varNames_;
     std::vector<std::unique_ptr<ExprNode>> iterators_;
     std::vector<std::unique_ptr<StmtNode>> body_;
+    int endLine_ = 0;
 };
 
 // Function declaration: function name(params) body end
@@ -652,7 +669,7 @@ private:
 // Program: list of statements
 class ProgramNode : public ASTNode {
 public:
-    explicit ProgramNode(int line = 1) : ASTNode(line) {}
+    explicit ProgramNode(int line = 1) : ASTNode(line), lastLine_(line) {}
 
     void accept(ASTVisitor& visitor) override;
 
@@ -664,8 +681,12 @@ public:
         return statements_;
     }
 
+    void setLastLine(int line) { lastLine_ = line; }
+    int lastLine() const { return lastLine_; }
+
 private:
     std::vector<std::unique_ptr<StmtNode>> statements_;
+    int lastLine_ = 1;
 };
 
 // Visitor interface for traversing AST

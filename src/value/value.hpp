@@ -261,7 +261,7 @@ public:
     std::string typeToString() const;
     void print(std::ostream& os) const;
 
-    void serialize(std::ostream& os, const Chunk* chunk, const std::string& parentSource = "") const;
+    void serialize(std::ostream& os, const Chunk* chunk, const std::string& parentSource = "", bool strip = false) const;
     static Value deserialize(std::istream& is, Chunk* chunk, const std::string& parentSource = "");
 };
 

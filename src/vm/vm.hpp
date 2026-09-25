@@ -81,10 +81,12 @@ public:
     TableObject* createTable(size_t nseq = 0, size_t nrec = 0);
 
     // Userdata operations
-    class UserdataObject* createUserdata(void* data);
+    class UserdataObject* createUserdata(void* data, int numUserValues = 1, bool isLight = false);
 
     // Closure operations
     ClosureObject* createClosure(FunctionObject* function);
+    ClosureObject* createCClosure(NativeFunction nativeFunc, const std::vector<Value>& upvalues);
+    ClosureObject* createCClosure(lua_CFunction cFunc, const std::vector<Value>& upvalues);
 
     // Coroutine operations
     CoroutineObject* createCoroutine(ClosureObject* closure);
@@ -134,6 +136,18 @@ public:
     void runtimeError(const std::string& message, int level = 1);
     void runtimeError(const Value& errorObj, int level = 1);
     std::string getVarInfo(size_t opIp, int operandIndex);
+    std::string getCallVarInfo(size_t opIp, int argCount);
+
+    struct CallingFuncInfo {
+        bool isMethod = false;
+        std::string name;
+        std::string namewhat;
+    };
+    CallingFuncInfo getCallingFuncInfo();
+    CallingFuncInfo getFrameFuncInfo(int frameIndex, CoroutineObject* co = nullptr);
+    std::string findGlobalFuncName(const Value& funcVal);
+    bool argError(int argNum, const std::string& extramsg, const char* funcNameFallback = nullptr);
+    bool typeError(int argNum, const std::string& expectedType, const Value& actualVal, int totalArgCount, const char* funcNameFallback = nullptr);
 
     // Access to globals (for base library)
     std::unordered_map<std::string, Value>& globals() { return globals_; }
@@ -219,12 +233,14 @@ public:
     void setGCMode(GCMode mode) { gcMode_ = mode; }
     GCState gcState() const { return gcState_; }
     void setGCState(GCState state) { gcState_ = state; }
+    GCObject* gcObjects() const { return gcObjects_; }
     bool gcEnabled() const { return gcEnabled_; }
     void setGCEnabled(bool enabled) { gcEnabled_ = enabled; }
     bool warnEnabled() const { return warnEnabled_; }
     void setWarnEnabled(bool enabled) { warnEnabled_ = enabled; }
     void close();
     bool isClosing() const { return isClosing_; }
+    bool isRunningFinalizers() const { return isRunningFinalizers_; }
     void setupSigintHandler();
     const std::string& lastErrorMessage() const { return lastErrorMessage_; }
     const Value& lastErrorObject() const { return lastErrorObject_; }
@@ -234,10 +250,13 @@ public:
     void markObject(GCObject* object);
     void grayObject(GCObject* object);
     void sweep();
-    void runFinalizers();
+    void runFinalizers(bool force = false);
     void freeObject(GCObject* object);
     void addObject(GCObject* object);
+    void collectWeakTables();
     void processWeakTables();
+    void clearWeakValues();
+    void clearWeakKeys();
     void removeUnmarkedWeakEntries();
 
     // Write barriers
@@ -250,8 +269,9 @@ public:
     Value getTable(const Value& tableVal, const Value& key);
     bool callBinaryMetamethod(const Value& a, const Value& b, const std::string& method);
     bool callValue(int argCount, int retCount, bool isTailCall = false, const char* metamethodName = nullptr, int extraArgs = 0);
-    void callHook(const char* event, int line = -1);
+    void callHook(const char* event, int line = -1, int ftransfer = 0, int ntransfer = 0);
     std::string getStringValue(const Value& value);
+    std::string typeName(const Value& val);
     const void* valueToPointer(const Value& val) const;
     bool toLString(const Value& val, std::string& out);
 
@@ -272,6 +292,7 @@ public:
     static bool stringToNumber(const std::string& str, double& outNum, int64_t& outInt, bool& isInt);
     Value less(const Value& a, const Value& b);
     Value lessEqual(const Value& a, const Value& b);
+    bool isHandlingError() const { return isHandlingError_; }
 
 private:
     lua_State* currentL_ = nullptr;
@@ -335,6 +356,8 @@ private:
     bool inPcall_;                // Whether we are inside a protected call
     bool isHandlingError_;        // TRUE if we're currently processing an error
     bool isRunningErrorHandler_ = false; // TRUE if we are currently executing a message handler
+    bool isHandlingStackError_ = false;  // TRUE if currently handling a stack overflow error
+    int errorHandlerDepth_ = 0;
     std::string lastErrorMessage_; // Last runtime error message
     Value lastErrorObject_ = Value::nil();
     std::vector<Value> errorHandlers_; // Active error handlers for xpcall / lua_pcall
@@ -358,6 +381,7 @@ private:
     size_t memoryLimit_;          // Maximum bytes allowed before Emergency GC
     bool gcEnabled_;              // Can disable GC for debugging
     bool warnEnabled_;            // Lua 5.4 warning state
+    bool isRunningFinalizers_ = false;
     bool isClosing_ = false;      // VM close in progress
 public:
     volatile sig_atomic_t interrupted_ = 0; // SIGINT flag

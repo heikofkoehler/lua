@@ -11,6 +11,7 @@ void TableObject::set(const Value& key, const Value& value) {
         auto it = map_.find(key);
         if (it != map_.end()) {
             it->second = Value::nil();
+            lastLen_ = 0;
         }
     } else {
         if (VM::currentVM) {
@@ -45,6 +46,38 @@ void TableObject::set(const std::string& key, const Value& value) {
         // VM::currentVM->checkGC(128);
         
         map_[Value::runtimeString(str)] = value;
+    }
+}
+
+void TableObject::erase(const Value& key) {
+    if (key.isNil() || (key.isFloat() && std::isnan(key.asNumber()))) {
+        return;
+    }
+    auto it = map_.find(key);
+    if (it != map_.end()) {
+        map_.erase(it);
+        lastLen_ = 0;
+        return;
+    }
+    if (key.isString()) {
+        for (auto sit = map_.begin(); sit != map_.end(); ++sit) {
+            if (sit->first == key) {
+                map_.erase(sit);
+                lastLen_ = 0;
+                return;
+            }
+        }
+    }
+}
+
+void TableObject::cleanNilEntries() {
+    auto it = map_.begin();
+    while (it != map_.end()) {
+        if (it->second.isNil()) {
+            it = map_.erase(it);
+        } else {
+            ++it;
+        }
     }
 }
 
@@ -120,3 +153,66 @@ std::pair<Value, Value> TableObject::next(const Value& key, bool& keyFound) cons
 void TableObject::markReferences() {
     // Table marking is handled by blackenObject in incremental GC
 }
+
+size_t TableObject::length() const {
+    if (map_.empty()) {
+        lastLen_ = 0;
+        return 0;
+    }
+
+    auto isNonNil = [this](size_t idx) -> bool {
+        auto it = map_.find(Value::integer(static_cast<int64_t>(idx)));
+        return it != map_.end() && !it->second.isNil();
+    };
+
+    // Fast check: if t[1] is nil, length is 0
+    if (!isNonNil(1)) {
+        lastLen_ = 0;
+        return 0;
+    }
+
+    // Fast path: cached length
+    if (lastLen_ > 0) {
+        if (isNonNil(lastLen_) && !isNonNil(lastLen_ + 1)) {
+            return lastLen_;
+        }
+        if (isNonNil(lastLen_ + 1) && !isNonNil(lastLen_ + 2)) {
+            lastLen_++;
+            return lastLen_;
+        }
+    }
+
+    size_t maxLimit = map_.size() + 1;
+    // Exponential search
+    size_t low = 1;
+    size_t high = std::min(size_t(2), maxLimit);
+    while (isNonNil(high)) {
+        low = high;
+        if (!isNonNil(low + 1)) {
+            lastLen_ = low;
+            return low;
+        }
+        if (high >= maxLimit) {
+            break;
+        }
+        if (high > maxLimit / 2) {
+            high = maxLimit;
+        } else {
+            high *= 2;
+        }
+    }
+
+    // Binary search in (low, high]
+    while (high - low > 1) {
+        size_t mid = low + (high - low) / 2;
+        if (isNonNil(mid)) {
+            low = mid;
+        } else {
+            high = mid;
+        }
+    }
+
+    lastLen_ = low;
+    return low;
+}
+

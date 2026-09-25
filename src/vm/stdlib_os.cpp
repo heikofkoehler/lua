@@ -152,7 +152,7 @@ bool native_os_exit(VM* vm, int argCount) {
     }
     if (closeState) {
         if (vm->isClosing()) {
-            vm->runFinalizers();
+            vm->runFinalizers(true);
         } else {
             vm->close();
         }

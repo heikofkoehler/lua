@@ -20,14 +20,20 @@ struct CallFrame {
     std::vector<Value> varargs; // Varargs passed to this function
     bool isPcall = false;       // TRUE if this frame is a pcall boundary
     bool isHook = false;        // TRUE if this frame is a debug hook
+    bool isInterruptedByHook = false; // TRUE if this frame was interrupted by a debug hook
     bool isC = false;           // TRUE if this frame is a C/native function
     Value cFunc = Value::nil(); // The C function value
     Value errorHandler = Value::nil(); // Error handler for xpcall
     bool isCloseMetamethod = false;
+    std::string metamethodName;
     bool isReturning = false;
     bool isErrorUnwinding = false;
     bool isTailCall = false;
     int extraargs = 0;
+    int ftransfer = 0;
+    int ntransfer = 0;
+    int lastLine = -1;
+    size_t lastIp = static_cast<size_t>(-1);
 };
 
 struct CoroutineCloseSelfException {

@@ -13,11 +13,14 @@
 #include <sstream>
 #include <iostream>
 #include <clocale>
+#include <string_view>
 
 namespace {
 
 // Lua Pattern Matching Implementation
 #define MAXCCALLS 200  // maximum recursion depth in pattern matching
+#define CAP_UNFINISHED (-1)
+#define CAP_POSITION   (-2)
 
 struct MatchState {
     VM* vm;
@@ -32,9 +35,9 @@ struct MatchState {
     } capture[32];        // LUA_MAXCAPTURES = 32
 };
 
-const char* match(MatchState* ms, const char* s, const char* p);
+static const char* match(MatchState* ms, const char* s, const char* p);
 
-const char* match_class(char c, char cl) {
+static bool match_class(int c, int cl) {
     bool res;
     switch (tolower(cl)) {
         case 'a': res = isalpha((unsigned char)c); break;
@@ -48,123 +51,133 @@ const char* match_class(char c, char cl) {
         case 'w': res = isalnum((unsigned char)c); break;
         case 'x': res = isxdigit((unsigned char)c); break;
         case 'z': res = (c == 0); break;
-        default: return (cl == c) ? "" : nullptr;
+        default: return (cl == c);
     }
-    return (isupper(cl) ? !res : res) ? "" : nullptr;
+    return isupper(cl) ? !res : res;
 }
 
-bool single_match(char c, const char* p, const char* ep) {
+static bool matchbracketclass(int c, const char* p, const char* ec) {
+    bool sig = true;
+    if (*(p + 1) == '^') {
+        sig = false;
+        p++; // skip '^'
+    }
+    while (++p < ec) {
+        if (*p == '%') {
+            p++;
+            if (match_class(c, (unsigned char)*p))
+                return sig;
+        } else if ((*(p + 1) == '-') && (p + 2 < ec)) {
+            p += 2;
+            if ((unsigned char)*(p - 2) <= (unsigned char)c && (unsigned char)c <= (unsigned char)*p)
+                return sig;
+        } else if ((unsigned char)*p == (unsigned char)c) {
+            return sig;
+        }
+    }
+    return !sig;
+}
+
+static bool single_match(char c, const char* p, const char* ep) {
     switch (*p) {
         case '.': return true;
-        case '%': return match_class(c, p[1]) != nullptr;
-        case '[': {
-            bool neg = (p[1] == '^');
-            const char* curr = neg ? p + 2 : p + 1;
-            bool found = false;
-            while (curr < ep - 1) {
-                if (*curr == '%') {
-                    if (match_class(c, curr[1])) found = true;
-                    curr += 2;
-                } else if (curr + 2 < ep - 1 && curr[1] == '-') {
-                    if ((unsigned char)curr[0] <= (unsigned char)c && (unsigned char)c <= (unsigned char)curr[2])
-                        found = true;
-                    curr += 3;
-                } else {
-                    if (c == *curr) found = true;
-                    curr++;
-                }
-            }
-            return neg ? !found : found;
-        }
+        case '%': return match_class((unsigned char)c, (unsigned char)p[1]);
+        case '[': return matchbracketclass((unsigned char)c, p, ep - 1);
         default: return (unsigned char)c == (unsigned char)*p;
     }
 }
 
-const char* class_end(MatchState* ms, const char* p) {
+static const char* class_end(MatchState* ms, const char* p) {
     switch (*p++) {
-        case '%':
-            if (p == ms->p_end) ms->vm->runtimeError("malformed pattern (ends with '%')");
+        case '%': {
+            if (p == ms->p_end)
+                ms->vm->runtimeError("malformed pattern (ends with '%')");
             return p + 1;
-        case '[':
+        }
+        case '[': {
+            if (p == ms->p_end)
+                ms->vm->runtimeError("malformed pattern (missing ']')");
             if (*p == '^') p++;
             do {
-                if (p == ms->p_end) ms->vm->runtimeError("malformed pattern (missing ']')");
-                if (*(p++) == '%' && p < ms->p_end) p++;
-            } while (*p != ']');
+                if (p == ms->p_end)
+                    ms->vm->runtimeError("malformed pattern (missing ']')");
+                if (*(p++) == '%' && p < ms->p_end)
+                    p++;
+            } while (p < ms->p_end && *p != ']');
+            if (p == ms->p_end)
+                ms->vm->runtimeError("malformed pattern (missing ']')");
             return p + 1;
+        }
         default:
             return p;
     }
 }
 
-const char* match_quant(MatchState* ms, const char* s, const char* p, const char* ep) {
-    char op = *ep;
-    ptrdiff_t count = 0;
-    while (s + count < ms->src_end && single_match(s[count], p, ep)) {
-        count++;
+static const char* max_expand(MatchState* ms, const char* s, const char* p, const char* ep) {
+    ptrdiff_t i = 0;
+    while (s + i < ms->src_end && single_match(s[i], p, ep))
+        i++;
+    while (i >= 0) {
+        const char* res = match(ms, s + i, ep + 1);
+        if (res) return res;
+        i--;
     }
-    
-    switch (op) {
-        case '?': {
-            const char* res;
-            if (count > 0 && (res = match(ms, s + 1, ep + 1))) return res;
-            return match(ms, s, ep + 1);
-        }
-        case '+':
-            if (count == 0) return nullptr;
-            [[fallthrough]];
-        case '*':
-            while (count >= (op == '+' ? 1 : 0)) {
-                const char* res = match(ms, s + count, ep + 1);
-                if (res) return res;
-                count--;
-            }
-            return nullptr;
-        case '-': // lazy *
-            for (ptrdiff_t i = 0; i <= count; i++) {
-                const char* res = match(ms, s + i, ep + 1);
-                if (res) return res;
-            }
-            return nullptr;
-        default:
+    return nullptr;
+}
+
+static const char* min_expand(MatchState* ms, const char* s, const char* p, const char* ep) {
+    for (;;) {
+        const char* res = match(ms, s, ep + 1);
+        if (res != nullptr)
+            return res;
+        else if (s < ms->src_end && single_match(*s, p, ep))
+            s++;
+        else
             return nullptr;
     }
 }
 
-const char* start_capture(MatchState* ms, const char* s, const char* p) {
+static const char* start_capture(MatchState* ms, const char* s, const char* p, ptrdiff_t what) {
     int level = ms->level;
-    if (level >= 32) ms->vm->runtimeError("too many captures");
+    if (level >= 32)
+        ms->vm->runtimeError("too many captures");
     ms->capture[level].init = s;
-    ms->capture[level].len = -1; 
+    ms->capture[level].len = what;
     ms->level = level + 1;
     const char* res = match(ms, s, p);
-    if (!res) ms->level--; 
+    if (!res) ms->level--;
     return res;
 }
 
-const char* end_capture(MatchState* ms, const char* s, const char* p) {
-    int l;
-    for (l = ms->level - 1; l >= 0; l--) {
-        if (ms->capture[l].len == -1) break;
+static const char* end_capture(MatchState* ms, const char* s, const char* p) {
+    int l = -1;
+    for (int i = ms->level - 1; i >= 0; i--) {
+        if (ms->capture[i].len == CAP_UNFINISHED) {
+            l = i;
+            break;
+        }
     }
-    if (l < 0) ms->vm->runtimeError("invalid pattern capture");
+    if (l < 0)
+        ms->vm->runtimeError("invalid pattern capture");
     ms->capture[l].len = s - ms->capture[l].init;
     const char* res = match(ms, s, p);
-    if (!res) ms->capture[l].len = -1;
+    if (!res) ms->capture[l].len = CAP_UNFINISHED;
     return res;
 }
 
-const char* match_capture(MatchState* ms, const char* s, int l) {
-    l -= '1';
-    if (l < 0 || l >= ms->level || ms->capture[l].len == -1)
-        ms->vm->runtimeError("invalid capture index");
-    ptrdiff_t len = ms->capture[l].len;
-    if (ms->src_end - s >= len && memcmp(ms->capture[l].init, s, len) == 0)
+static const char* match_capture(MatchState* ms, const char* s, int l) {
+    int cap = l - '1';
+    if (cap < 0 || cap >= ms->level || ms->capture[cap].len == CAP_UNFINISHED || ms->capture[cap].len == CAP_POSITION) {
+        ms->vm->runtimeError("invalid capture index %" + std::string(1, (char)l));
+        return nullptr;
+    }
+    ptrdiff_t len = ms->capture[cap].len;
+    if (ms->src_end - s >= len && memcmp(ms->capture[cap].init, s, len) == 0)
         return s + len;
     return nullptr;
 }
 
-const char* match_balanced(MatchState* ms, const char* s, const char* p) {
+static const char* match_balanced(MatchState* ms, const char* s, const char* p) {
     if (s >= ms->src_end || *s != *p) return nullptr;
     char b = *p;
     char e = *(p + 1);
@@ -177,89 +190,129 @@ const char* match_balanced(MatchState* ms, const char* s, const char* p) {
     return nullptr;
 }
 
-const char* match_frontier(MatchState* ms, const char* s, const char* p) {
-    const char* ep = class_end(ms, p);
-    char prev = (s == ms->src_init) ? '\0' : *(s - 1);
-    char curr = (s == ms->src_end) ? '\0' : *s;
-    if (!single_match(prev, p, ep) && single_match(curr, p, ep))
-        return s;
-    return nullptr;
-}
-
-const char* match(MatchState* ms, const char* s, const char* p) {
+static const char* match(MatchState* ms, const char* s, const char* p) {
     if (ms->matchdepth-- == 0)
         ms->vm->runtimeError("pattern too complex");
-    const char* res;
+    const char* res = nullptr;
     if (p == ms->p_end) { res = s; goto ret; }
-    
+
     switch (*p) {
-        case '(':
-            if (*(p + 1) == ')') { // position capture
-                int level = ms->level;
-                if (level >= 32) ms->vm->runtimeError("too many captures");
-                ms->capture[level].init = s;
-                ms->capture[level].len = -1;
-                ms->level = level + 1;
-                res = match(ms, s, p + 2);
-                if (!res) ms->level--;
+        case '(': {
+            if (p + 1 < ms->p_end && *(p + 1) == ')')
+                res = start_capture(ms, s, p + 2, CAP_POSITION);
+            else
+                res = start_capture(ms, s, p + 1, CAP_UNFINISHED);
+            goto ret;
+        }
+        case ')': {
+            res = end_capture(ms, s, p + 1);
+            goto ret;
+        }
+        case '$': {
+            if (p + 1 == ms->p_end) {
+                res = (s == ms->src_end) ? s : nullptr;
                 goto ret;
             }
-            res = start_capture(ms, s, p + 1); goto ret;
-        case ')':
-            res = end_capture(ms, s, p + 1); goto ret;
-        case '%':
-            if (p[1] == 'b') { // balanced string
-                if (p + 3 >= ms->p_end) ms->vm->runtimeError("malformed pattern (missing arguments to '%b')");
-                res = match_balanced(ms, s, p + 2);
-                if (res) res = match(ms, res, p + 4);
-                goto ret;
+            goto dflt;
+        }
+        case '%': {
+            if (p + 1 < ms->p_end) {
+                switch (*(p + 1)) {
+                    case 'b': {
+                        if (p + 3 >= ms->p_end)
+                            ms->vm->runtimeError("malformed pattern (missing arguments to '%b')");
+                        res = match_balanced(ms, s, p + 2);
+                        if (res) res = match(ms, res, p + 4);
+                        goto ret;
+                    }
+                    case 'f': {
+                        p += 2;
+                        if (p >= ms->p_end || *p != '[')
+                            ms->vm->runtimeError("missing '[' after '%f' in pattern");
+                        const char* ep = class_end(ms, p);
+                        char prev = (s == ms->src_init) ? '\0' : *(s - 1);
+                        char curr = (s == ms->src_end) ? '\0' : *s;
+                        if (!matchbracketclass((unsigned char)prev, p, ep - 1) &&
+                             matchbracketclass((unsigned char)curr, p, ep - 1)) {
+                            res = match(ms, s, ep);
+                        } else {
+                            res = nullptr;
+                        }
+                        goto ret;
+                    }
+                    case '0': case '1': case '2': case '3': case '4':
+                    case '5': case '6': case '7': case '8': case '9': {
+                        res = match_capture(ms, s, *(p + 1));
+                        if (res) res = match(ms, res, p + 2);
+                        goto ret;
+                    }
+                    default:
+                        goto dflt;
+                }
             }
-            if (p[1] == 'f') { // frontier pattern
-                p += 2;
-                if (*p != '[') ms->vm->runtimeError("missing '[' after '%f' in pattern");
-                const char* ep = class_end(ms, p);
-                res = match_frontier(ms, s, p);
-                if (res) res = match(ms, res, ep);
-                goto ret;
-            }
-            if (isdigit((unsigned char)p[1])) {
-                res = match_capture(ms, s, p[1]);
-                if (res) res = match(ms, res, p + 2);
-                goto ret;
-            }
-            [[fallthrough]];
-        case '$':
-            if (p + 1 == ms->p_end) { res = (s == ms->src_end) ? s : nullptr; goto ret; }
-            [[fallthrough]];
-        default: {
+            goto dflt;
+        }
+        default: dflt: {
             const char* ep = class_end(ms, p);
             bool m = (s < ms->src_end && single_match(*s, p, ep));
-            if (ep < ms->p_end && strchr("*+-?", *ep)) {
-                res = match_quant(ms, s, p, ep);
-            } else {
-                res = m ? match(ms, s + 1, ep) : nullptr;
+            if (ep < ms->p_end) {
+                switch (*ep) {
+                    case '?': {
+                        if (m && (res = match(ms, s + 1, ep + 1)))
+                            goto ret;
+                        res = match(ms, s, ep + 1);
+                        goto ret;
+                    }
+                    case '+': {
+                        res = m ? max_expand(ms, s + 1, p, ep) : nullptr;
+                        goto ret;
+                    }
+                    case '*': {
+                        res = max_expand(ms, s, p, ep);
+                        goto ret;
+                    }
+                    case '-': {
+                        res = min_expand(ms, s, p, ep);
+                        goto ret;
+                    }
+                }
             }
+            res = m ? match(ms, s + 1, ep) : nullptr;
             goto ret;
         }
     }
-  ret:
+ret:
     ms->matchdepth++;
     return res;
 }
 
-void push_captures(MatchState* ms, const char* s, const char* e) {
+static int push_captures(MatchState* ms, const char* s, const char* e) {
     int nlevels = (ms->level == 0 && s) ? 1 : ms->level;
     for (int i = 0; i < nlevels; i++) {
         if (ms->level == 0) {
             ms->vm->push(Value::runtimeString(ms->vm->internString(std::string(s, e - s))));
         } else {
-            if (ms->capture[i].len == -1) {
-                ms->vm->push(Value::number(ms->capture[i].init - ms->src_init + 1));
+            if (ms->capture[i].len == CAP_UNFINISHED) {
+                ms->vm->runtimeError("unfinished capture");
+                return 0;
+            } else if (ms->capture[i].len == CAP_POSITION) {
+                ms->vm->push(Value::integer((ms->capture[i].init - ms->src_init) + 1));
             } else {
                 ms->vm->push(Value::runtimeString(ms->vm->internString(std::string(ms->capture[i].init, ms->capture[i].len))));
             }
         }
     }
+    return nlevels;
+}
+
+static bool nospecials(const char* p, size_t l) {
+    size_t upto = 0;
+    while (upto < l) {
+        if (strpbrk(p + upto, "^$*+-.?()[]%"))
+            return false;
+        upto += strlen(p + upto) + 1;
+    }
+    return true;
 }
 
 bool native_string_len(VM* vm, int argCount) {
@@ -318,19 +371,42 @@ bool native_string_reverse(VM* vm, int argCount) {
 }
 
 bool native_string_sub(VM* vm, int argCount) {
-    if (argCount < 2 || argCount > 3) {
-        vm->runtimeError("string.sub expects 2 or 3 arguments");
+    Value strVal = (argCount >= 1) ? vm->peek(argCount - 1) : Value::nil();
+    if (!strVal.isString() && !strVal.isNumber()) {
+        vm->typeError(1, "string", strVal, argCount, "sub");
         return false;
     }
-    Value endVal = (argCount == 3) ? vm->peek(0) : Value::number(-1);
+    if (argCount < 2) {
+        vm->typeError(2, "number", Value::nil(), argCount, "sub");
+        return false;
+    }
     Value startVal = vm->peek(argCount - 2);
-    Value strVal = vm->peek(argCount - 1);
+    int64_t start;
+    if (!vm->toInteger(startVal, start)) {
+        if (!startVal.isNumber()) {
+            vm->typeError(2, "number", startVal, argCount, "sub");
+        } else {
+            vm->argError(2, "number has no integer representation", "sub");
+        }
+        return false;
+    }
+    int64_t end = -1;
+    if (argCount >= 3) {
+        Value endVal = vm->peek(argCount - 3);
+        if (!endVal.isNil()) {
+            if (!vm->toInteger(endVal, end)) {
+                if (!endVal.isNumber()) {
+                    vm->typeError(3, "number", endVal, argCount, "sub");
+                } else {
+                    vm->argError(3, "number has no integer representation", "sub");
+                }
+                return false;
+            }
+        }
+    }
 
     std::string s = vm->getStringValue(strVal);
-    int start = static_cast<int>(startVal.asNumber());
-    int end = static_cast<int>(endVal.asNumber());
-
-    int len = static_cast<int>(s.length());
+    int64_t len = static_cast<int64_t>(s.length());
     if (start < 0) start = len + start + 1;
     if (end < 0) end = len + end + 1;
     if (start < 1) start = 1;
@@ -352,15 +428,32 @@ bool native_string_byte(VM* vm, int argCount) {
         vm->runtimeError("string.byte expects 1 to 3 arguments");
         return false;
     }
-    Value endVal = (argCount >= 3) ? vm->peek(0) : Value::nil();
-    Value startVal = (argCount >= 2) ? vm->peek(argCount - 2) : Value::number(1);
     Value strVal = vm->peek(argCount - 1);
+    Value startVal = (argCount >= 2) ? vm->peek(argCount - 2) : Value::number(1);
+    Value endVal = (argCount >= 3) ? vm->peek(0) : Value::nil();
+
+    if (!strVal.isString() && !strVal.isNumber()) {
+        vm->runtimeError("bad argument #1 to 'byte' (string expected, got " + strVal.typeToString() + ")");
+        return false;
+    }
+
+    int64_t start = 1;
+    if (argCount >= 2 && !startVal.isNil()) {
+        if (!vm->toInteger(startVal, start)) {
+            vm->runtimeError("bad argument #2 to 'byte' (number has no integer representation)");
+            return false;
+        }
+    }
+    int64_t end = start;
+    if (argCount >= 3 && !endVal.isNil()) {
+        if (!vm->toInteger(endVal, end)) {
+            vm->runtimeError("bad argument #3 to 'byte' (number has no integer representation)");
+            return false;
+        }
+    }
 
     std::string s = vm->getStringValue(strVal);
-    int len = static_cast<int>(s.length());
-    int start = static_cast<int>(startVal.asNumber());
-    int end = endVal.isNil() ? start : static_cast<int>(endVal.asNumber());
-
+    int64_t len = static_cast<int64_t>(s.length());
     if (start < 0) start = len + start + 1;
     if (end < 0) end = len + end + 1;
     if (start < 1) start = 1;
@@ -369,8 +462,8 @@ bool native_string_byte(VM* vm, int argCount) {
     for (int i = 0; i < argCount; i++) vm->pop();
     
     int count = 0;
-    for (int i = start; i <= end; i++) {
-        vm->push(Value::number(static_cast<unsigned char>(s[i - 1])));
+    for (int64_t i = start; i <= end; i++) {
+        vm->push(Value::integer(static_cast<unsigned char>(s[i - 1])));
         count++;
     }
     vm->currentCoroutine()->lastResultCount = count;
@@ -404,36 +497,62 @@ bool native_string_char(VM* vm, int argCount) {
 }
 
 bool native_string_find(VM* vm, int argCount) {
-    if (argCount < 2 || argCount > 4) {
-        vm->runtimeError("string.find expects 2 to 4 arguments");
+    Value strVal = (argCount >= 1) ? vm->peek(argCount - 1) : Value::nil();
+    if (!strVal.isString() && !strVal.isNumber()) {
+        vm->typeError(1, "string", strVal, argCount, "find");
         return false;
     }
-    Value plainVal = (argCount == 4) ? vm->peek(0) : Value::boolean(false);
-    Value startVal = (argCount >= 3) ? vm->peek(argCount - 3) : Value::number(1);
+    if (argCount < 2) {
+        vm->typeError(2, "string", Value::nil(), argCount, "find");
+        return false;
+    }
     Value patternVal = vm->peek(argCount - 2);
-    Value strVal = vm->peek(argCount - 1);
-
-    if (!strVal.isString() || !patternVal.isString()) {
-        vm->runtimeError("string.find expects string arguments");
+    if (!patternVal.isString() && !patternVal.isNumber()) {
+        vm->typeError(2, "string", patternVal, argCount, "find");
         return false;
     }
-    
+    Value startVal = (argCount >= 3) ? vm->peek(argCount - 3) : Value::number(1);
+    Value plainVal = (argCount >= 4) ? vm->peek(argCount - 4) : Value::boolean(false);
+
     std::string s_str = vm->getStringValue(strVal);
     std::string p_str = vm->getStringValue(patternVal);
-    int start = static_cast<int>(startVal.asNumber());
+    int64_t start = 1;
+    if (argCount >= 3) {
+        if (!vm->toInteger(startVal, start)) {
+            if (!startVal.isNumber()) {
+                vm->typeError(3, "number", startVal, argCount, "find");
+            } else {
+                vm->argError(3, "number has no integer representation", "find");
+            }
+            return false;
+        }
+    }
+
     size_t s_len = s_str.length();
-    if (start < 0) start = s_len + start + 1;
+    size_t p_len = p_str.length();
+    if (start < 0) start = static_cast<int64_t>(s_len) + start + 1;
     if (start < 1) start = 1;
 
-    const char* s = s_str.c_str();
-    const char* p = p_str.c_str();
+    if (start > static_cast<int64_t>(s_len) + 1) {
+        for (int i = 0; i < argCount; i++) vm->pop();
+        vm->push(Value::nil());
+        vm->currentCoroutine()->lastResultCount = 1;
+        return true;
+    }
 
-    if (!plainVal.isFalsey() || !strpbrk(p, "^$*+-.?()[]%")) {
-        size_t pos = s_str.find(p_str, start - 1);
-        if (pos != std::string::npos) {
+    const char* s = s_str.data();
+    const char* p = p_str.data();
+
+    bool is_plain = !plainVal.isFalsey();
+    if (is_plain || nospecials(p, p_len)) {
+        std::string_view sv(s + start - 1, s_len - (start - 1));
+        std::string_view pv(p, p_len);
+        size_t pos = sv.find(pv);
+        if (pos != std::string_view::npos) {
             for (int i = 0; i < argCount; i++) vm->pop();
-            vm->push(Value::number(pos + 1));
-            vm->push(Value::number(pos + p_str.length()));
+            int64_t match_start = (start - 1) + pos + 1;
+            vm->push(Value::integer(match_start));
+            vm->push(Value::integer(match_start + p_len - 1));
             vm->currentCoroutine()->lastResultCount = 2;
             return true;
         }
@@ -442,12 +561,12 @@ bool native_string_find(VM* vm, int argCount) {
         ms.vm = vm;
         ms.src_init = s;
         ms.src_end = s + s_len;
-        ms.p_end = p + p_str.length();
+        ms.p_end = p + p_len;
         ms.matchdepth = MAXCCALLS;
-        
+
         bool anchor = (*p == '^');
-        if (anchor) p++;
-        
+        if (anchor) { p++; p_len--; }
+
         const char* s1 = s + start - 1;
         do {
             ms.level = 0;
@@ -455,10 +574,10 @@ bool native_string_find(VM* vm, int argCount) {
             const char* res = match(&ms, s1, p);
             if (res) {
                 for (int i = 0; i < argCount; i++) vm->pop();
-                vm->push(Value::number(s1 - s + 1));
-                vm->push(Value::number(res - s));
-                push_captures(&ms, nullptr, nullptr);
-                vm->currentCoroutine()->lastResultCount = 2 + ms.level;
+                vm->push(Value::integer(s1 - s + 1));
+                vm->push(Value::integer(res - s));
+                int pushed = push_captures(&ms, nullptr, nullptr);
+                vm->currentCoroutine()->lastResultCount = 2 + pushed;
                 return true;
             }
         } while (s1++ < ms.src_end && !anchor);
@@ -471,34 +590,61 @@ bool native_string_find(VM* vm, int argCount) {
 }
 
 bool native_string_match(VM* vm, int argCount) {
-    if (argCount < 2 || argCount > 3) {
-        vm->runtimeError("string.match expects 2 or 3 arguments");
+    Value strVal = (argCount >= 1) ? vm->peek(argCount - 1) : Value::nil();
+    if (!strVal.isString() && !strVal.isNumber()) {
+        vm->typeError(1, "string", strVal, argCount, "match");
         return false;
     }
-    Value startVal = (argCount == 3) ? vm->peek(0) : Value::number(1);
+    if (argCount < 2) {
+        vm->typeError(2, "string", Value::nil(), argCount, "match");
+        return false;
+    }
     Value patternVal = vm->peek(argCount - 2);
-    Value strVal = vm->peek(argCount - 1);
+    if (!patternVal.isString() && !patternVal.isNumber()) {
+        vm->typeError(2, "string", patternVal, argCount, "match");
+        return false;
+    }
+    Value startVal = (argCount >= 3) ? vm->peek(argCount - 3) : Value::number(1);
 
     std::string s_str = vm->getStringValue(strVal);
     std::string p_str = vm->getStringValue(patternVal);
-    int start = static_cast<int>(startVal.asNumber());
+    int64_t start = 1;
+    if (argCount >= 3) {
+        if (!vm->toInteger(startVal, start)) {
+            if (!startVal.isNumber()) {
+                vm->typeError(3, "number", startVal, argCount, "match");
+            } else {
+                vm->argError(3, "number has no integer representation", "match");
+            }
+            return false;
+        }
+    }
+
     size_t s_len = s_str.length();
-    if (start < 0) start = s_len + start + 1;
+    size_t p_len = p_str.length();
+    if (start < 0) start = static_cast<int64_t>(s_len) + start + 1;
     if (start < 1) start = 1;
 
-    const char* s = s_str.c_str();
-    const char* p = p_str.c_str();
+    if (start > static_cast<int64_t>(s_len) + 1) {
+        for (int i = 0; i < argCount; i++) vm->pop();
+        vm->push(Value::nil());
+        vm->currentCoroutine()->lastResultCount = 1;
+        return true;
+    }
+
+    const char* s = s_str.data();
+    const char* p = p_str.data();
 
     MatchState ms;
     ms.vm = vm;
     ms.src_init = s;
     ms.src_end = s + s_len;
-    ms.p_end = p + p_str.length();
+    ms.p_end = p + p_len;
     ms.matchdepth = MAXCCALLS;
-    
+
     bool anchor = (*p == '^');
-    if (anchor) p++;
-    
+    if (anchor) { p++; p_len--; }
+
     const char* s1 = s + start - 1;
     do {
         ms.level = 0;
@@ -506,8 +652,8 @@ bool native_string_match(VM* vm, int argCount) {
         const char* res = match(&ms, s1, p);
         if (res) {
             for (int i = 0; i < argCount; i++) vm->pop();
-            push_captures(&ms, s1, res);
-            vm->currentCoroutine()->lastResultCount = (ms.level == 0) ? 1 : ms.level;
+            int pushed = push_captures(&ms, s1, res);
+            vm->currentCoroutine()->lastResultCount = pushed;
             return true;
         }
     } while (s1++ < ms.src_end && !anchor);
@@ -529,17 +675,18 @@ bool native_string_gmatch_step(VM* vm, int argCount) {
 
     std::string s_str = vm->getStringValue(strVal);
     std::string p_str = vm->getStringValue(patVal);
-    int start = static_cast<int>(posVal.asNumber());
+    int64_t start = static_cast<int64_t>(posVal.asNumber());
     size_t s_len = s_str.length();
+    size_t p_len = p_str.length();
 
-    const char* s = s_str.c_str();
-    const char* p = p_str.c_str();
+    const char* s = s_str.data();
+    const char* p = p_str.data();
 
     MatchState ms;
     ms.vm = vm;
     ms.src_init = s;
     ms.src_end = s + s_len;
-    ms.p_end = p + p_str.length();
+    ms.p_end = p + p_len;
     ms.matchdepth = MAXCCALLS;
 
     for (const char* s1 = s + start - 1; s1 <= ms.src_end; s1++) {
@@ -547,11 +694,11 @@ bool native_string_gmatch_step(VM* vm, int argCount) {
         ms.matchdepth = MAXCCALLS;
         const char* res = match(&ms, s1, p);
         if (res) {
-            int next_pos = (res == s1) ? (static_cast<int>(res - s) + 2) : (static_cast<int>(res - s) + 1);
+            int64_t next_pos = (res == s1) ? (static_cast<int64_t>(res - s) + 2) : (static_cast<int64_t>(res - s) + 1);
             for(int i=0; i<argCount; i++) vm->pop();
-            vm->push(Value::number(next_pos));
-            push_captures(&ms, s1, res);
-            vm->currentCoroutine()->lastResultCount = 1 + ((ms.level == 0) ? 1 : ms.level);
+            vm->push(Value::integer(next_pos));
+            int pushed = push_captures(&ms, s1, res);
+            vm->currentCoroutine()->lastResultCount = 1 + pushed;
             return true;
         }
     }
@@ -561,106 +708,221 @@ bool native_string_gmatch_step(VM* vm, int argCount) {
     return true;
 }
 
-bool native_string_gmatch(VM* vm, int argCount) {
-    if (argCount != 2) {
-        vm->runtimeError("string.gmatch expects 2 arguments");
+static bool native_gmatch_aux(VM* vm, int argCount) {
+    ClosureObject* closure = vm->currentCoroutine()->frames.empty() ? nullptr : vm->currentCoroutine()->frames.back().closure;
+    if (!closure || !closure->isC() || closure->upvalueCount() < 4) {
+        vm->runtimeError("invalid gmatch iterator");
         return false;
     }
-    Value patVal = vm->peek(0);
-    Value strVal = vm->peek(1);
-
-    const char* script = 
-        "local s, p = ...\n"
-        "local pos = 1\n"
-        "return function()\n"
-        "  local res = { string.__gmatch_step(s, p, pos) }\n"
-        "  if #res == 0 then return nil end\n"
-        "  pos = res[1]\n"
-        "  table.remove(res, 1)\n"
-        "  if #res == 0 then return nil end\n"
-        "  return table.unpack(res)\n"
-        "end\n";
-    
-    for (int i = 0; i < argCount; i++) vm->pop();
-
-    FunctionObject* func = vm->compileSource(script, "string.gmatch");
-    if (!func) return false;
-
-    ClosureObject* closure = vm->createClosure(func);
-    vm->setupRootUpvalues(closure);
-
-    vm->push(Value::closure(closure));
-    vm->push(strVal);
-    vm->push(patVal);
-    
-    if (vm->callValue(2, 2)) {
-        size_t baseFrames = vm->currentCoroutine()->frames.size() - 1;
-        vm->run(baseFrames);
-        Value iter = vm->pop();
-        
-        vm->push(iter);
-        vm->push(Value::nil());
-        vm->push(Value::nil());
-        vm->currentCoroutine()->lastResultCount = 3;
-        return true;
-    }
-    return false;
-}
-
-bool native_string_gsub(VM* vm, int argCount) {
-    if (argCount < 3 || argCount > 4) {
-        vm->runtimeError("string.gsub expects 3 or 4 arguments");
-        return false;
-    }
-    Value maxVal = (argCount == 4) ? vm->peek(0) : Value::number(-1);
-    Value replVal = vm->peek(argCount - 3);
-    Value patternVal = vm->peek(argCount - 2);
-    Value strVal = vm->peek(argCount - 1);
+    Value strVal = closure->getCUpvalue(0);
+    Value patVal = closure->getCUpvalue(1);
+    Value posVal = closure->getCUpvalue(2);
+    Value lastMatchVal = closure->getCUpvalue(3);
 
     std::string s_str = vm->getStringValue(strVal);
-    std::string p_str = vm->getStringValue(patternVal);
-    int max_subs = static_cast<int>(maxVal.asNumber());
-
-    const char* s = s_str.c_str();
-    const char* p = p_str.c_str();
+    std::string p_str = vm->getStringValue(patVal);
+    int64_t start = posVal.asInteger();
+    int64_t lastmatch_off = lastMatchVal.asInteger();
     size_t s_len = s_str.length();
+    size_t p_len = p_str.length();
+
+    const char* s = s_str.data();
+    const char* p = p_str.data();
 
     MatchState ms;
     ms.vm = vm;
     ms.src_init = s;
     ms.src_end = s + s_len;
-    ms.p_end = p + p_str.length();
+    ms.p_end = p + p_len;
     ms.matchdepth = MAXCCALLS;
 
-    bool anchor = (*p == '^');
-    if (anchor) p++;
-
-    std::string result;
-    int count = 0;
-    const char* s1 = s;
-    while (s1 <= ms.src_end && (max_subs < 0 || count < max_subs)) {
+    for (const char* s1 = s + start - 1; s1 <= ms.src_end; s1++) {
         ms.level = 0;
         ms.matchdepth = MAXCCALLS;
         const char* res = match(&ms, s1, p);
-        if (res) {
-            count++;
-            if (replVal.isString()) {
-                std::string r = vm->getStringValue(replVal);
-                for (size_t i = 0; i < r.length(); i++) {
-                    if (r[i] == '%' && i + 1 < r.length()) {
+        if (res != nullptr && !(res == s1 && (s1 - s) == lastmatch_off)) {
+            closure->setCUpvalue(2, Value::integer((res - s) + 1));
+            closure->setCUpvalue(3, Value::integer(res - s));
+            for (int i = 0; i < argCount; i++) vm->pop();
+            int pushed = push_captures(&ms, s1, res);
+            vm->currentCoroutine()->lastResultCount = pushed;
+            return true;
+        }
+    }
+
+    for (int i = 0; i < argCount; i++) vm->pop();
+    vm->currentCoroutine()->lastResultCount = 0;
+    return true;
+}
+
+bool native_string_gmatch(VM* vm, int argCount) {
+    Value strVal = (argCount >= 1) ? vm->peek(argCount - 1) : Value::nil();
+    if (!strVal.isString() && !strVal.isNumber()) {
+        vm->typeError(1, "string", strVal, argCount, "gmatch");
+        return false;
+    }
+    if (argCount < 2) {
+        vm->typeError(2, "string", Value::nil(), argCount, "gmatch");
+        return false;
+    }
+    Value patVal = vm->peek(argCount - 2);
+    if (!patVal.isString() && !patVal.isNumber()) {
+        vm->typeError(2, "string", patVal, argCount, "gmatch");
+        return false;
+    }
+
+    std::string s_str = vm->getStringValue(strVal);
+    size_t s_len = s_str.length();
+    int64_t init = 1;
+    if (argCount >= 3) {
+        Value initVal = vm->peek(argCount - 3);
+        if (!vm->toInteger(initVal, init)) {
+            if (!initVal.isNumber()) {
+                vm->typeError(3, "number", initVal, argCount, "gmatch");
+            } else {
+                vm->argError(3, "number has no integer representation", "gmatch");
+            }
+            return false;
+        }
+    }
+
+    if (init < 0) init = static_cast<int64_t>(s_len) + init + 1;
+    if (init < 1) init = 1;
+
+    std::vector<Value> upvalues = {strVal, patVal, Value::integer(init), Value::integer(-1)};
+    ClosureObject* iter = vm->createCClosure(native_gmatch_aux, upvalues);
+
+    for (int i = 0; i < argCount; i++) vm->pop();
+    vm->push(Value::closure(iter));
+    vm->push(Value::nil());
+    vm->push(Value::nil());
+    vm->currentCoroutine()->lastResultCount = 3;
+    return true;
+}
+
+bool native_string_gsub(VM* vm, int argCount) {
+    Value strVal = (argCount >= 1) ? vm->peek(argCount - 1) : Value::nil();
+    if (!strVal.isString() && !strVal.isNumber()) {
+        vm->typeError(1, "string", strVal, argCount, "gsub");
+        return false;
+    }
+    if (argCount < 2) {
+        vm->typeError(2, "string", Value::nil(), argCount, "gsub");
+        return false;
+    }
+    Value patternVal = vm->peek(argCount - 2);
+    if (!patternVal.isString() && !patternVal.isNumber()) {
+        vm->typeError(2, "string", patternVal, argCount, "gsub");
+        return false;
+    }
+    if (argCount < 3) {
+        vm->argError(3, "string/function/table expected", "gsub");
+        return false;
+    }
+    Value replVal = vm->peek(argCount - 3);
+    if (!replVal.isString() && !replVal.isNumber() && !replVal.isFunction() && !replVal.isTable()) {
+        vm->typeError(3, "string/function/table", replVal, argCount, "gsub");
+        return false;
+    }
+
+    std::string s_str = vm->getStringValue(strVal);
+    std::string p_str = vm->getStringValue(patternVal);
+    size_t s_len = s_str.length();
+    size_t p_len = p_str.length();
+
+    int64_t max_s = static_cast<int64_t>(s_len) + 1;
+    if (argCount >= 4) {
+        Value maxVal = vm->peek(argCount - 4);
+        if (!vm->toInteger(maxVal, max_s)) {
+            if (!maxVal.isNumber()) {
+                vm->typeError(4, "number", maxVal, argCount, "gsub");
+            } else {
+                vm->argError(4, "number has no integer representation", "gsub");
+            }
+            return false;
+        }
+    }
+
+    const char* s = s_str.data();
+    const char* p = p_str.data();
+
+    MatchState ms;
+    ms.vm = vm;
+    ms.src_init = s;
+    ms.src_end = s + s_len;
+    ms.p_end = p + p_len;
+    ms.matchdepth = MAXCCALLS;
+
+    bool anchor = (*p == '^');
+    if (anchor) { p++; p_len--; }
+
+    std::string result;
+    int64_t n = 0;
+    bool has_sub = false;
+    const char* lastmatch = nullptr;
+    const char* src = s;
+
+    while (n < max_s) {
+        ms.level = 0;
+        ms.matchdepth = MAXCCALLS;
+        const char* e = match(&ms, src, p);
+        if (e != nullptr && e != lastmatch) {
+            n++;
+            if (replVal.isString() || replVal.isNumber()) {
+                has_sub = true;
+                std::string r = replVal.isString() ? vm->getStringValue(replVal) : replVal.toString();
+                const char* news = r.data();
+                size_t r_len = r.length();
+                for (size_t i = 0; i < r_len; i++) {
+                    if (news[i] != '%') {
+                        result.push_back(news[i]);
+                    } else {
                         i++;
-                        if (isdigit((unsigned char)r[i])) {
-                            int cap = r[i] - '0';
-                            if (cap == 0) result.append(s1, res - s1);
-                            else if (cap <= ms.level && ms.capture[cap-1].len != -1)
-                                result.append(ms.capture[cap-1].init, ms.capture[cap-1].len);
-                        } else result.push_back(r[i]);
-                    } else result.push_back(r[i]);
+                        if (i >= r_len) {
+                            vm->runtimeError("invalid use of '%' in replacement string");
+                            return false;
+                        }
+                        if (news[i] == '%') {
+                            result.push_back('%');
+                        } else if (news[i] == '0') {
+                            result.append(src, e - src);
+                        } else if (isdigit((unsigned char)news[i])) {
+                            int cap = news[i] - '1';
+                            if (cap >= ms.level) {
+                                if (cap == 0 && ms.level == 0) {
+                                    result.append(src, e - src);
+                                } else {
+                                    vm->runtimeError("invalid capture index %" + std::string(1, news[i]));
+                                    return false;
+                                }
+                            } else {
+                                if (ms.capture[cap].len == CAP_UNFINISHED) {
+                                    vm->runtimeError("unfinished capture");
+                                    return false;
+                                } else if (ms.capture[cap].len == CAP_POSITION) {
+                                    int64_t pos = (ms.capture[cap].init - ms.src_init) + 1;
+                                    result.append(std::to_string(pos));
+                                } else {
+                                    result.append(ms.capture[cap].init, ms.capture[cap].len);
+                                }
+                            }
+                        } else {
+                            vm->runtimeError("invalid use of '%' in replacement string");
+                            return false;
+                        }
+                    }
                 }
             } else if (replVal.isTable()) {
-                Value key = (ms.level == 0) ? 
-                    Value::runtimeString(vm->internString(std::string(s1, res - s1))) :
-                    Value::runtimeString(vm->internString(std::string(ms.capture[0].init, ms.capture[0].len)));
+                Value key;
+                if (ms.level == 0) {
+                    key = Value::runtimeString(vm->internString(std::string(src, e - src)));
+                } else {
+                    if (ms.capture[0].len == CAP_POSITION) {
+                        key = Value::integer((ms.capture[0].init - ms.src_init) + 1);
+                    } else {
+                        key = Value::runtimeString(vm->internString(std::string(ms.capture[0].init, ms.capture[0].len)));
+                    }
+                }
                 struct NonYieldableGuard {
                     CoroutineObject* co;
                     NonYieldableGuard(CoroutineObject* c) : co(c) { if (co) co->nonYieldableCount++; }
@@ -668,9 +930,10 @@ bool native_string_gsub(VM* vm, int argCount) {
                 } nyGuard(vm->currentCoroutine());
                 Value val = vm->getTable(replVal, key);
                 if (val.isString() || val.isNumber()) {
+                    has_sub = true;
                     result.append(val.toString());
                 } else if (val.isFalsey()) {
-                    result.append(s1, res - s1);
+                    result.append(src, e - src);
                 } else {
                     vm->runtimeError("invalid replacement value (a " + val.typeToString() + ")");
                     return false;
@@ -678,12 +941,18 @@ bool native_string_gsub(VM* vm, int argCount) {
             } else if (replVal.isFunction()) {
                 int ncaps = (ms.level == 0) ? 1 : ms.level;
                 vm->push(replVal);
-                if (ms.level == 0) vm->push(Value::runtimeString(vm->internString(std::string(s1, res - s1))));
-                else {
-                    for (int i = 0; i < ms.level; i++)
-                        vm->push(Value::runtimeString(vm->internString(std::string(ms.capture[i].init, ms.capture[i].len))));
+                if (ms.level == 0) {
+                    vm->push(Value::runtimeString(vm->internString(std::string(src, e - src))));
+                } else {
+                    for (int i = 0; i < ms.level; i++) {
+                        if (ms.capture[i].len == CAP_POSITION) {
+                            vm->push(Value::integer((ms.capture[i].init - ms.src_init) + 1));
+                        } else {
+                            vm->push(Value::runtimeString(vm->internString(std::string(ms.capture[i].init, ms.capture[i].len))));
+                        }
+                    }
                 }
-                
+
                 size_t baseFrames = vm->currentCoroutine()->frames.size();
                 struct NonYieldableGuard {
                     CoroutineObject* co;
@@ -697,28 +966,32 @@ bool native_string_gsub(VM* vm, int argCount) {
                     }
                     Value v = vm->pop();
                     if (v.isString() || v.isNumber()) {
+                        has_sub = true;
                         result.append(v.toString());
                     } else if (v.isFalsey()) {
-                        result.append(s1, res - s1);
+                        result.append(src, e - src);
                     } else {
                         vm->runtimeError("invalid replacement value (a " + v.typeToString() + ")");
                         return false;
                     }
                 } else return false;
             }
-            if (res == s1) { if (s1 < ms.src_end) result.push_back(*s1); s1++; }
-            else s1 = res;
-            if (anchor) break;
+            src = lastmatch = e;
+        } else if (src < ms.src_end) {
+            result.push_back(*src++);
         } else {
-            if (anchor) break;
-            if (s1 < ms.src_end) result.push_back(*s1);
-            s1++;
+            break;
         }
+        if (anchor) break;
     }
-    if (s1 < ms.src_end) result.append(s1, ms.src_end - s1);
+    result.append(src, ms.src_end - src);
     for (int i = 0; i < argCount; i++) vm->pop();
-    vm->push(Value::runtimeString(vm->internString(result)));
-    vm->push(Value::number(count));
+    if (!has_sub) {
+        vm->push(strVal);
+    } else {
+        vm->push(Value::runtimeString(vm->internString(result)));
+    }
+    vm->push(Value::integer(n));
     vm->currentCoroutine()->lastResultCount = 2;
     return true;
 }
@@ -1814,11 +2087,16 @@ bool native_string_dump(VM* vm, int argCount) {
         return false;
     }
 
+    bool strip = false;
+    if (argCount >= 2) {
+        strip = vm->peek(argCount - 2).asBool();
+    }
+
     ClosureObject* closure = val.asClosureObj();
     FunctionObject* function = closure->function();
 
     std::ostringstream os(std::ios::binary);
-    function->serialize(os);
+    function->serialize(os, "", strip);
 
     std::string bytecode = os.str();
 

@@ -78,13 +78,17 @@ static bool fileresult(VM* vm, bool stat, const std::string& fname) {
     }
 }
 
-static FileObject* tofile(VM* vm, Value val, int argNum = 1) {
+static FileObject* tolstream(VM* vm, Value val, int argNum, int argCount, const char* funcName = nullptr) {
     if (!val.isFile()) {
-        std::string typeName = val.isNil() ? "no value" : val.typeToString();
-        vm->runtimeError("bad argument #" + std::to_string(argNum) + " (FILE* expected, got " + typeName + ")");
+        vm->typeError(argNum, "FILE*", val, argCount, funcName);
         return nullptr;
     }
-    FileObject* f = val.asFileObj();
+    return val.asFileObj();
+}
+
+static FileObject* tofile(VM* vm, Value val, int argNum, int argCount, const char* funcName = nullptr) {
+    FileObject* f = tolstream(vm, val, argNum, argCount, funcName);
+    if (!f) return nullptr;
     if (!f->isOpen()) {
         vm->runtimeError("attempt to use a closed file");
         return nullptr;
@@ -496,20 +500,9 @@ bool native_io_tmpfile(VM* vm, int argCount) {
 // native_file_close and native_io_close
 // -------------------------------------------------------------------------
 bool native_file_close(VM* vm, int argCount) {
-    if (argCount < 1) {
-        vm->runtimeError("bad argument #1 to 'close' (FILE* expected, got no value)");
-        return false;
-    }
-    Value val = vm->peek(argCount - 1);
-    if (!val.isFile()) {
-        vm->runtimeError("bad argument #1 to 'close' (FILE* expected, got " + val.typeToString() + ")");
-        return false;
-    }
-    FileObject* file = val.asFileObj();
-    if (!file->isOpen()) {
-        vm->runtimeError("attempt to use a closed file");
-        return false;
-    }
+    Value val = (argCount >= 1) ? vm->peek(argCount - 1) : Value::nil();
+    FileObject* file = tofile(vm, val, 1, argCount, "close");
+    if (!file) return false;
 
     for (int i = 0; i < argCount; i++) vm->pop();
 
@@ -568,14 +561,12 @@ bool native_file_close(VM* vm, int argCount) {
 }
 
 bool native_file_gc(VM* vm, int argCount) {
-    if (argCount < 1) return true;
-    Value val = vm->peek(argCount - 1);
+    Value val = (argCount >= 1) ? vm->peek(argCount - 1) : Value::nil();
+    FileObject* file = tolstream(vm, val, 1, argCount, "__gc");
+    if (!file) return false;
     for (int i = 0; i < argCount; i++) vm->pop();
-    if (val.isFile()) {
-        FileObject* file = val.asFileObj();
-        if (file->isOpen() && !file->isStandard()) {
-            file->close();
-        }
+    if (file->isOpen() && !file->isStandard()) {
+        file->close();
     }
     return true;
 }
@@ -594,18 +585,10 @@ bool native_io_close(VM* vm, int argCount) {
 // native_file_tostring
 // -------------------------------------------------------------------------
 bool native_file_tostring(VM* vm, int argCount) {
-    if (argCount < 1) {
-        vm->runtimeError("bad argument #1 to 'tostring' (FILE* expected)");
-        return false;
-    }
-    Value val = vm->peek(argCount - 1);
+    Value val = (argCount >= 1) ? vm->peek(argCount - 1) : Value::nil();
+    FileObject* f = tolstream(vm, val, 1, argCount, "__tostring");
+    if (!f) return false;
     for (int i = 0; i < argCount; i++) vm->pop();
-    if (!val.isFile()) {
-        vm->push(Value::runtimeString(vm->internString("not a file")));
-        vm->currentCoroutine()->lastResultCount = 1;
-        return true;
-    }
-    FileObject* f = val.asFileObj();
     if (!f->isOpen()) {
         vm->push(Value::runtimeString(vm->internString("file (closed)")));
     } else {
@@ -621,11 +604,8 @@ bool native_file_tostring(VM* vm, int argCount) {
 // native_file_write and native_io_write
 // -------------------------------------------------------------------------
 bool native_file_write(VM* vm, int argCount) {
-    if (argCount < 1) {
-        vm->runtimeError("bad argument #1 to 'write' (FILE* expected, got no value)");
-        return false;
-    }
-    FileObject* f = tofile(vm, vm->peek(argCount - 1), 1);
+    Value fileVal = (argCount >= 1) ? vm->peek(argCount - 1) : Value::nil();
+    FileObject* f = tofile(vm, fileVal, 1, argCount, "write");
     if (!f) return false;
     return g_write(vm, f, 1, argCount);
 }
@@ -640,11 +620,8 @@ bool native_io_write(VM* vm, int argCount) {
 // native_file_read and native_io_read
 // -------------------------------------------------------------------------
 bool native_file_read(VM* vm, int argCount) {
-    if (argCount < 1) {
-        vm->runtimeError("bad argument #1 to 'read' (FILE* expected, got no value)");
-        return false;
-    }
-    FileObject* f = tofile(vm, vm->peek(argCount - 1), 1);
+    Value fileVal = (argCount >= 1) ? vm->peek(argCount - 1) : Value::nil();
+    FileObject* f = tofile(vm, fileVal, 1, argCount, "read");
     if (!f) return false;
     return g_read(vm, f, 1, argCount);
 }
@@ -659,11 +636,8 @@ bool native_io_read(VM* vm, int argCount) {
 // native_file_seek and native_io_flush
 // -------------------------------------------------------------------------
 bool native_file_seek(VM* vm, int argCount) {
-    if (argCount < 1) {
-        vm->runtimeError("bad argument #1 to 'seek' (FILE* expected, got no value)");
-        return false;
-    }
-    FileObject* f = tofile(vm, vm->peek(argCount - 1), 1);
+    Value fileVal = (argCount >= 1) ? vm->peek(argCount - 1) : Value::nil();
+    FileObject* f = tofile(vm, fileVal, 1, argCount, "seek");
     if (!f) return false;
 
     std::string whence = "cur";
@@ -693,11 +667,8 @@ bool native_file_seek(VM* vm, int argCount) {
 }
 
 bool native_file_flush(VM* vm, int argCount) {
-    if (argCount < 1) {
-        vm->runtimeError("bad argument #1 to 'flush' (FILE* expected, got no value)");
-        return false;
-    }
-    FileObject* f = tofile(vm, vm->peek(argCount - 1), 1);
+    Value fileVal = (argCount >= 1) ? vm->peek(argCount - 1) : Value::nil();
+    FileObject* f = tofile(vm, fileVal, 1, argCount, "flush");
     if (!f) return false;
     for (int i = 0; i < argCount; i++) vm->pop();
     errno = 0;
@@ -713,16 +684,17 @@ bool native_io_flush(VM* vm, int argCount) {
 }
 
 bool native_file_setvbuf(VM* vm, int argCount) {
-    if (argCount < 2) {
-        vm->runtimeError("file:setvbuf expects at least 2 arguments");
-        return false;
-    }
-    FileObject* f = tofile(vm, vm->peek(argCount - 1), 1);
+    Value fileVal = (argCount >= 1) ? vm->peek(argCount - 1) : Value::nil();
+    FileObject* f = tofile(vm, fileVal, 1, argCount, "setvbuf");
     if (!f) return false;
 
+    if (argCount < 2) {
+        vm->typeError(2, "string", Value::nil(), argCount, "setvbuf");
+        return false;
+    }
     Value modeVal = vm->peek(argCount - 2);
     if (!modeVal.isString()) {
-        vm->runtimeError("bad argument #2 to 'setvbuf' (string expected, got " + modeVal.typeToString() + ")");
+        vm->typeError(2, "string", modeVal, argCount, "setvbuf");
         return false;
     }
     std::string mode = vm->getStringValue(modeVal);
@@ -784,13 +756,10 @@ bool native_io_input(VM* vm, int argCount) {
         if (cookie) file->setDevFullCookie(cookie);
         vm->setRegistry("_IO_input", Value::file(file));
         vm->push(Value::file(file));
-    } else if (arg.isFile()) {
-        tofile(vm, arg, 1);
+    } else {
+        if (!tofile(vm, arg, 1, argCount, "input")) return false;
         vm->setRegistry("_IO_input", arg);
         vm->push(arg);
-    } else {
-        vm->runtimeError("bad argument #1 to 'input' (FILE* or string expected, got " + arg.typeToString() + ")");
-        return false;
     }
     vm->currentCoroutine()->lastResultCount = 1;
     return true;
@@ -819,13 +788,10 @@ bool native_io_output(VM* vm, int argCount) {
         if (cookie) file->setDevFullCookie(cookie);
         vm->setRegistry("_IO_output", Value::file(file));
         vm->push(Value::file(file));
-    } else if (arg.isFile()) {
-        tofile(vm, arg, 1);
+    } else {
+        if (!tofile(vm, arg, 1, argCount, "output")) return false;
         vm->setRegistry("_IO_output", arg);
         vm->push(arg);
-    } else {
-        vm->runtimeError("bad argument #1 to 'output' (FILE* or string expected, got " + arg.typeToString() + ")");
-        return false;
     }
     vm->currentCoroutine()->lastResultCount = 1;
     return true;
@@ -939,12 +905,8 @@ bool native_io_lines(VM* vm, int argCount) {
 }
 
 bool native_file_lines(VM* vm, int argCount) {
-    if (argCount < 1) {
-        vm->runtimeError("bad argument #1 to 'lines' (FILE* expected, got no value)");
-        return false;
-    }
-    Value fileVal = vm->peek(argCount - 1);
-    FileObject* f = tofile(vm, fileVal, 1);
+    Value fileVal = (argCount >= 1) ? vm->peek(argCount - 1) : Value::nil();
+    FileObject* f = tofile(vm, fileVal, 1, argCount, "lines");
     if (!f) return false;
 
     int nformats = argCount - 1;

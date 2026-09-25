@@ -174,6 +174,15 @@ bool Value::operator==(const Value& other) const {
         case Type::FUNCTION: return asFunctionIndex() == other.asFunctionIndex();
         case Type::NATIVE_FUNCTION: return asNativeFunctionIndex() == other.asNativeFunctionIndex();
         case Type::C_FUNCTION: return asCFunction() == other.asCFunction();
+        case Type::USERDATA: {
+            if (asObj() == other.asObj()) return true;
+            UserdataObject* u1 = asUserdataObj();
+            UserdataObject* u2 = other.asUserdataObj();
+            if (u1 && u2 && u1->isLight() && u2->isLight()) {
+                return u1->data() == u2->data();
+            }
+            return false;
+        }
         default: return asObj() == other.asObj();
     }
 }
@@ -215,12 +224,19 @@ size_t Value::hash() const {
         case Type::NATIVE_FUNCTION: return std::hash<size_t>()(asNativeFunctionIndex());
         case Type::C_FUNCTION: return std::hash<void*>()(asCFunction());
         case Type::FUNCTION: return std::hash<size_t>()(asFunctionIndex());
+        case Type::USERDATA: {
+            UserdataObject* ud = asUserdataObj();
+            if (ud && ud->isLight()) {
+                return std::hash<void*>()(ud->data());
+            }
+            return std::hash<void*>()(reinterpret_cast<void*>(asObj()));
+        }
         case Type::NIL: return 0;
         default: return std::hash<void*>()(reinterpret_cast<void*>(asObj()));
     }
 }
 
-void Value::serialize(std::ostream& os, const Chunk* chunk, const std::string& parentSource) const {
+void Value::serialize(std::ostream& os, const Chunk* chunk, const std::string& parentSource, bool strip) const {
     uint16_t t = static_cast<uint16_t>(type());
     os.write(reinterpret_cast<const char*>(&t), sizeof(t));
     
@@ -260,7 +276,7 @@ void Value::serialize(std::ostream& os, const Chunk* chunk, const std::string& p
         }
         case Type::FUNCTION: {
             FunctionObject* func = chunk->getFunction(asFunctionIndex());
-            func->serialize(os, parentSource);
+            func->serialize(os, parentSource, strip);
             break;
         }
         default:

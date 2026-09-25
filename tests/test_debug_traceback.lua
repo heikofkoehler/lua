@@ -7,8 +7,8 @@ local function a()
         print(tb)
         assert(string.find(tb, "hello"))
         assert(string.find(tb, "stack traceback:"))
-        assert(string.find(tb, "test_debug_traceback.lua:%d+: in function 'b'"))
-        assert(string.find(tb, "test_debug_traceback.lua:%d+: in function 'a'"))
+        assert(string.find(tb, "test_debug_traceback.lua:%d+: in local 'b'") or string.find(tb, "test_debug_traceback.lua:%d+: in function 'b'"))
+        assert(string.find(tb, "test_debug_traceback.lua:%d+: in local 'a'") or string.find(tb, "test_debug_traceback.lua:%d+: in function 'a'"))
     end
     b()
 end

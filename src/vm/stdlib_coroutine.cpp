@@ -65,7 +65,8 @@ bool native_coroutine_resume(VM* vm, int argCount) {
     }
 
     // If this is the first resume, we might need to adjust CallFrame varargs
-    if (!co->frames.empty() && co->frames[0].ip == 0 && co->frames.size() == 1) {
+    if (!co->frames.empty() && co->frames[0].ip == 0 && co->frames.size() == 1 &&
+        co->frames[0].closure && !co->frames[0].closure->isC()) {
         FunctionObject* func = co->frames[0].closure->function();
         int arity = func->arity();
         bool hasVarargs = func->hasVarargs();
@@ -192,7 +193,7 @@ bool native_coroutine_yield(VM* vm, int argCount) {
 
     co->status = CoroutineObject::Status::SUSPENDED;
     co->yieldCount = argCount;
-    co->retCount = 0; 
+    co->retCount = !co->frames.empty() ? co->frames.back().retCount : 0; 
     vm->currentCoroutine()->lastResultCount = 0;
 
     return true;

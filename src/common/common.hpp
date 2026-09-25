@@ -63,4 +63,35 @@ namespace Log {
     void info(const std::string& message);
 }
 
+inline std::string formatChunkId(const std::string& source) {
+    if (source.empty()) return "[string \"\"]";
+    constexpr size_t LUA_IDSIZE = 60;
+    constexpr size_t IDSIZE = LUA_IDSIZE - 1; // 59 max length
+    size_t srclen = source.length();
+    const char* src = source.c_str();
+
+    if (*src == '=') {
+        if (srclen - 1 <= IDSIZE) {
+            return source.substr(1);
+        } else {
+            return source.substr(1, IDSIZE);
+        }
+    } else if (*src == '@') {
+        if (srclen - 1 <= IDSIZE) {
+            return source.substr(1);
+        } else {
+            return "..." + source.substr(srclen - (IDSIZE - 3));
+        }
+    } else {
+        const char* nl = std::strchr(src, '\n');
+        size_t len = nl ? static_cast<size_t>(nl - src) : srclen;
+        if (len <= 48 && nl == nullptr) {
+            return "[string \"" + source.substr(0, len) + "\"]";
+        } else {
+            if (len > 45) len = 45;
+            return "[string \"" + source.substr(0, len) + "...\"]";
+        }
+    }
+}
+
 #endif // LUA_COMMON_HPP

@@ -7,8 +7,8 @@
 // Userdata object: wrapper for C++ pointers with optional metatable
 class UserdataObject : public GCObject {
 public:
-    UserdataObject(void* data, int numUserValues = 1)
-        : GCObject(GCObject::Type::USERDATA), data_(data), metatable_(Value::nil()) {
+    UserdataObject(void* data, int numUserValues = 1, bool isLight = false)
+        : GCObject(GCObject::Type::USERDATA), data_(data), metatable_(Value::nil()), isLight_(isLight) {
         userValues_.resize(numUserValues, Value::nil());
     }
 
@@ -16,6 +16,9 @@ public:
 
     void* data() const { return data_; }
     void setData(void* data) { data_ = data; }
+
+    bool isLight() const { return isLight_; }
+    void setIsLight(bool l) { isLight_ = l; }
 
     Value metatable() const { return metatable_; }
     void setMetatable(const Value& mt);
@@ -38,5 +41,6 @@ public:
     void* data_;
     Value metatable_;
     std::vector<Value> userValues_;
+    bool isLight_ = false;
     };
 #endif // LUA_USERDATA_HPP

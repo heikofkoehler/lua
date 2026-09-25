@@ -531,9 +531,9 @@ size_t Chunk::yieldInstruction(const char* name, size_t offset) const {
     return offset + 3;
 }
 
-void Chunk::serialize(std::ostream& os, const std::string& parentSource) const {
-    // Source Name: omit if same as parentSource
-    if (!parentSource.empty() && sourceName_ == parentSource) {
+void Chunk::serialize(std::ostream& os, const std::string& parentSource, bool strip) const {
+    // Source Name: omit if strip or same as parentSource
+    if (strip || (!parentSource.empty() && sourceName_ == parentSource)) {
         uint32_t nameLen = 0;
         os.write(reinterpret_cast<const char*>(&nameLen), sizeof(nameLen));
     } else {
@@ -548,9 +548,14 @@ void Chunk::serialize(std::ostream& os, const std::string& parentSource) const {
     os.write(reinterpret_cast<const char*>(code_.data()), codeSize);
     
     // Lines
-    uint32_t linesSize = static_cast<uint32_t>(lines_.size());
-    os.write(reinterpret_cast<const char*>(&linesSize), sizeof(linesSize));
-    os.write(reinterpret_cast<const char*>(lines_.data()), linesSize * sizeof(int));
+    if (strip) {
+        uint32_t linesSize = 0;
+        os.write(reinterpret_cast<const char*>(&linesSize), sizeof(linesSize));
+    } else {
+        uint32_t linesSize = static_cast<uint32_t>(lines_.size());
+        os.write(reinterpret_cast<const char*>(&linesSize), sizeof(linesSize));
+        os.write(reinterpret_cast<const char*>(lines_.data()), linesSize * sizeof(int));
+    }
     
     // Identifiers
     uint32_t idCount = static_cast<uint32_t>(identifiers_.size());
@@ -565,7 +570,7 @@ void Chunk::serialize(std::ostream& os, const std::string& parentSource) const {
     uint32_t constCount = static_cast<uint32_t>(constants_.size());
     os.write(reinterpret_cast<const char*>(&constCount), sizeof(constCount));
     for (const auto& constant : constants_) {
-        constant.serialize(os, this, sourceName_);
+        constant.serialize(os, this, sourceName_.empty() ? "=?" : sourceName_, strip);
     }
 }
 
@@ -589,8 +594,8 @@ std::unique_ptr<Chunk> Chunk::deserialize(std::istream& is, const std::string& p
     // Source Name
     uint32_t nameLen = 0;
     readValue(is, nameLen);
-    if (nameLen == 0 && !parentSource.empty()) {
-        chunk->sourceName_ = parentSource;
+    if (nameLen == 0) {
+        chunk->sourceName_ = !parentSource.empty() ? parentSource : "=?";
     } else {
         std::string sourceName(nameLen, '\0');
         readBytes(is, &sourceName[0], nameLen);
@@ -630,7 +635,7 @@ std::unique_ptr<Chunk> Chunk::deserialize(std::istream& is, const std::string& p
     return chunk;
 }
 
-void FunctionObject::serialize(std::ostream& os, const std::string& parentSource) const {
+void FunctionObject::serialize(std::ostream& os, const std::string& parentSource, bool strip) const {
     if (parentSource.empty()) {
         // 1. Signature (4 bytes)
         os.write("\x1bLua", 4);
@@ -674,30 +679,43 @@ void FunctionObject::serialize(std::ostream& os, const std::string& parentSource
     
     os.write(reinterpret_cast<const char*>(&arity_), sizeof(arity_));
     os.write(reinterpret_cast<const char*>(&upvalueCount_), sizeof(upvalueCount_));
-    uint8_t varargs = hasVarargs_ ? 1 : 0;
+    uint8_t varargs = (hasVarargs_ ? 1 : 0) | (hasNamedVarargs_ ? 2 : 0) | (isVarargOptimized_ ? 4 : 0);
     os.write(reinterpret_cast<const char*>(&varargs), sizeof(varargs));
-    
-    chunk_->serialize(os, parentSource);
-
-    // Local variable info
-    uint32_t localCount = static_cast<uint32_t>(localVars_.size());
-    os.write(reinterpret_cast<const char*>(&localCount), sizeof(localCount));
-    for (const auto& l : localVars_) {
-        uint32_t lNameLen = static_cast<uint32_t>(l.name.length());
-        os.write(reinterpret_cast<const char*>(&lNameLen), sizeof(lNameLen));
-        os.write(l.name.c_str(), lNameLen);
-        os.write(reinterpret_cast<const char*>(&l.startPC), sizeof(l.startPC));
-        os.write(reinterpret_cast<const char*>(&l.endPC), sizeof(l.endPC));
-        os.write(reinterpret_cast<const char*>(&l.slot), sizeof(l.slot));
+    if (hasNamedVarargs_) {
+        int32_t slot = namedVarargSlot_;
+        os.write(reinterpret_cast<const char*>(&slot), sizeof(slot));
     }
+    os.write(reinterpret_cast<const char*>(&lineDefined_), sizeof(lineDefined_));
+    os.write(reinterpret_cast<const char*>(&lastLineDefined_), sizeof(lastLineDefined_));
+    
+    chunk_->serialize(os, parentSource, strip);
 
-    // Upvalue names
-    uint32_t uvNameCount = static_cast<uint32_t>(upvalueNames_.size());
-    os.write(reinterpret_cast<const char*>(&uvNameCount), sizeof(uvNameCount));
-    for (const auto& uName : upvalueNames_) {
-        uint32_t uNameLen = static_cast<uint32_t>(uName.length());
-        os.write(reinterpret_cast<const char*>(&uNameLen), sizeof(uNameLen));
-        os.write(uName.c_str(), uNameLen);
+    if (strip) {
+        uint32_t localCount = 0;
+        os.write(reinterpret_cast<const char*>(&localCount), sizeof(localCount));
+        uint32_t uvNameCount = 0;
+        os.write(reinterpret_cast<const char*>(&uvNameCount), sizeof(uvNameCount));
+    } else {
+        // Local variable info
+        uint32_t localCount = static_cast<uint32_t>(localVars_.size());
+        os.write(reinterpret_cast<const char*>(&localCount), sizeof(localCount));
+        for (const auto& l : localVars_) {
+            uint32_t lNameLen = static_cast<uint32_t>(l.name.length());
+            os.write(reinterpret_cast<const char*>(&lNameLen), sizeof(lNameLen));
+            os.write(l.name.c_str(), lNameLen);
+            os.write(reinterpret_cast<const char*>(&l.startPC), sizeof(l.startPC));
+            os.write(reinterpret_cast<const char*>(&l.endPC), sizeof(l.endPC));
+            os.write(reinterpret_cast<const char*>(&l.slot), sizeof(l.slot));
+        }
+
+        // Upvalue names
+        uint32_t uvNameCount = static_cast<uint32_t>(upvalueNames_.size());
+        os.write(reinterpret_cast<const char*>(&uvNameCount), sizeof(uvNameCount));
+        for (const auto& uName : upvalueNames_) {
+            uint32_t uNameLen = static_cast<uint32_t>(uName.length());
+            os.write(reinterpret_cast<const char*>(&uNameLen), sizeof(uNameLen));
+            os.write(uName.c_str(), uNameLen);
+        }
     }
 }
 
@@ -763,9 +781,23 @@ std::unique_ptr<FunctionObject> FunctionObject::deserialize(std::istream& is, co
     readValue(is, upvalueCount);
     uint8_t varargs = 0;
     readValue(is, varargs);
+    bool hasVarargs = (varargs & 1) != 0;
+    bool hasNamedVarargs = (varargs & 2) != 0;
+    bool isVarargOptimized = (varargs & 4) != 0;
+    int32_t namedVarargSlot = -1;
+    if (hasNamedVarargs) {
+        readValue(is, namedVarargSlot);
+    }
+    int lineDefined = 0, lastLineDefined = 0;
+    readValue(is, lineDefined);
+    readValue(is, lastLineDefined);
     
     auto chunk = Chunk::deserialize(is, parentSource);
-    auto function = std::make_unique<FunctionObject>(name, arity, std::move(chunk), upvalueCount, varargs != 0);
+    auto function = std::make_unique<FunctionObject>(name, arity, std::move(chunk), upvalueCount, hasVarargs);
+    function->setLines(lineDefined, lastLineDefined);
+    if (hasNamedVarargs) {
+        function->setNamedVarargs(namedVarargSlot, isVarargOptimized);
+    }
 
     // Local variable info
     uint32_t localCount = 0;

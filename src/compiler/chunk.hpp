@@ -75,7 +75,7 @@ public:
     size_t instructionLength(size_t offset) const;
 
     // Serialization
-    void serialize(std::ostream& os, const std::string& parentSource = "") const;
+    void serialize(std::ostream& os, const std::string& parentSource = "", bool strip = false) const;
     static std::unique_ptr<Chunk> deserialize(std::istream& is, const std::string& parentSource = "");
 
 private:

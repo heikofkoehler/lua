@@ -23,6 +23,8 @@ private:
     Token previous_;
     bool hadError_;
     bool panicMode_;
+    int recursionDepth_ = 0;
+    friend struct LevelGuard;
 
     // Token management
     void advance();
@@ -69,7 +71,13 @@ private:
         int lineDefined = 0;
         int lastLineDefined = 0;
     };
-    FunctionBody parseFunctionBody(const std::string& context);
+    FunctionBody parseFunctionBody(const std::string& context, int lineDefined);
+
+    struct FuncContext {
+        int lineDefined;
+        int localCount;
+    };
+    std::vector<FuncContext> funcStack_;
 
     std::unique_ptr<ExprNode> expression();
     std::unique_ptr<ExprNode> logicalOr();

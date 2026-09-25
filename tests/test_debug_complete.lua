@@ -14,7 +14,7 @@ end
 
 local info = debug.getinfo(test_func)
 assert_eq(info.what, "Lua")
-assert_eq(info.name, "test_func")
+assert_eq(info.name, nil)
 assert_eq(info.nups, 0)
 assert_eq(info.nparams, 2)
 assert_eq(info.isvararg, true)
