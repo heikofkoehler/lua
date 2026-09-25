@@ -7,18 +7,26 @@
 // Userdata object: wrapper for C++ pointers with optional metatable
 class UserdataObject : public GCObject {
 public:
-    UserdataObject(void* data, int numUserValues = 1, bool isLight = false)
-        : GCObject(GCObject::Type::USERDATA), data_(data), metatable_(Value::nil()), isLight_(isLight) {
+    UserdataObject(void* data, int numUserValues = 1, bool isLight = false, bool ownsMemory = false)
+        : GCObject(GCObject::Type::USERDATA), data_(data), metatable_(Value::nil()), isLight_(isLight), ownsMemory_(ownsMemory) {
         userValues_.resize(numUserValues, Value::nil());
     }
 
-    ~UserdataObject() = default; // Destructor doesn't free the raw pointer automatically by default
+    ~UserdataObject() {
+        if (ownsMemory_ && data_) {
+            std::free(data_);
+            data_ = nullptr;
+        }
+    }
 
     void* data() const { return data_; }
     void setData(void* data) { data_ = data; }
 
     bool isLight() const { return isLight_; }
     void setIsLight(bool l) { isLight_ = l; }
+
+    bool ownsMemory() const { return ownsMemory_; }
+    void setOwnsMemory(bool o) { ownsMemory_ = o; }
 
     Value metatable() const { return metatable_; }
     void setMetatable(const Value& mt);
@@ -37,10 +45,11 @@ public:
         return sizeof(UserdataObject) + userValues_.capacity() * sizeof(Value);
     }
 
-    private:
+private:
     void* data_;
     Value metatable_;
     std::vector<Value> userValues_;
     bool isLight_ = false;
-    };
+    bool ownsMemory_ = false;
+};
 #endif // LUA_USERDATA_HPP

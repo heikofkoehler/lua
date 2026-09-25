@@ -573,16 +573,7 @@ bool native_debug_upvaluejoin(VM* vm, int argCount) {
 
 bool native_debug_getregistry(VM* vm, int argCount) {
     for(int i=0; i<argCount; i++) vm->pop();
-    
-    // We need to return a table representation of the registry.
-    // Our VM currently uses std::unordered_map<std::string, Value> registry_;
-    // Let's create a Lua table and copy the string-keyed entries.
-    TableObject* regTable = vm->createTable();
-    for (const auto& pair : vm->getRegistryMap()) {
-        regTable->set(Value::runtimeString(vm->internString(pair.first)), pair.second);
-    }
-    
-    vm->push(Value::table(regTable));
+    vm->push(Value::table(vm->registryTable()));
     vm->currentCoroutine()->lastResultCount = 1;
     return true;
 }

@@ -61,6 +61,12 @@ VM::VM() :
     mainCoroutine_->status = CoroutineObject::Status::RUNNING;
     currentCoroutine_ = mainCoroutine_;
 
+    // Initialize registry table
+    registryTable_ = allocateObject<TableObject>();
+    registryTable_->set("_LOADED", Value::table(allocateObject<TableObject>()));
+    registryTable_->set("_PRELOAD", Value::table(allocateObject<TableObject>()));
+    registryTable_->set(Value::integer(1), Value::thread(mainCoroutine_)); // LUA_RIDX_MAINTHREAD
+
     // Initialize PRNG state (standard Lua 5.4 xoshiro256** initialization)
     uint64_t seed1 = static_cast<uint64_t>(time(nullptr));
     uint64_t seed2 = static_cast<uint64_t>(reinterpret_cast<uintptr_t>(this));
@@ -120,7 +126,7 @@ VM::~VM() {
     
     // 1. Clear all handles that could be roots
     globals_.clear();
-    registry_.clear();
+    registryTable_ = nullptr;
     runtimeStrings_.clear();
     rootedConstants_.clear();
     for (int i = 0; i < Value::NUM_TYPES; i++) {
@@ -149,7 +155,7 @@ VM::~VM() {
 void VM::reset() {
     // Clear all handles
     globals_.clear();
-    registry_.clear();
+    registryTable_ = nullptr;
     runtimeStrings_.clear();
     rootedConstants_.clear();
     for (int i = 0; i < Value::NUM_TYPES; i++) {
@@ -172,6 +178,12 @@ void VM::reset() {
     mainCoroutine_ = coroutines_.back();
     mainCoroutine_->status = CoroutineObject::Status::RUNNING;
     currentCoroutine_ = mainCoroutine_;
+
+    // Re-initialize registry table
+    registryTable_ = allocateObject<TableObject>();
+    registryTable_->set("_LOADED", Value::table(allocateObject<TableObject>()));
+    registryTable_->set("_PRELOAD", Value::table(allocateObject<TableObject>()));
+    registryTable_->set(Value::integer(1), Value::thread(mainCoroutine_)); // LUA_RIDX_MAINTHREAD
 
     hadError_ = false;
     isHandlingError_ = false;
@@ -248,8 +260,8 @@ TableObject* VM::createTable(size_t nseq, size_t nrec) {
     return allocateObject<TableObject>(nseq, nrec);
 }
 
-UserdataObject* VM::createUserdata(void* data, int numUserValues, bool isLight) {
-    return allocateObject<UserdataObject>(data, numUserValues, isLight);
+UserdataObject* VM::createUserdata(void* data, int numUserValues, bool isLight, bool ownsMemory) {
+    return allocateObject<UserdataObject>(data, numUserValues, isLight, ownsMemory);
 }
 
 ClosureObject* VM::createClosure(FunctionObject* function) {
@@ -2326,11 +2338,19 @@ bool VM::callValue(int argCount, int retCount, bool isTailCall, const char* meta
                 L.is_owned = false;
                 L.stackBase = funcPosition + 1;
                 L.argCount = argCount;
+                L.currentClosure = ccl;
                 
-                lua_State* oldL = currentL_;
-                currentL_ = &L;
+                struct CurrentLGuard {
+                    lua_State*& target;
+                    lua_State* old;
+                    CurrentLGuard(lua_State*& t, lua_State* n) : target(t), old(t) {
+                        target = n;
+                    }
+                    ~CurrentLGuard() {
+                        target = old;
+                    }
+                } lguard(currentL_, &L);
                 int nres = function(&L);
-                currentL_ = oldL;
                 
                 currentCoroutine_->lastResultCount = nres;
             }
@@ -2346,11 +2366,19 @@ bool VM::callValue(int argCount, int retCount, bool isTailCall, const char* meta
             L.is_owned = false;
             L.stackBase = funcPosition + 1;
             L.argCount = argCount;
+            L.currentClosure = nullptr;
             
-            lua_State* oldL = currentL_;
-            currentL_ = &L;
+            struct CurrentLGuard {
+                lua_State*& target;
+                lua_State* old;
+                CurrentLGuard(lua_State*& t, lua_State* n) : target(t), old(t) {
+                    target = n;
+                }
+                ~CurrentLGuard() {
+                    target = old;
+                }
+            } lguard(currentL_, &L);
             int nres = function(&L);
-            currentL_ = oldL;
             
             currentCoroutine_->lastResultCount = nres;
         }
@@ -2681,10 +2709,15 @@ bool VM::resumeCoroutine(CoroutineObject* co) {
     return result;
 }
 
+void VM::setRegistry(const std::string& key, const Value& value) {
+    if (registryTable_) {
+        registryTable_->set(key, value);
+    }
+}
+
 Value VM::getRegistry(const std::string& key) const {
-    auto it = registry_.find(key);
-    if (it != registry_.end()) {
-        return it->second;
+    if (registryTable_) {
+        return registryTable_->get(key);
     }
     return Value::nil();
 }

@@ -978,6 +978,7 @@ void registerIOLibrary(VM* vm, TableObject* ioTable) {
     vm->addNativeToTable(fileMeta, "__gc", native_file_gc);
 
     vm->setTypeMetatable(Value::Type::FILE, Value::table(fileMeta));
+    vm->setRegistry("FILE*", Value::table(fileMeta));
 
     FileObject* stdinObj = vm->createFile(stdin, "r");
     FileObject* stdoutObj = vm->createFile(stdout, "w");

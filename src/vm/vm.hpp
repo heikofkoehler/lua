@@ -81,7 +81,7 @@ public:
     TableObject* createTable(size_t nseq = 0, size_t nrec = 0);
 
     // Userdata operations
-    class UserdataObject* createUserdata(void* data, int numUserValues = 1, bool isLight = false);
+    class UserdataObject* createUserdata(void* data, int numUserValues = 1, bool isLight = false, bool ownsMemory = false);
 
     // Closure operations
     ClosureObject* createClosure(FunctionObject* function);
@@ -135,6 +135,7 @@ public:
     Value peek(size_t distance = 0) const;
     void runtimeError(const std::string& message, int level = 1);
     void runtimeError(const Value& errorObj, int level = 1);
+    void clearError() { hadError_ = false; isHandlingError_ = false; }
     std::string getVarInfo(size_t opIp, int operandIndex);
     std::string getCallVarInfo(size_t opIp, int argCount);
 
@@ -203,9 +204,10 @@ public:
 
 
     // Registry for internal use (stable storage)
-    void setRegistry(const std::string& key, const Value& value) { registry_[key] = value; }
+    TableObject* registryTable() { return registryTable_; }
+    const TableObject* registryTable() const { return registryTable_; }
+    void setRegistry(const std::string& key, const Value& value);
     Value getRegistry(const std::string& key) const;
-    const std::unordered_map<std::string, Value>& getRegistryMap() const { return registry_; }
 
     // Garbage collection
     enum class GCState {
@@ -388,7 +390,7 @@ public:
 private:
     std::vector<class TableObject*> weakTables_;
 
-    std::unordered_map<std::string, Value> registry_; // Internal registry
+    TableObject* registryTable_ = nullptr; // Internal registry
     std::unordered_map<std::string, Value> globals_;  // Global variables
     std::string sourceName_ = "chunk"; // Current source name
     std::vector<FunctionObject*> functions_;  // Function pool (owned)

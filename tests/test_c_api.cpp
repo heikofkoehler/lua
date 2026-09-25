@@ -1,4 +1,6 @@
 #include "api/lua.h"
+#include "api/lauxlib.h"
+#include "api/lualib.h"
 #include <iostream>
 #include <cassert>
 #include <cstring>
@@ -86,6 +88,7 @@ int main() {
     assert(data != nullptr);
     assert(lua_isuserdata(L, -1));
     assert(lua_touserdata(L, -1) == data);
+    (void)data;
     
     // Library tests
     luaL_openlibs(L);
@@ -143,6 +146,7 @@ int main() {
         count++;
     }
     assert(count == 2);
+    (void)count;
     
     lua_close(L);
     std::cout << "C API tests passed!" << std::endl;

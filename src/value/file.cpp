@@ -140,3 +140,9 @@ bool FileObject::setvbuf(const std::string& mode, size_t size) {
     else return false;
     return ::setvbuf(cfile_, nullptr, m, size > 0 ? size : BUFSIZ) == 0;
 }
+
+int FileObject::cCloseHelper(lua_State* L) {
+    (void)L;
+    return 0;
+}
+

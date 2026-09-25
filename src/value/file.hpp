@@ -12,6 +12,17 @@ struct DevFullCookie {
     bool closing = false;
 };
 
+typedef struct lua_State lua_State;
+using lua_CFunction = int (*)(lua_State* L);
+
+#ifndef LUAL_STREAM_DEFINED
+#define LUAL_STREAM_DEFINED
+typedef struct luaL_Stream {
+    FILE* f;
+    lua_CFunction closef;
+} luaL_Stream;
+#endif
+
 // FileObject: Represents an open file handle wrapping C FILE*
 class FileObject : public GCObject {
 public:
@@ -76,6 +87,13 @@ public:
     DevFullCookie* devFullCookie() const { return devFullCookie_; }
     void setDevFullCookie(DevFullCookie* cookie) { devFullCookie_ = cookie; }
 
+    luaL_Stream* stream() {
+        stream_.f = isOpen() ? cfile_ : nullptr;
+        stream_.closef = isOpen() ? &cCloseHelper : nullptr;
+        return &stream_;
+    }
+    static int cCloseHelper(lua_State* L);
+
     // GC interface: files don't reference other objects
     void markReferences() override {}
 
@@ -88,6 +106,7 @@ private:
     std::string mode_;
     FILE* cfile_ = nullptr;
     DevFullCookie* devFullCookie_ = nullptr;
+    luaL_Stream stream_{nullptr, nullptr};
     bool isOpen_ = false;
     bool isPipe_ = false;
     bool isStandard_ = false;

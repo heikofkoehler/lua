@@ -1,14 +1,18 @@
 #include "api/lua.h"
+#include "api/lauxlib.h"
+#include "api/lualib.h"
 #include "api/lua_state.h"
 #include "vm/vm.hpp"
 #include "value/value.hpp"
 #include "value/table.hpp"
+#include "value/closure.hpp"
 #include "value/userdata.hpp"
+#include "value/file.hpp"
 #include <cstring>
 #include <algorithm>
 #include <cmath>
 #include <cstdarg>
-#include "api/lauxlib.h"
+#include <cstdlib>
 
 // State manipulation
 lua_State *lua_newstate(void) {
@@ -17,6 +21,8 @@ lua_State *lua_newstate(void) {
     L->is_owned = true;
     L->stackBase = 0;
     L->argCount = 0;
+    L->currentClosure = nullptr;
+    L->registryVal = Value::nil();
     return L;
 }
 
@@ -27,13 +33,39 @@ void lua_close(lua_State *L) {
     delete L;
 }
 
-// Check functions helper
+static bool double_to_integer(double d, int64_t& out) {
+    double intPart;
+    if (std::isfinite(d) && std::modf(d, &intPart) == 0.0 &&
+        d >= -9223372036854775808.0 && d < 9223372036854775808.0) {
+        out = static_cast<int64_t>(d);
+        return true;
+    }
+    return false;
+}
+
 static int to_abs_idx(lua_State *L, int idx) {
-    if (idx > 0) return idx;
+    if (idx > 0 || idx <= LUA_REGISTRYINDEX) return idx;
     return lua_gettop(L) + idx + 1;
 }
 
+int lua_absindex(lua_State *L, int idx) {
+    return to_abs_idx(L, idx);
+}
+
 static Value* get_val(lua_State *L, int idx) {
+    if (idx == LUA_REGISTRYINDEX) {
+        L->registryVal = Value::table(L->vm->registryTable());
+        return &L->registryVal;
+    }
+    
+    if (idx < LUA_REGISTRYINDEX) {
+        int upvalIndex = LUA_REGISTRYINDEX - idx; // 1-based: 1, 2, ...
+        if (L->currentClosure && L->currentClosure->isC()) {
+            return const_cast<Value*>(L->currentClosure->getCUpvaluePtr(static_cast<size_t>(upvalIndex - 1)));
+        }
+        return nullptr;
+    }
+
     auto& stack = L->vm->currentCoroutine()->stack;
     size_t abs_idx;
     
@@ -80,38 +112,19 @@ void lua_pushvalue(lua_State *L, int idx) {
     }
 }
 
-void lua_pop(lua_State *L, int n) {
-    lua_settop(L, -(n) - 1);
-}
-
-void lua_remove(lua_State *L, int idx) {
+void lua_rotate(lua_State *L, int idx, int n) {
     auto& stack = L->vm->currentCoroutine()->stack;
     int abs_idx = to_abs_idx(L, idx);
-    size_t stack_idx = L->stackBase + static_cast<size_t>(abs_idx - 1);
-    if (stack_idx < stack.size()) {
-        stack.erase(stack.begin() + stack_idx);
-    }
-}
-
-void lua_insert(lua_State *L, int idx) {
-    auto& stack = L->vm->currentCoroutine()->stack;
-    int abs_idx = to_abs_idx(L, idx);
-    size_t stack_idx = L->stackBase + static_cast<size_t>(abs_idx - 1);
-    if (stack_idx < stack.size()) {
-        Value v = stack.back();
-        stack.pop_back();
-        stack.insert(stack.begin() + stack_idx, v);
-    }
-}
-
-void lua_replace(lua_State *L, int idx) {
-    auto& stack = L->vm->currentCoroutine()->stack;
-    int abs_idx = to_abs_idx(L, idx);
-    size_t stack_idx = L->stackBase + static_cast<size_t>(abs_idx - 1);
-    if (stack_idx < stack.size()) {
-        stack[stack_idx] = stack.back();
-        stack.pop_back();
-    }
+    if (abs_idx <= 0) return;
+    size_t first = L->stackBase + static_cast<size_t>(abs_idx - 1);
+    size_t last = stack.size();
+    if (first >= last) return;
+    
+    int count = static_cast<int>(last - first);
+    int m = (n % count + count) % count;
+    if (m == 0) return;
+    
+    std::rotate(stack.begin() + first, stack.begin() + (last - m), stack.begin() + last);
 }
 
 void lua_copy(lua_State *L, int fromidx, int toidx) {
@@ -122,33 +135,87 @@ void lua_copy(lua_State *L, int fromidx, int toidx) {
     }
 }
 
+int lua_checkstack(lua_State *L, int n) {
+    (void)L; (void)n;
+    return 1;
+}
+
 // Push functions
 void lua_pushnil(lua_State *L) {
     L->vm->push(Value::nil());
 }
 
-void lua_pushnumber(lua_State *L, double n) {
+void lua_pushnumber(lua_State *L, lua_Number n) {
     L->vm->push(Value::number(n));
 }
 
-void lua_pushinteger(lua_State *L, long long n) {
+void lua_pushinteger(lua_State *L, lua_Integer n) {
     L->vm->push(Value::integer(n));
 }
 
-void lua_pushstring(lua_State *L, const char *s) {
+const char *lua_pushlstring(lua_State *L, const char *s, size_t len) {
+    std::string str(s ? s : "", len);
+    L->vm->push(Value::runtimeString(L->vm->internString(str)));
+    return lua_tostring(L, -1);
+}
+
+const char *lua_pushstring(lua_State *L, const char *s) {
     if (s) {
         L->vm->push(Value::runtimeString(L->vm->internString(s)));
+        return lua_tostring(L, -1);
     } else {
         L->vm->push(Value::nil());
+        return nullptr;
     }
+}
+
+const char *lua_pushvfstring(lua_State *L, const char *fmt, va_list argp) {
+    char buf[2048];
+    vsnprintf(buf, sizeof(buf), fmt, argp);
+    return lua_pushstring(L, buf);
+}
+
+const char *lua_pushfstring(lua_State *L, const char *fmt, ...) {
+    va_list argp;
+    va_start(argp, fmt);
+    const char *res = lua_pushvfstring(L, fmt, argp);
+    va_end(argp);
+    return res;
+}
+
+void lua_pushcclosure(lua_State *L, lua_CFunction fn, int n) {
+    std::vector<Value> upvalues;
+    if (n > 0) {
+        upvalues.resize(n);
+        int top = lua_gettop(L);
+        int start = top - n + 1;
+        for (int i = 0; i < n; i++) {
+            Value* v = get_val(L, start + i);
+            upvalues[i] = v ? *v : Value::nil();
+        }
+        lua_pop(L, n);
+    }
+    ClosureObject* cl = L->vm->createCClosure(fn, upvalues);
+    L->vm->push(Value::closure(cl));
 }
 
 void lua_pushboolean(lua_State *L, int b) {
     L->vm->push(Value::boolean(b != 0));
 }
 
-void lua_pushcfunction(lua_State *L, lua_CFunction f) {
-    L->vm->push(Value::cFunction(reinterpret_cast<void*>(f)));
+void lua_pushlightuserdata(lua_State *L, void *p) {
+    UserdataObject* ud = L->vm->createUserdata(p, 0, true, false);
+    L->vm->push(Value::userdata(ud));
+}
+
+int lua_pushthread(lua_State *L) {
+    L->vm->push(Value::thread(L->vm->currentCoroutine()));
+    return (L->vm->currentCoroutine() == L->vm->mainCoroutine()) ? 1 : 0;
+}
+
+const char *lua_pushexternalstring(lua_State *L, const char *s, size_t len, lua_Free falloc, void *ud) {
+    (void)falloc; (void)ud;
+    return lua_pushlstring(L, s, len);
 }
 
 // Type info
@@ -160,17 +227,25 @@ int lua_type(lua_State *L, int idx) {
     if (v->isNumber()) return LUA_TNUMBER;
     if (v->isString()) return LUA_TSTRING;
     if (v->isTable()) return LUA_TTABLE;
-    if (v->isFunction()) return LUA_TFUNCTION;
+    if (v->isFunction() || v->isNativeFunction() || v->isCFunction() || (v->isClosure())) return LUA_TFUNCTION;
     if (v->isThread()) return LUA_TTHREAD;
-    if (v->isUserdata()) return LUA_TUSERDATA;
+    if (v->isUserdata()) {
+        if (v->asUserdataObj()->isLight()) return LUA_TLIGHTUSERDATA;
+        return LUA_TUSERDATA;
+    }
+    if (v->isFile()) {
+        return LUA_TUSERDATA; // In standard Lua, file is a full userdata
+    }
     return LUA_TNONE;
 }
 
 const char *lua_typename(lua_State *L, int tp) {
     (void)L;
     switch (tp) {
+        case LUA_TNONE: return "no value";
         case LUA_TNIL: return "nil";
         case LUA_TBOOLEAN: return "boolean";
+        case LUA_TLIGHTUSERDATA: return "userdata";
         case LUA_TNUMBER: return "number";
         case LUA_TSTRING: return "string";
         case LUA_TTABLE: return "table";
@@ -183,44 +258,98 @@ const char *lua_typename(lua_State *L, int tp) {
 
 int lua_isnumber(lua_State *L, int idx) {
     Value* v = get_val(L, idx);
-    return v ? v->isNumber() : 0;
+    return (v && v->isNumber()) ? 1 : 0;
 }
 
 int lua_isstring(lua_State *L, int idx) {
     Value* v = get_val(L, idx);
-    return v ? v->isString() : 0;
+    return (v && (v->isString() || v->isNumber())) ? 1 : 0;
 }
 
-int lua_isboolean(lua_State *L, int idx) {
+int lua_iscfunction(lua_State *L, int idx) {
     Value* v = get_val(L, idx);
-    return v ? v->isBool() : 0;
+    if (!v) return 0;
+    if (v->isCFunction()) return 1;
+    if (v->isClosure() && v->asClosureObj()->isC()) return 1;
+    if (v->isNativeFunction()) return 1;
+    return 0;
 }
 
-int lua_isnil(lua_State *L, int idx) {
-    return lua_type(L, idx) == LUA_TNIL;
-}
-
-int lua_isfunction(lua_State *L, int idx) {
-    return lua_type(L, idx) == LUA_TFUNCTION;
-}
-
-int lua_istable(lua_State *L, int idx) {
-    return lua_type(L, idx) == LUA_TTABLE;
+int lua_isinteger(lua_State *L, int idx) {
+    Value* v = get_val(L, idx);
+    if (!v) return 0;
+    if (v->isInteger()) return 1;
+    if (v->isFloat()) {
+        double d = v->asNumber();
+        int64_t i;
+        return double_to_integer(d, i) ? 1 : 0;
+    }
+    return 0;
 }
 
 int lua_isuserdata(lua_State *L, int idx) {
-    return lua_type(L, idx) == LUA_TUSERDATA;
+    Value* v = get_val(L, idx);
+    if (!v) return 0;
+    return (v->isUserdata() || v->isFile()) ? 1 : 0;
+}
+
+int lua_rawequal(lua_State *L, int idx1, int idx2) {
+    Value* v1 = get_val(L, idx1);
+    Value* v2 = get_val(L, idx2);
+    if (!v1 || !v2) return 0;
+    return (*v1 == *v2) ? 1 : 0;
 }
 
 // Get functions
-double lua_tonumber(lua_State *L, int idx) {
+lua_Number lua_tonumberx(lua_State *L, int idx, int *isnum) {
     Value* v = get_val(L, idx);
-    return (v && v->isNumber()) ? v->asNumber() : 0.0;
+    if (v && v->isNumber()) {
+        if (isnum) *isnum = 1;
+        return v->asNumber();
+    }
+    if (v && v->isString()) {
+        double d = 0.0;
+        bool isInt = false;
+        if (VM::stringToNumber(v->asStringObj()->chars(), d, isInt)) {
+            if (isnum) *isnum = 1;
+            return d;
+        }
+    }
+    if (isnum) *isnum = 0;
+    return 0.0;
 }
 
-long long lua_tointeger(lua_State *L, int idx) {
+lua_Integer lua_tointegerx(lua_State *L, int idx, int *isnum) {
     Value* v = get_val(L, idx);
-    return (v && v->isNumber()) ? static_cast<long long>(v->asInteger()) : 0;
+    if (v && v->isInteger()) {
+        if (isnum) *isnum = 1;
+        return v->asInteger();
+    }
+    if (v && v->isFloat()) {
+        double d = v->asNumber();
+        int64_t i;
+        if (double_to_integer(d, i)) {
+            if (isnum) *isnum = 1;
+            return i;
+        }
+    }
+    if (v && v->isString()) {
+        double d = 0.0;
+        bool isInt = false;
+        if (VM::stringToNumber(v->asStringObj()->chars(), d, isInt)) {
+            if (isInt) {
+                if (isnum) *isnum = 1;
+                return static_cast<lua_Integer>(d);
+            }
+            int64_t i;
+            if (double_to_integer(d, i)) {
+                if (isnum) *isnum = 1;
+                return i;
+            }
+        }
+    }
+    if (isnum) *isnum = 0;
+    return 0;
 }
 
 int lua_toboolean(lua_State *L, int idx) {
@@ -228,19 +357,73 @@ int lua_toboolean(lua_State *L, int idx) {
     return (v && !v->isFalsey()) ? 1 : 0;
 }
 
-const char *lua_tostring(lua_State *L, int idx) {
+const char *lua_tolstring(lua_State *L, int idx, size_t *len) {
     Value* v = get_val(L, idx);
     if (v && v->isString()) {
-        return v->asStringObj()->chars();
+        StringObject* s = v->asStringObj();
+        if (len) *len = s->length();
+        return s->chars();
     }
+    if (v && v->isNumber()) {
+        // In standard Lua, lua_tolstring converts numbers to strings on the stack
+        std::string s = v->toString();
+        StringObject* so = L->vm->internString(s);
+        *v = Value::runtimeString(so);
+        if (len) *len = so->length();
+        return so->chars();
+    }
+    if (len) *len = 0;
+    return nullptr;
+}
+
+size_t lua_rawlen(lua_State *L, int idx) {
+    Value* v = get_val(L, idx);
+    if (!v) return 0;
+    if (v->isString()) {
+        return v->asStringObj()->length();
+    }
+    if (v->isTable()) {
+        return v->asTableObj()->length();
+    }
+    if (v->isUserdata()) {
+        return v->asUserdataObj()->numUserValues() * sizeof(Value);
+    }
+    return 0;
+}
+
+lua_CFunction lua_tocfunction(lua_State *L, int idx) {
+    Value* v = get_val(L, idx);
+    if (!v) return nullptr;
+    if (v->isCFunction()) return reinterpret_cast<lua_CFunction>(v->asCFunction());
+    if (v->isClosure() && v->asClosureObj()->isC()) return v->asClosureObj()->cFunc();
     return nullptr;
 }
 
 void *lua_touserdata(lua_State *L, int idx) {
     Value* v = get_val(L, idx);
-    if (v && v->isUserdata()) {
+    if (!v) return nullptr;
+    if (v->isUserdata()) {
         return v->asUserdataObj()->data();
     }
+    if (v->isFile()) {
+        return v->asFileObj()->stream();
+    }
+    return nullptr;
+}
+
+lua_State *lua_tothread(lua_State *L, int idx) {
+    Value* v = get_val(L, idx);
+    if (v && v->isThread()) {
+        return L;
+    }
+    return nullptr;
+}
+
+const void *lua_topointer(lua_State *L, int idx) {
+    Value* v = get_val(L, idx);
+    if (!v) return nullptr;
+    if (v->isObj()) return v->asObj();
+    if (v->isCFunction()) return v->asCFunction();
     return nullptr;
 }
 
@@ -284,6 +467,18 @@ int lua_getfield(lua_State *L, int idx, const char *k) {
     return lua_type(L, -1);
 }
 
+int lua_geti(lua_State *L, int idx, lua_Integer i) {
+    int abs_idx = to_abs_idx(L, idx);
+    Value* t_ptr = get_val(L, abs_idx);
+    if (!t_ptr || !t_ptr->isTable()) {
+        L->vm->push(Value::nil());
+        return LUA_TNIL;
+    }
+    Value val = t_ptr->asTableObj()->get(Value::integer(i));
+    L->vm->push(val);
+    return lua_type(L, -1);
+}
+
 void lua_settable(lua_State *L, int idx) {
     int abs_idx = to_abs_idx(L, idx);
     Value val = L->vm->pop();
@@ -311,12 +506,52 @@ void lua_setfield(lua_State *L, int idx, const char *k) {
     }
 }
 
+void lua_seti(lua_State *L, int idx, lua_Integer i) {
+    int abs_idx = to_abs_idx(L, idx);
+    Value val = L->vm->pop();
+    Value* t_ptr = get_val(L, abs_idx);
+    if (t_ptr && t_ptr->isTable()) {
+        t_ptr->asTableObj()->set(Value::integer(i), val);
+    }
+}
+
 int lua_rawget(lua_State *L, int idx) {
-    return lua_gettable(L, idx); // Our TableObject::get IS raw
+    return lua_gettable(L, idx);
+}
+
+int lua_rawgeti(lua_State *L, int idx, lua_Integer n) {
+    return lua_geti(L, idx, n);
+}
+
+int lua_rawgetp(lua_State *L, int idx, const void *p) {
+    int abs_idx = to_abs_idx(L, idx);
+    Value* t_ptr = get_val(L, abs_idx);
+    if (!t_ptr || !t_ptr->isTable()) {
+        L->vm->push(Value::nil());
+        return LUA_TNIL;
+    }
+    UserdataObject* ud = L->vm->createUserdata(const_cast<void*>(p), 0, true, false);
+    Value val = t_ptr->asTableObj()->get(Value::userdata(ud));
+    L->vm->push(val);
+    return lua_type(L, -1);
 }
 
 void lua_rawset(lua_State *L, int idx) {
-    lua_settable(L, idx); // Our TableObject::set IS raw
+    lua_settable(L, idx);
+}
+
+void lua_rawseti(lua_State *L, int idx, lua_Integer n) {
+    lua_seti(L, idx, n);
+}
+
+void lua_rawsetp(lua_State *L, int idx, const void *p) {
+    int abs_idx = to_abs_idx(L, idx);
+    Value val = L->vm->pop();
+    Value* t_ptr = get_val(L, abs_idx);
+    if (t_ptr && t_ptr->isTable()) {
+        UserdataObject* ud = L->vm->createUserdata(const_cast<void*>(p), 0, true, false);
+        t_ptr->asTableObj()->set(Value::userdata(ud), val);
+    }
 }
 
 int lua_next(lua_State *L, int idx) {
@@ -344,6 +579,8 @@ int lua_getmetatable(lua_State *L, int objindex) {
         mt = obj->asTableObj()->getMetatable();
     } else if (obj->isUserdata()) {
         mt = obj->asUserdataObj()->metatable();
+    } else if (obj->isFile()) {
+        mt = L->vm->getTypeMetatable(Value::Type::FILE);
     } else {
         mt = L->vm->getTypeMetatable(obj->type());
     }
@@ -371,53 +608,151 @@ int lua_setmetatable(lua_State *L, int objindex) {
     return 1;
 }
 
+int lua_getiuservalue(lua_State *L, int idx, int n) {
+    Value* v = get_val(L, idx);
+    if (v && v->isUserdata()) {
+        Value val = v->asUserdataObj()->getUserValue(n - 1);
+        L->vm->push(val);
+        return lua_type(L, -1);
+    }
+    L->vm->push(Value::nil());
+    return LUA_TNONE;
+}
+
+int lua_setiuservalue(lua_State *L, int idx, int n) {
+    Value val = L->vm->pop();
+    Value* v = get_val(L, idx);
+    if (v && v->isUserdata()) {
+        v->asUserdataObj()->setUserValue(n - 1, val);
+        return 1;
+    }
+    return 0;
+}
+
 // Userdata
-void *lua_newuserdata(lua_State *L, size_t size) {
-    void* data = malloc(size);
+void *lua_newuserdatauv(lua_State *L, size_t sz, int nuvalue) {
+    void* data = std::malloc(sz > 0 ? sz : 1);
     if (!data) return nullptr;
-    memset(data, 0, size);
-    
-    UserdataObject* ud = L->vm->createUserdata(data);
+    std::memset(data, 0, sz > 0 ? sz : 1);
+    UserdataObject* ud = L->vm->createUserdata(data, nuvalue, false, true);
     L->vm->push(Value::userdata(ud));
     return data;
 }
 
+// Thread operations
+lua_State *lua_newthread(lua_State *L) {
+    CoroutineObject* co = L->vm->createCoroutine(nullptr);
+    lua_State* th = new lua_State;
+    th->vm = L->vm;
+    th->is_owned = false;
+    th->stackBase = 0;
+    th->argCount = 0;
+    th->currentClosure = nullptr;
+    th->registryVal = Value::nil();
+    L->vm->push(Value::thread(co));
+    return th;
+}
+
+int lua_closethread(lua_State *L, lua_State *from) {
+    (void)L; (void)from;
+    return LUA_OK;
+}
+
 // Calls
-int lua_pcall(lua_State *L, int nargs, int nresults, int errfunc) {
-    (void)errfunc;
-    
-    // In our VM, callValue expects retCount encoded as:
-    // 0 = LUA_MULTRET
-    // N > 0 means N - 1 results.
-    // Standard Lua C API passes nresults directly, or LUA_MULTRET (-1).
-    int vmRetCount = (nresults == -1) ? 0 : nresults + 1;
-    
-    bool success = L->vm->callValue(nargs, vmRetCount);
-    return success ? 0 : 1;
+void lua_callk(lua_State *L, int nargs, int nresults, lua_KContext ctx, lua_KFunction k) {
+    (void)ctx; (void)k;
+    int vmRetCount = (nresults == LUA_MULTRET) ? 0 : nresults + 1;
+    L->vm->callValue(nargs, vmRetCount);
 }
 
-void luaL_openlibs(lua_State *L) {
-    L->vm->initStandardLibrary();
+int lua_yieldk(lua_State *L, int nresults, lua_KContext ctx, lua_KFunction k) {
+    (void)L; (void)nresults; (void)ctx; (void)k;
+    return 0;
 }
 
-const char *lua_pushfstring(lua_State *L, const char *fmt, ...) {
-    char buf[1024];
-    va_list argp;
-    va_start(argp, fmt);
-    vsnprintf(buf, sizeof(buf), fmt, argp);
-    va_end(argp);
-    lua_pushstring(L, buf);
-    return lua_tostring(L, -1);
-}
+int lua_pcallk(lua_State *L, int nargs, int nresults, int errfunc, lua_KContext ctx, lua_KFunction k) {
+    (void)ctx; (void)k; (void)errfunc;
+    int vmRetCount = (nresults == LUA_MULTRET) ? 0 : nresults + 1;
+    size_t prevFrames = L->vm->currentCoroutine()->frames.size();
+    size_t preCallStack = L->vm->currentCoroutine()->stack.size() - nargs - 1;
 
-void luaL_setfuncs(lua_State *L, const struct luaL_Reg *l, int nup) {
-    (void)nup;
-    for (; l->name != NULL; l++) {
-        lua_pushcfunction(L, l->func);
-        lua_setfield(L, -2, l->name);
+    try {
+        bool ok = L->vm->callValue(nargs, vmRetCount);
+        if (ok && L->vm->currentCoroutine()->frames.size() > prevFrames) {
+            ok = L->vm->run(prevFrames);
+        }
+        if (!ok) {
+            std::string err = L->vm->lastErrorMessage();
+            L->vm->clearError();
+            while (L->vm->currentCoroutine()->frames.size() > prevFrames) {
+                L->vm->currentCoroutine()->frames.pop_back();
+            }
+            while (L->vm->currentCoroutine()->stack.size() > preCallStack) {
+                L->vm->pop();
+            }
+            L->vm->push(Value::runtimeString(L->vm->internString(err)));
+            return LUA_ERRRUN;
+        }
+        return LUA_OK;
+    } catch (const RuntimeError& e) {
+        L->vm->clearError();
+        while (L->vm->currentCoroutine()->frames.size() > prevFrames) {
+            L->vm->currentCoroutine()->frames.pop_back();
+        }
+        while (L->vm->currentCoroutine()->stack.size() > preCallStack) {
+            L->vm->pop();
+        }
+        L->vm->push(Value::runtimeString(L->vm->internString(e.what())));
+        return LUA_ERRRUN;
+    } catch (const std::exception& e) {
+        L->vm->clearError();
+        while (L->vm->currentCoroutine()->frames.size() > prevFrames) {
+            L->vm->currentCoroutine()->frames.pop_back();
+        }
+        while (L->vm->currentCoroutine()->stack.size() > preCallStack) {
+            L->vm->pop();
+        }
+        L->vm->push(Value::runtimeString(L->vm->internString(e.what())));
+        return LUA_ERRRUN;
     }
 }
 
+int lua_concat(lua_State *L, int n) {
+    if (n < 0) return 0;
+    if (n == 0) {
+        lua_pushliteral(L, "");
+        return 0;
+    }
+    if (n == 1) return 0;
+    
+    std::string result;
+    int top = lua_gettop(L);
+    int start = top - n + 1;
+    for (int i = 0; i < n; i++) {
+        size_t len = 0;
+        const char* s = lua_tolstring(L, start + i, &len);
+        if (!s) {
+            luaL_error(L, "attempt to concatenate a %s value", luaL_typename(L, start + i));
+            return 0;
+        }
+        result.append(s, len);
+    }
+    lua_pop(L, n);
+    lua_pushlstring(L, result.data(), result.size());
+    return 0;
+}
+
+int lua_error(lua_State *L) {
+    std::string msg = "error";
+    if (lua_gettop(L) > 0) {
+        const char* s = lua_tostring(L, -1);
+        if (s) msg = s;
+    }
+    L->vm->runtimeError(msg);
+    return 0;
+}
+
+// Memory allocator
 static void *std_alloc(void *ud, void *ptr, size_t osize, size_t nsize) {
     (void)ud; (void)osize;
     if (nsize == 0) {
@@ -433,49 +768,492 @@ lua_Alloc lua_getallocf(lua_State *L, void **ud) {
     return std_alloc;
 }
 
-const char *lua_pushlstring(lua_State *L, const char *s, size_t len) {
-    std::string str(s, len);
-    L->vm->push(Value::runtimeString(L->vm->internString(str)));
-    return lua_tostring(L, -1);
+void lua_setallocf(lua_State *L, lua_Alloc f, void *ud) {
+    (void)L; (void)f; (void)ud;
 }
 
-const char *lua_pushexternalstring(lua_State *L, const char *s, size_t len, lua_Free falloc, void *ud) {
-    (void)falloc; (void)ud;
-    return lua_pushlstring(L, s, len);
+// Standard library openers
+int luaopen_base(lua_State *L) { (void)L; return 1; }
+int luaopen_coroutine(lua_State *L) { (void)L; return 1; }
+int luaopen_table(lua_State *L) { (void)L; return 1; }
+int luaopen_io(lua_State *L) { (void)L; return 1; }
+int luaopen_os(lua_State *L) { (void)L; return 1; }
+int luaopen_string(lua_State *L) { (void)L; return 1; }
+int luaopen_math(lua_State *L) { (void)L; return 1; }
+int luaopen_utf8(lua_State *L) { (void)L; return 1; }
+int luaopen_debug(lua_State *L) { (void)L; return 1; }
+int luaopen_package(lua_State *L) { (void)L; return 1; }
+
+void luaL_openlibs(lua_State *L) {
+    L->vm->initStandardLibrary();
 }
 
-int lua_error(lua_State *L) {
-    std::string msg = "error";
-    if (lua_gettop(L) > 0) {
-        msg = lua_tostring(L, -1);
+// Auxiliary Library Implementation
+void luaL_checkversion_(lua_State *L, lua_Number ver, size_t sz) {
+    (void)L; (void)ver; (void)sz;
+}
+
+int luaL_argerror(lua_State *L, int arg, const char *extramsg) {
+    return luaL_error(L, "bad argument #%d (%s)", arg, extramsg);
+}
+
+int luaL_typeerror(lua_State *L, int arg, const char *tname) {
+    const char *msg;
+    const char *typearg;
+    if (luaL_getmetafield(L, arg, "__name") == LUA_TSTRING)
+        typearg = lua_tostring(L, -1);
+    else if (lua_type(L, arg) == LUA_TLIGHTUSERDATA)
+        typearg = "light userdata";
+    else
+        typearg = luaL_typename(L, arg);
+    msg = lua_pushfstring(L, "%s expected, got %s", tname, typearg);
+    return luaL_argerror(L, arg, msg);
+}
+
+void luaL_checktype(lua_State *L, int arg, int t) {
+    if (lua_type(L, arg) != t) {
+        luaL_typeerror(L, arg, lua_typename(L, t));
     }
-    L->vm->runtimeError(msg);
-    return 0;
+}
+
+void luaL_checkany(lua_State *L, int arg) {
+    if (lua_type(L, arg) == LUA_TNONE) {
+        luaL_argerror(L, arg, "value expected");
+    }
 }
 
 const char *luaL_checklstring(lua_State *L, int arg, size_t *l) {
-    const char *s = lua_tostring(L, arg);
+    const char *s = lua_tolstring(L, arg, l);
     if (!s) {
-        L->vm->runtimeError("bad argument to C function (string expected)");
-        if (l) *l = 0;
+        luaL_typeerror(L, arg, lua_typename(L, LUA_TSTRING));
         return "";
     }
-    if (l) *l = std::strlen(s);
     return s;
 }
 
-static int g_ref_counter = 100;
+const char *luaL_optlstring(lua_State *L, int arg, const char *def, size_t *len) {
+    if (lua_isnoneornil(L, arg)) {
+        if (len) *len = (def ? strlen(def) : 0);
+        return def;
+    }
+    return luaL_checklstring(L, arg, len);
+}
+
+lua_Number luaL_checknumber(lua_State *L, int arg) {
+    int isnum = 0;
+    lua_Number d = lua_tonumberx(L, arg, &isnum);
+    if (!isnum) {
+        luaL_typeerror(L, arg, lua_typename(L, LUA_TNUMBER));
+        return 0.0;
+    }
+    return d;
+}
+
+lua_Number luaL_optnumber(lua_State *L, int arg, lua_Number def) {
+    return lua_isnoneornil(L, arg) ? def : luaL_checknumber(L, arg);
+}
+
+lua_Integer luaL_checkinteger(lua_State *L, int arg) {
+    int isnum = 0;
+    lua_Integer d = lua_tointegerx(L, arg, &isnum);
+    if (!isnum) {
+        luaL_typeerror(L, arg, lua_typename(L, LUA_TNUMBER));
+        return 0;
+    }
+    return d;
+}
+
+lua_Integer luaL_optinteger(lua_State *L, int arg, lua_Integer def) {
+    return lua_isnoneornil(L, arg) ? def : luaL_checkinteger(L, arg);
+}
+
+int luaL_checkoption(lua_State *L, int arg, const char *def, const char *const lst[]) {
+    const char *name = (def) ? luaL_optstring(L, arg, def) : luaL_checkstring(L, arg);
+    for (int i = 0; lst[i]; i++) {
+        if (strcmp(lst[i], name) == 0) return i;
+    }
+    return luaL_error(L, "bad argument #%d to option '%s'", arg, name);
+}
+
+int luaL_newmetatable(lua_State *L, const char *tname) {
+    if (lua_getfield(L, LUA_REGISTRYINDEX, tname) != LUA_TNIL) {
+        return 0; // already exists
+    }
+    lua_pop(L, 1); // pop nil
+    lua_newtable(L);
+    lua_pushstring(L, tname);
+    lua_setfield(L, -2, "__name");
+    lua_pushvalue(L, -1);
+    lua_setfield(L, LUA_REGISTRYINDEX, tname);
+    return 1;
+}
+
+void luaL_setmetatable(lua_State *L, const char *tname) {
+    luaL_getmetatable(L, tname);
+    lua_setmetatable(L, -2);
+}
+
+int luaL_getmetafield(lua_State *L, int obj, const char *e) {
+    if (!lua_getmetatable(L, obj)) return LUA_TNIL;
+    lua_pushstring(L, e);
+    lua_rawget(L, -2);
+    if (lua_isnil(L, -1)) {
+        lua_pop(L, 2);
+        return LUA_TNIL;
+    }
+    lua_remove(L, -2);
+    return lua_type(L, -1);
+}
+
+int luaL_callmeta(lua_State *L, int obj, const char *e) {
+    obj = lua_absindex(L, obj);
+    if (!luaL_getmetafield(L, obj, e)) return 0;
+    lua_pushvalue(L, obj);
+    lua_call(L, 1, 1);
+    return 1;
+}
+
+const char *luaL_tolstring(lua_State *L, int idx, size_t *len) {
+    if (luaL_callmeta(L, idx, "__tostring")) {
+        if (!lua_isstring(L, -1))
+            luaL_error(L, "'__tostring' must return a string");
+    } else {
+        Value* v = get_val(L, idx);
+        if (!v) {
+            lua_pushliteral(L, "nil");
+        } else {
+            lua_pushstring(L, v->toString().c_str());
+        }
+    }
+    return lua_tolstring(L, -1, len);
+}
+
+void *luaL_testudata(lua_State *L, int ud, const char *tname) {
+    Value* v = get_val(L, ud);
+    if (!v) return nullptr;
+    
+    // Support FILE* userdata
+    if (v->isFile() && strcmp(tname, "FILE*") == 0) {
+        return v->asFileObj()->stream();
+    }
+    
+    if (v->isUserdata()) {
+        UserdataObject* udo = v->asUserdataObj();
+        Value mt = udo->metatable();
+        if (mt.isTable()) {
+            Value regMt = L->vm->registryTable()->get(tname);
+            if (regMt.isTable() && mt.asTableObj() == regMt.asTableObj()) {
+                return udo->data();
+            }
+        }
+    }
+    return nullptr;
+}
+
+void *luaL_checkudata(lua_State *L, int ud, const char *tname) {
+    void *p = luaL_testudata(L, ud, tname);
+    if (!p) {
+        luaL_typeerror(L, ud, tname);
+        return nullptr;
+    }
+    return p;
+}
+
+void luaL_setfuncs(lua_State *L, const struct luaL_Reg *l, int nup) {
+    for (; l->name != NULL; l++) {
+        for (int i = 0; i < nup; i++) {
+            lua_pushvalue(L, -nup);
+        }
+        lua_pushcclosure(L, l->func, nup);
+        lua_setfield(L, -(nup + 2), l->name);
+    }
+    lua_pop(L, nup);
+}
+
+int luaL_getsubtable(lua_State *L, int idx, const char *fname) {
+    if (lua_getfield(L, idx, fname) == LUA_TTABLE)
+        return 1;
+    lua_pop(L, 1);
+    idx = lua_absindex(L, idx);
+    lua_newtable(L);
+    lua_pushvalue(L, -1);
+    lua_setfield(L, idx, fname);
+    return 0;
+}
+
+void luaL_requiref(lua_State *L, const char *modname, lua_CFunction openf, int glb) {
+    luaL_getsubtable(L, LUA_REGISTRYINDEX, "_LOADED");
+    lua_getfield(L, -1, modname);
+    if (!lua_toboolean(L, -1)) {
+        lua_pop(L, 1);
+        lua_pushcfunction(L, openf);
+        lua_pushstring(L, modname);
+        lua_call(L, 1, 1);
+        lua_pushvalue(L, -1);
+        lua_setfield(L, -3, modname);
+    }
+    lua_remove(L, -2);
+    if (glb) {
+        lua_pushvalue(L, -1);
+        lua_setglobal(L, modname);
+    }
+}
+
+lua_Integer luaL_len(lua_State *L, int idx) {
+    Value* v = get_val(L, idx);
+    if (!v) return 0;
+    if (v->isTable()) {
+        Value mt = v->asTableObj()->getMetatable();
+        if (mt.isTable()) {
+            Value h = mt.asTableObj()->get("__len");
+            if (!h.isNil()) {
+                L->vm->push(h);
+                L->vm->push(*v);
+                L->vm->callValue(1, 2);
+                lua_Integer res = lua_tointeger(L, -1);
+                lua_pop(L, 1);
+                return res;
+            }
+        }
+    }
+    return static_cast<lua_Integer>(lua_rawlen(L, idx));
+}
+
 int luaL_ref(lua_State *L, int t) {
-    (void)t;
     if (lua_isnil(L, -1)) {
         lua_pop(L, 1);
-        return -1; // LUA_REFNIL
+        return LUA_REFNIL;
     }
-    lua_pop(L, 1);
-    return ++g_ref_counter;
+    Value val = L->vm->pop();
+    Value* t_ptr = get_val(L, t);
+    if (!t_ptr || !t_ptr->isTable()) {
+        return LUA_REFNIL;
+    }
+    TableObject* table = t_ptr->asTableObj();
+    Value freelistHead = table->get(Value::integer(0));
+    int ref;
+    if (freelistHead.isInteger() && freelistHead.asInteger() > 0) {
+        ref = static_cast<int>(freelistHead.asInteger());
+        Value nextFree = table->get(Value::integer(ref));
+        table->set(Value::integer(0), nextFree);
+    } else {
+        ref = static_cast<int>(table->length()) + 1;
+        while (!table->get(Value::integer(ref)).isNil()) {
+            ref++;
+        }
+    }
+    table->set(Value::integer(ref), val);
+    return ref;
 }
 
 void luaL_unref(lua_State *L, int t, int ref) {
-    (void)L; (void)t; (void)ref;
+    if (ref < 0) return;
+    Value* t_ptr = get_val(L, t);
+    if (!t_ptr || !t_ptr->isTable()) return;
+    TableObject* table = t_ptr->asTableObj();
+    Value freelistHead = table->get(Value::integer(0));
+    table->set(Value::integer(ref), freelistHead);
+    table->set(Value::integer(0), Value::integer(ref));
+}
+
+int luaL_error(lua_State *L, const char *fmt, ...) {
+    char buf[2048];
+    va_list argp;
+    va_start(argp, fmt);
+    vsnprintf(buf, sizeof(buf), fmt, argp);
+    va_end(argp);
+    lua_pushstring(L, buf);
+    return lua_error(L);
+}
+
+// Buffer API
+void luaL_buffinit(lua_State *L, luaL_Buffer *B) {
+    B->L = L;
+    B->b = B->init;
+    B->size = LUAL_BUFFERSIZE;
+    B->n = 0;
+}
+
+char *luaL_prepbuffsize(luaL_Buffer *B, size_t sz) {
+    if (B->n + sz > B->size) {
+        size_t newsize = B->size * 2;
+        if (newsize < B->n + sz) newsize = B->n + sz + LUAL_BUFFERSIZE;
+        char *newb = (char*)malloc(newsize);
+        if (!newb) {
+            luaL_error(B->L, "not enough memory for buffer allocation");
+            return B->b + B->n;
+        }
+        memcpy(newb, B->b, B->n);
+        if (B->b != B->init) free(B->b);
+        B->b = newb;
+        B->size = newsize;
+    }
+    return B->b + B->n;
+}
+
+void luaL_addlstring(luaL_Buffer *B, const char *s, size_t l) {
+    if (l > 0) {
+        char *p = luaL_prepbuffsize(B, l);
+        memcpy(p, s, l);
+        B->n += l;
+    }
+}
+
+void luaL_addstring(luaL_Buffer *B, const char *s) {
+    if (s) {
+        luaL_addlstring(B, s, strlen(s));
+    }
+}
+
+void luaL_addvalue(luaL_Buffer *B) {
+    size_t l = 0;
+    const char *s = luaL_tolstring(B->L, -1, &l);
+    luaL_addlstring(B, s, l);
+    lua_pop(B->L, 2); // pop tolstring result and original value
+}
+
+void luaL_pushresult(luaL_Buffer *B) {
+    lua_pushlstring(B->L, B->b, B->n);
+    if (B->b != B->init) {
+        free(B->b);
+    }
+    B->b = B->init;
+    B->size = LUAL_BUFFERSIZE;
+    B->n = 0;
+}
+
+void luaL_pushresultsize(luaL_Buffer *B, size_t sz) {
+    B->n += sz;
+    luaL_pushresult(B);
+}
+
+char *luaL_buffinitsize(lua_State *L, luaL_Buffer *B, size_t sz) {
+    luaL_buffinit(L, B);
+    return luaL_prepbuffsize(B, sz);
+}
+
+void luaL_openlib(lua_State *L, const char *libname, const luaL_Reg *l, int nup) {
+    if (libname) {
+        luaL_getsubtable(L, LUA_REGISTRYINDEX, "_LOADED");
+        lua_getfield(L, -1, libname);
+        if (!lua_istable(L, -1)) {
+            lua_pop(L, 1);
+            lua_newtable(L);
+            lua_pushvalue(L, -1);
+            lua_setfield(L, -3, libname);
+            lua_pushvalue(L, -1);
+            lua_setglobal(L, libname);
+        }
+        lua_remove(L, -2);
+        lua_insert(L, -(nup + 1));
+    }
+    if (l) {
+        luaL_setfuncs(L, l, nup);
+    } else {
+        lua_pop(L, nup);
+    }
+}
+
+// Exported functions for macros
+#undef lua_call
+void lua_call(lua_State *L, int nargs, int nresults) {
+    lua_callk(L, nargs, nresults, 0, nullptr);
+}
+
+#undef lua_pcall
+int lua_pcall(lua_State *L, int nargs, int nresults, int errfunc) {
+    return lua_pcallk(L, nargs, nresults, errfunc, 0, nullptr);
+}
+
+#undef lua_yield
+int lua_yield(lua_State *L, int nresults) {
+    return lua_yieldk(L, nresults, 0, nullptr);
+}
+
+#undef lua_pop
+void lua_pop(lua_State *L, int n) {
+    lua_settop(L, -(n) - 1);
+}
+
+#undef lua_newtable
+void lua_newtable(lua_State *L) {
+    lua_createtable(L, 0, 0);
+}
+
+#undef lua_pushcfunction
+void lua_pushcfunction(lua_State *L, lua_CFunction f) {
+    lua_pushcclosure(L, f, 0);
+}
+
+#undef lua_isfunction
+int lua_isfunction(lua_State *L, int n) {
+    return lua_type(L, n) == LUA_TFUNCTION;
+}
+
+#undef lua_istable
+int lua_istable(lua_State *L, int n) {
+    return lua_type(L, n) == LUA_TTABLE;
+}
+
+#undef lua_islightuserdata
+int lua_islightuserdata(lua_State *L, int n) {
+    return lua_type(L, n) == LUA_TLIGHTUSERDATA;
+}
+
+#undef lua_isnil
+int lua_isnil(lua_State *L, int n) {
+    return lua_type(L, n) == LUA_TNIL;
+}
+
+#undef lua_isboolean
+int lua_isboolean(lua_State *L, int n) {
+    return lua_type(L, n) == LUA_TBOOLEAN;
+}
+
+#undef lua_isthread
+int lua_isthread(lua_State *L, int n) {
+    return lua_type(L, n) == LUA_TTHREAD;
+}
+
+#undef lua_isnone
+int lua_isnone(lua_State *L, int n) {
+    return lua_type(L, n) == LUA_TNONE;
+}
+
+#undef lua_isnoneornil
+int lua_isnoneornil(lua_State *L, int n) {
+    return lua_type(L, n) <= 0;
+}
+
+#undef lua_tostring
+const char *lua_tostring(lua_State *L, int i) {
+    return lua_tolstring(L, i, nullptr);
+}
+
+#undef lua_tointeger
+lua_Integer lua_tointeger(lua_State *L, int i) {
+    return lua_tointegerx(L, i, nullptr);
+}
+
+#undef lua_tonumber
+lua_Number lua_tonumber(lua_State *L, int i) {
+    return lua_tonumberx(L, i, nullptr);
+}
+
+#undef lua_insert
+void lua_insert(lua_State *L, int idx) {
+    lua_rotate(L, idx, 1);
+}
+
+#undef lua_remove
+void lua_remove(lua_State *L, int idx) {
+    lua_rotate(L, idx, -1);
+    lua_pop(L, 1);
+}
+
+#undef lua_replace
+void lua_replace(lua_State *L, int idx) {
+    lua_copy(L, -1, idx);
+    lua_pop(L, 1);
 }
 

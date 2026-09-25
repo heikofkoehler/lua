@@ -111,10 +111,23 @@ target_link_libraries(lua PRIVATE linenoise)
 # Include directories
 target_include_directories(lua PRIVATE ${CMAKE_SOURCE_DIR}/src)
 
-# Set output directory
+# Set output directory and enable symbol exports for dynamic modules
 set_target_properties(lua PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}
+    ENABLE_EXPORTS ON
 )
+
+# Build liblua shared library for external C modules and Luarocks
+add_library(liblua SHARED ${CORE_SOURCES})
+set_target_properties(liblua PROPERTIES
+    OUTPUT_NAME lua
+    LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}
+    RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}
+)
+target_include_directories(liblua PUBLIC ${CMAKE_SOURCE_DIR}/src)
+if(USE_JIT)
+    target_link_libraries(liblua PRIVATE asmjit::asmjit)
+endif()
 
 # Dummy shared library for loadlib testing
 add_library(dummy_module SHARED tests/dummy_module.cpp)
@@ -127,7 +140,10 @@ target_include_directories(test_c_api PRIVATE ${CMAKE_SOURCE_DIR}/src)
 if(USE_JIT)
     target_link_libraries(test_c_api PRIVATE asmjit::asmjit)
 endif()
-set_target_properties(test_c_api PROPERTIES RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR})
+set_target_properties(test_c_api PROPERTIES 
+    RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}
+    ENABLE_EXPORTS ON
+)
 
 if(MSVC)
     target_compile_options(dummy_module PRIVATE /W4 /WX)
@@ -146,10 +162,37 @@ set_target_properties(dummy_module PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}
 )
 
+# Fixture modules for ecosystem compatibility tests
+add_library(lfs MODULE tests/fixtures/lfs/lfs.c)
+target_include_directories(lfs PRIVATE ${CMAKE_SOURCE_DIR}/src/api)
+set_target_properties(lfs PROPERTIES
+    PREFIX ""
+    OUTPUT_NAME lfs
+    LIBRARY_OUTPUT_DIRECTORY ${CMAKE_SOURCE_DIR}/tests/fixtures/lfs
+)
+if(APPLE)
+    set_target_properties(lfs PROPERTIES LINK_FLAGS "-undefined dynamic_lookup")
+endif()
+
+add_library(cjson MODULE 
+    tests/fixtures/cjson/lua_cjson.c 
+    tests/fixtures/cjson/strbuf.c 
+    tests/fixtures/cjson/fpconv.c
+)
+target_include_directories(cjson PRIVATE ${CMAKE_SOURCE_DIR}/src/api)
+set_target_properties(cjson PROPERTIES
+    PREFIX ""
+    OUTPUT_NAME cjson
+    LIBRARY_OUTPUT_DIRECTORY ${CMAKE_SOURCE_DIR}/tests/fixtures/cjson
+)
+if(APPLE)
+    set_target_properties(cjson PROPERTIES LINK_FLAGS "-undefined dynamic_lookup")
+endif()
+
 # Custom test target
 add_custom_target(test
     COMMAND ./run_all_tests.sh ../build/lua
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}/tests
-    DEPENDS lua
+    DEPENDS lua test_c_api dummy_module lfs cjson
     COMMENT "Running all Lua VM tests"
 )

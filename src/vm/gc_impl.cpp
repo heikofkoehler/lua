@@ -40,7 +40,7 @@ void VM::grayObject(GCObject* object) {
 
 void VM::markRoots() {
     for (const auto& pair : globals_) markValue(pair.second);
-    for (const auto& pair : registry_) markValue(pair.second);
+    if (registryTable_) markObject(registryTable_);
     for (int i = 0; i < Value::NUM_TYPES; i++) markValue(typeMetatables_[i]);
     markValue(lastErrorObject_);
     for (const auto& h : errorHandlers_) markValue(h);
