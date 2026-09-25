@@ -107,8 +107,14 @@ void VM::processWeakTables() {
             }
 
             if (weakKeys && !weakValues) {
-                // Ephemeron logic: if key is marked (or not collectable) but value is not, mark value
-                for (const auto& pair : table->data()) {
+                // Array keys are primitive numbers (never collectable), so mark non-nil values
+                for (const Value& val : table->array()) {
+                    if (!val.isNil() && val.isObj() && val.asObj()->color() == GCObject::Color::WHITE) {
+                        markValue(val);
+                        changed = true;
+                    }
+                }
+                for (const auto& pair : table->map()) {
                     if (pair.second.isNil()) continue;
                     bool keyMarked = true;
                     if (isCollectableWeak(pair.first) && pair.first.asObj()->color() == GCObject::Color::WHITE) {
@@ -141,8 +147,14 @@ void VM::clearWeakValues() {
         std::string mode = getStringValue(modeVal);
         if (mode.find('v') == std::string::npos) continue;
 
+        for (size_t i = 0; i < table->array().size(); ++i) {
+            Value v = table->array()[i];
+            if (isCollectableWeak(v) && v.asObj()->color() == GCObject::Color::WHITE) {
+                table->setArrayElement(i, Value::nil());
+            }
+        }
         std::vector<Value> toRemove;
-        for (const auto& pair : table->data()) {
+        for (const auto& pair : table->map()) {
             if (pair.second.isNil() || (isCollectableWeak(pair.second) && pair.second.asObj()->color() == GCObject::Color::WHITE)) {
                 toRemove.push_back(pair.first);
             }
@@ -163,7 +175,7 @@ void VM::clearWeakKeys() {
         if (mode.find('k') == std::string::npos) continue;
 
         std::vector<Value> toRemove;
-        for (const auto& pair : table->data()) {
+        for (const auto& pair : table->map()) {
             if (pair.second.isNil() || (isCollectableWeak(pair.first) && pair.first.asObj()->color() == GCObject::Color::WHITE)) {
                 toRemove.push_back(pair.first);
             }
@@ -295,7 +307,17 @@ static void blackenObject(VM* vm, GCObject* object) {
                 if (mode.find('v') != std::string::npos) weakValues = true;
             }
 
-            for (const auto& pair : table->data()) {
+            if (!weakValues || !weakKeys) {
+                for (const Value& v : table->array()) {
+                    if (!v.isNil()) {
+                        if (!weakValues || !isCollectableWeak(v)) {
+                            vm->markValue(v);
+                        }
+                    }
+                }
+            }
+
+            for (const auto& pair : table->map()) {
                 if (pair.second.isNil()) {
                     if (!weakKeys && !weakValues) {
                         vm->markValue(pair.first);
