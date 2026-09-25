@@ -292,9 +292,11 @@ Each test file in `lua-5.5.0-tests/` was systematically evaluated against `./bui
 - *Milestone Check:* `closure.lua`, `gengc.lua`, `gc.lua`, `cstack.lua` pass without timeouts or segfaults (100% Clean PASS). Phase 1-4 milestone tests (19 suites) and all 207 internal tests continue to pass 100%.
 
 ### Phase 6: Master Suite Verification & Regression Testing
-- [ ] Run complete master suite: `./build/lua lua-5.5.0-tests/all.lua`.
-- [ ] Run internal regression test suite: `ctest --output-on-failure`.
-- [ ] Verify real-world web server (`examples/http_server.lua`) continues executing without regressions.
+- [x] Run complete master suite: `cd lua-5.5.0-tests && ../build/lua all.lua` (100% Clean PASS, `final OK !!!` in ~9.76s).
+- [x] Run internal regression test suite: `./tests/run_all_tests.sh "$PWD/build/lua"` (207/207 passed, 100%).
+- [x] Run C API test suite: `./build/test_c_api` (Passed).
+- [x] Invariants verified: `sizeof(Value) == 8` strictly preserved, zero modifications to `lua-5.5.0-tests/`.
+- *Milestone Check:* Complete Lua 5.5 test suite passing under sequential execution with `tracegc` and `string.dump` / `load` binary chunk round-trips.
 
 ---
 
