@@ -45,10 +45,10 @@ for test_file in $(ls *.lua | sort); do
     # Run test and capture exit code
     if "$LUA_BIN" "$test_file" >/dev/null 2>&1; then
         echo -e "${GREEN}✓${NC} $test_file"
-        ((PASS++))
+        PASS=$((PASS+1))
     else
         echo -e "${RED}✗${NC} $test_file"
-        ((FAIL++))
+        FAIL=$((FAIL+1))
         TESTS+=("$test_file")
     fi
 done

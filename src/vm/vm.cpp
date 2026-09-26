@@ -388,6 +388,12 @@ UpvalueObject* VM::captureUpvalue(size_t stackIndex) {
     }
     currentCoroutine_->openUpvalues.insert(it, upvalue);
 
+    // Generational barrier: the openUpvalues list is a plain std::vector,
+    // not a GC-tracked field. If a young upvalue is added to an old
+    // coroutine, the coroutine must go in the remembered set, otherwise a
+    // minor collection will free the upvalue while the list still holds it.
+    writeBarrierBackward(currentCoroutine_, upvalue);
+
     return upvalue;
 }
 
@@ -1074,6 +1080,17 @@ void VM::push(const Value& value) {
         return;
     }
     currentCoroutine_->stack.push_back(value);
+    // GC barrier: the stack is a plain std::vector, not a GC-tracked field.
+    // If the GC is currently marking, a newly pushed object must be marked
+    // immediately (it won't be seen by an already-completed stack scan).
+    // Otherwise, use the backward barrier for the old-to-young case.
+    if (value.isObj()) {
+        if (gcState_ == GCState::MARK) {
+            markValue(value);
+        } else {
+            writeBarrierBackward(currentCoroutine_, value.asObj());
+        }
+    }
 }
 
 Value VM::pop() {

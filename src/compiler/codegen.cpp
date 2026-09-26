@@ -1,6 +1,7 @@
 #include "compiler/codegen.hpp"
 #include "value/function.hpp"
 #include "value/string.hpp"
+#include <algorithm>
 
 namespace {
 class InnerRefChecker : public ASTVisitor {

@@ -3,6 +3,7 @@
 
 #include "vm/gc.hpp"
 #include "value/value.hpp"
+#include <vector>
 
 // Userdata object: wrapper for C++ pointers with optional metatable
 class UserdataObject : public GCObject {

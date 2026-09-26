@@ -238,6 +238,14 @@ void VM::freeObject(GCObject* object) {
         case GCObject::Type::INT64: delete static_cast<Int64Object*>(object); break;
         case GCObject::Type::COROUTINE: {
             CoroutineObject* co = static_cast<CoroutineObject*>(object);
+            // Close all open upvalues before freeing the coroutine.
+            // Otherwise closures that capture the coroutine's locals would be
+            // left with dangling owner pointers (use-after-free).
+            for (UpvalueObject* uv : co->openUpvalues) {
+                if (uv && !uv->isClosed()) {
+                    uv->close(co->stack);
+                }
+            }
             co->openUpvalues.clear();
             for (auto it = coroutines_.begin(); it != coroutines_.end(); ++it) {
                 if (*it == co) {
@@ -277,11 +285,23 @@ void VM::writeBarrier(GCObject* object, GCObject* value) {
     }
 }
 
-void VM::writeBarrierBackward(GCObject* object, GCObject* /* value */) {
+void VM::writeBarrierBackward(GCObject* object, GCObject* value) {
     // Backward barrier: if black object is modified, move it back to gray
     if (gcState_ == GCState::MARK && object->color() == GCObject::Color::BLACK) {
         object->setColor(GCObject::Color::GRAY);
         grayStack_.push_back(object);
+    }
+
+    // Generational barrier: if an old object is modified to refer to a young
+    // object, the old object must go in the remembered set. Otherwise a minor
+    // collection will not scan the old object and may free the young object
+    // while it is still reachable (e.g. a young value stored in an old
+    // coroutine's stack slot via an open upvalue).
+    if (gcMode_ == GCMode::GENERATIONAL && object->isOld() && value && !value->isOld()) {
+        if (!object->isRemembered()) {
+            object->setRemembered(true);
+            rememberedSet_.push_back(object);
+        }
     }
 }
 

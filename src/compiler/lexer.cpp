@@ -183,8 +183,13 @@ Token Lexer::makeToken(TokenType type) const {
     return Token(type, lexeme, line_);
 }
 
-Token Lexer::errorToken(const std::string& message, const std::string& near) const {
-    std::string nearEscaped = near;
+std::string Lexer::stringErrorContext() const {
+    std::string ctx = source_.substr(start_, current_ - start_);
+    if (!isAtEnd()) ctx += peek();
+    return ctx;
+}
+
+Token Lexer::errorToken(const std::string& message, const std::string& near) const {    std::string nearEscaped = near;
     if (nearEscaped.empty()) {
         nearEscaped = source_.substr(start_, current_ - start_);
     }
@@ -344,17 +349,21 @@ Token Lexer::string() {
                 }
                 case 'u': {
                     // Unicode escape \u{XXX}
-                    if (advance() != '{') return errorToken("invalid escape sequence");
+                    if (peek() != '{') return errorToken("missing '{'", stringErrorContext());
+                    advance();  // consume '{'
                     unsigned long code = 0;
                     int digits = 0;
                     while (isxdigit(peek())) {
+                        if (code > (0x7FFFFFFFu >> 4))
+                            return errorToken("UTF-8 value too large", stringErrorContext());
                         char h = advance();
                         code = code * 16 + (isdigit(h) ? h - '0' :
                                             tolower(h) - 'a' + 10);
                         digits++;
                     }
-                    if (digits == 0) return errorToken("invalid escape sequence");
-                    if (advance() != '}') return errorToken("invalid escape sequence");
+                    if (digits == 0) return errorToken("hexadecimal digit expected", stringErrorContext());
+                    if (peek() != '}') return errorToken("missing '}'", stringErrorContext());
+                    advance();  // consume '}'
                     
                     // Convert code point to UTF-8
                     if (code <= 0x7F) {
@@ -391,11 +400,9 @@ Token Lexer::string() {
                 }
                 case 'x': {
                     // Hex escape \xXX (exactly 2 digits)
-                    if (isAtEnd()) return errorToken("hexadecimal escape requires 2 digits");
-                    if (!isxdigit(peek())) return errorToken("invalid escape sequence");
+                    if (!isxdigit(peek())) return errorToken("hexadecimal digit expected", stringErrorContext());
                     char h1 = advance();
-                    if (isAtEnd()) return errorToken("hexadecimal escape requires 2 digits");
-                    if (!isxdigit(peek())) return errorToken("invalid escape sequence");
+                    if (!isxdigit(peek())) return errorToken("hexadecimal digit expected", stringErrorContext());
                     char h2 = advance();
                     
                     int hex = (isdigit(h1) ? h1 - '0' : tolower(h1) - 'a' + 10) * 16 +
@@ -409,10 +416,13 @@ Token Lexer::string() {
                         int dec = esc - '0';
                         if (isDigit(peek())) dec = dec * 10 + (advance() - '0');
                         if (isDigit(peek())) dec = dec * 10 + (advance() - '0');
-                        if (dec > 255) return errorToken("decimal escape too large");
+                        if (dec > 255) return errorToken("decimal escape too large", stringErrorContext());
                         value += static_cast<char>(dec);
                     } else {
-                        return errorToken("invalid escape sequence");
+                        // The offending character was already consumed into
+                        // the scanned text, so report it as-is (no peek).
+                        return errorToken("invalid escape sequence",
+                                          source_.substr(start_, current_ - start_));
                     }
                     break;
             }
@@ -425,7 +435,7 @@ Token Lexer::string() {
     }
 
     if (isAtEnd()) {
-        return errorToken("unfinished string");
+        return errorToken("unfinished string", "<eof>");
     }
 
     // Closing quote
@@ -493,7 +503,7 @@ Token Lexer::longString() {
     }
 
     if (isAtEnd()) {
-        return errorToken("unfinished long string near <eof>");
+        return errorToken("unfinished long string", "<eof>");
     }
 
     return errorToken("unfinished long string");

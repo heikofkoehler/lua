@@ -2318,7 +2318,7 @@ bool VM::run(size_t targetFrameCount) {
                             if (frameIsPcall) {
                                 push(Value::boolean(true));
                                 if (expectedRetCount > 1) {
-                                    for (size_t i = 0; i < expectedRetCount - 2; i++) push(Value::nil());
+                                    for (size_t i = 0; i < static_cast<size_t>(expectedRetCount) - 2; i++) push(Value::nil());
                                     currentCoroutine_->lastResultCount = expectedRetCount - 1;
                                 } else {
                                     currentCoroutine_->lastResultCount = 1;

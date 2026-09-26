@@ -13,6 +13,7 @@
 #include "value/socket.hpp"
 #include "value/coroutine.hpp"
 #include "compiler/chunk.hpp"
+#include <csignal>
 #include <vector>
 #include <unordered_map>
 #include <string>

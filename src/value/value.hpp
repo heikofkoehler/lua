@@ -94,6 +94,16 @@ public:
     }
 
     static Value number(double value) {
+        // Canonicalize NaN: raw NaN payloads produced by FP arithmetic (e.g.
+        // 0/0 yields 0xFFF8... on x86-64) can collide with the NaN-boxed tag
+        // space (0xFFF8 is the NATIVE_FUNCTION tag), which would decode the
+        // NaN as a function value. Funneling every NaN through one canonical
+        // positive quiet NaN keeps all NaNs decodable as numbers on every
+        // platform. This is the single choke point: VM arithmetic, the C API,
+        // the parser, and chunk deserialization all construct doubles here.
+        if (value != value) {
+            return Value(0x7FF8000000000000ULL);
+        }
         uint64_t bits;
         std::memcpy(&bits, &value, sizeof(double));
         return Value(bits);

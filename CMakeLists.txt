@@ -30,6 +30,8 @@ if(USE_JIT)
     FetchContent_Declare(
         asmjit
         GIT_REPOSITORY https://github.com/asmjit/asmjit.git
+        # NOTE: asmjit publishes no release tags; this tracks master.
+        # Pin to a tested commit SHA before the x86_64 JIT backend lands.
         GIT_TAG master
     )
     FetchContent_MakeAvailable(asmjit)
@@ -40,7 +42,8 @@ include(FetchContent)
 FetchContent_Declare(
     linenoise
     GIT_REPOSITORY https://github.com/antirez/linenoise.git
-    GIT_TAG master
+    # Pinned to a verified commit; linenoise upstream is dormant so this is stable.
+    GIT_TAG a473823d74b93eab2ba83480df16ed37617493f2
 )
 FetchContent_MakeAvailable(linenoise)
 

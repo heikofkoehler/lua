@@ -3,6 +3,7 @@
 
 #include "vm/gc.hpp"
 #include "value/value.hpp"
+#include <vector>
 
 // UpvalueObject: Captures a variable from an enclosing scope
 //

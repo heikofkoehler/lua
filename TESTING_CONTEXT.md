@@ -44,7 +44,9 @@ When the agent executes `make test`, it must follow these steps if a failure occ
 1. **Identify the File:** Locate the specific `.lua` test file that failed from the output (e.g., `gc.lua`, `strings.lua`).
 1. **Trace the Bug:** Determine if the root cause is in the interpreter's C++ source or a mismatch in the test environment.
 1. **Apply Fix:** Modify the relevant interpreter code or the test script to resolve the assertion.
-1. **Skip:** `constructs.lua`
+1. **Skip nothing by default:** every suite file must pass, including `constructs.lua`
+   (verified passing 2026-09-25 on Linux x86_64 and macOS ARM64; the old
+   "skip constructs.lua" carve-out was stale and has been removed).
 
 #### **B. Commitment Standards**
 

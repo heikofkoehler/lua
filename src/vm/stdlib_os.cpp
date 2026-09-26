@@ -7,6 +7,7 @@
 #include <clocale>
 #include <cmath>
 #include <limits>
+#include <climits>
 #if !defined(_WIN32)
 #include <sys/wait.h>
 #endif

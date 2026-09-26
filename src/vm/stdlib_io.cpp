@@ -33,6 +33,9 @@ static bool checkmodep(const char* mode) {
 }
 
 static FILE* open_cfile(const std::string& filename, const std::string& mode, DevFullCookie** outCookie = nullptr) {
+    // outCookie is only populated on platforms with funopen(3); silence
+    // -Wunused-parameter on the rest.
+    (void)outCookie;
     if (filename == "/dev/full") {
 #if defined(__APPLE__) || defined(__FreeBSD__) || defined(__OpenBSD__) || defined(__NetBSD__)
         auto cookie = new DevFullCookie();

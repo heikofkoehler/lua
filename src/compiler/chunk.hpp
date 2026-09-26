@@ -4,6 +4,7 @@
 #include "common/common.hpp"
 #include "value/value.hpp"
 #include "vm/opcode.hpp"
+#include <memory>
 #include <vector>
 #include <unordered_map>
 

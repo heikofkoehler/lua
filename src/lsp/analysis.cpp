@@ -4,6 +4,7 @@
 #include "compiler/ast.hpp"
 #include "common/common.hpp"
 #include <algorithm>
+#include <functional>
 #include <sstream>
 #include <cctype>
 

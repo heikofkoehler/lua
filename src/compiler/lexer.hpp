@@ -48,6 +48,10 @@ private:
     // Token creation
     Token makeToken(TokenType type) const;
     Token errorToken(const std::string& message, const std::string& near = "") const;
+    // "Near" context for string escape errors: raw source text scanned so far
+    // (from the opening quote) plus the offending character when not at
+    // end-of-input. Mirrors PUC Lua's lexer buffer used for these diagnostics.
+    std::string stringErrorContext() const;
 
     // Skip whitespace and comments
     void skipWhitespace();
