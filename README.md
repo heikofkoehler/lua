@@ -126,6 +126,21 @@ cmake ..
 cmake --build . -j
 ```
 
+### Installation & Packaging
+
+Install `lua`, `luac`, `liblua`, headers (`include/`), and `lua.pc` pkg-config configuration:
+
+```bash
+# Install to system prefix (/usr/local)
+sudo cmake --install build
+
+# Or install to custom prefix
+cmake --install build --prefix /opt/lua
+
+# Verify pkg-config integration
+pkg-config --cflags --libs lua
+```
+
 ---
 
 ## Running Tests

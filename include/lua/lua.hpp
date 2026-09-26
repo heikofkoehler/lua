@@ -915,6 +915,18 @@ public:
     lua_State* native_handle() const noexcept { return L_; }
     bool isValid() const noexcept { return L_ != nullptr; }
 
+    void openLibs() {
+        if (L_) luaL_openlibs(L_);
+    }
+
+    void execute(const std::string& code, const std::string& name = "chunk") {
+        run(code, name);
+    }
+
+    void loadFile(const std::string& filename) {
+        run_file(filename);
+    }
+
     void run(const std::string& code, const std::string& name = "chunk") {
         int status = luaL_loadbuffer(L_, code.data(), code.size(), name.c_str());
         if (status != LUA_OK) {

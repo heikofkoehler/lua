@@ -1,5 +1,16 @@
 cmake_minimum_required(VERSION 3.10)
-project(LuaVM VERSION 1.0 LANGUAGES C CXX)
+project(LuaVM VERSION 5.5.0 LANGUAGES C CXX)
+
+include(GNUInstallDirs)
+include(CMakePackageConfigHelpers)
+
+# RPATH configuration for relocatable installed targets
+if(APPLE)
+    set(CMAKE_INSTALL_RPATH "@loader_path/../${CMAKE_INSTALL_LIBDIR}")
+else()
+    set(CMAKE_INSTALL_RPATH "$ORIGIN/../${CMAKE_INSTALL_LIBDIR}")
+endif()
+set(CMAKE_INSTALL_RPATH_USE_LINK_PATH TRUE)
 
 # Set C++17 standard
 set(CMAKE_CXX_STANDARD 17)
@@ -143,7 +154,11 @@ set_target_properties(liblua PROPERTIES
     LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}
     RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}
 )
-target_include_directories(liblua PUBLIC ${CMAKE_SOURCE_DIR}/src ${CMAKE_SOURCE_DIR}/include)
+target_include_directories(liblua PUBLIC
+    $<BUILD_INTERFACE:${CMAKE_SOURCE_DIR}/src>
+    $<BUILD_INTERFACE:${CMAKE_SOURCE_DIR}/include>
+    $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
+)
 if(USE_JIT)
     target_link_libraries(liblua PRIVATE asmjit::asmjit)
 endif()
@@ -250,4 +265,69 @@ add_custom_target(benchmark
     DEPENDS lua
     COMMENT "Running Lua VM performance benchmark suite"
 )
+
+# ==============================================================================
+# Installation and Packaging Rules
+# ==============================================================================
+
+# Install binaries and shared library
+install(TARGETS lua luac liblua
+    EXPORT LuaTargets
+    RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+    LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+    ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+    INCLUDES DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
+)
+
+# Install C API and standard headers
+install(FILES
+    src/api/lua.h
+    src/api/lauxlib.h
+    src/api/lualib.h
+    src/api/luaconf.h
+    include/lua.hpp
+    DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
+)
+
+# Install Modern C++ Embedding API header
+install(FILES
+    include/lua/lua.hpp
+    DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/lua
+)
+
+# Configure and install pkg-config file
+configure_file(
+    ${CMAKE_SOURCE_DIR}/lua.pc.in
+    ${CMAKE_BINARY_DIR}/lua.pc
+    @ONLY
+)
+install(FILES
+    ${CMAKE_BINARY_DIR}/lua.pc
+    DESTINATION ${CMAKE_INSTALL_LIBDIR}/pkgconfig
+)
+
+# CMake Package Configuration (find_package support)
+configure_package_config_file(
+    ${CMAKE_SOURCE_DIR}/cmake/LuaConfig.cmake.in
+    ${CMAKE_BINARY_DIR}/cmake/LuaConfig.cmake
+    INSTALL_DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/Lua
+)
+write_basic_package_version_file(
+    ${CMAKE_BINARY_DIR}/cmake/LuaConfigVersion.cmake
+    VERSION ${PROJECT_VERSION}
+    COMPATIBILITY SameMajorVersion
+)
+
+install(FILES
+    ${CMAKE_BINARY_DIR}/cmake/LuaConfig.cmake
+    ${CMAKE_BINARY_DIR}/cmake/LuaConfigVersion.cmake
+    DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/Lua
+)
+
+install(EXPORT LuaTargets
+    FILE LuaTargets.cmake
+    NAMESPACE Lua::
+    DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/Lua
+)
+
 
