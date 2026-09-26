@@ -409,14 +409,75 @@ void VM::gcStep() {
     if (gcMode_ == GCMode::GENERATIONAL) {
         switch (gcState_) {
             case GCState::PAUSE: {
-                // Minor collection: mark roots and remembered set
+                // Minor collection: mark roots and remembered set.
+                // NOTE: The entire minor collection (mark + sweep) is performed
+                // atomically within this single gcStep. It must NOT be split
+                // across multiple steps because direct stack slot writes in the
+                // VM (e.g. run_impl.cpp SET_LOCAL) have no write barrier. If the
+                // mark phase were incremental, an object stored to the stack
+                // after its coroutine was blackened (or between mark and sweep)
+                // would never be marked and could be freed while still
+                // reachable (use-after-free). See issue: locals.lua segfault.
                 markRoots();
                 for (GCObject* obj : rememberedSet_) {
                     obj->setRemembered(false);
                     blackenObject(this, obj);
                 }
                 rememberedSet_.clear();
-                gcState_ = GCState::MARK;
+                // Drain the gray stack (mark phase, atomic)
+                while (!grayStack_.empty()) {
+                    GCObject* object = grayStack_.back();
+                    grayStack_.pop_back();
+                    blackenObject(this, object);
+                }
+                // Process weak tables before sweeping
+                clearWeakValues();
+                processWeakTables();
+                clearWeakKeys();
+                clearWeakValues();
+                // Sweep (atomic, same step): collect unreachable young objects,
+                // promote survivors. Inlined here instead of going through the
+                // SWEEP state so no mutator code can run between mark and sweep.
+                {
+                    auto sit = runtimeStrings_.begin();
+                    while (sit != runtimeStrings_.end()) {
+                        if (sit->second->color() == GCObject::Color::WHITE && !sit->second->isOld()) {
+                            sit = runtimeStrings_.erase(sit);
+                        } else {
+                            ++sit;
+                        }
+                    }
+
+                    GCObject** current = &gcObjects_;
+                    size_t newBytes = 0;
+                    while (*current != nullptr) {
+                        GCObject* obj = *current;
+                        if (obj->color() == GCObject::Color::WHITE && !obj->isOld()) {
+                            *current = obj->next();
+                            freeObject(obj);
+                        } else {
+                            if (!obj->isOld()) obj->setAge(obj->age() + 1);
+                            if (obj->type() == GCObject::Type::TABLE) {
+                                TableObject* tbl = static_cast<TableObject*>(obj);
+                                Value mt = tbl->getMetatable();
+                                if (!mt.isNil() && mt.isTable() && !mt.asTableObj()->get("__mode").isNil()) {
+                                    tbl->cleanNilEntries();
+                                }
+                            }
+                            obj->setColor(GCObject::Color::WHITE);
+                            newBytes += obj->size();
+                            current = &(obj->nextRef());
+                        }
+                    }
+
+                    bytesAllocated_ = newBytes;
+                    nextGC_ = bytesAllocated_ * 2;
+                    if (nextGC_ < 1024 * 1024) nextGC_ = 1024 * 1024;
+
+                    runFinalizers();
+                }
+                // Stay in PAUSE; the next minor collection starts fresh.
+                // (MARK/SWEEP states are unused in generational mode.)
                 break;
             }
             case GCState::MARK: {
