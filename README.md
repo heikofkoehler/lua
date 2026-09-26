@@ -151,6 +151,10 @@ bash tests/run_all_tests.sh "$PWD/build/lua"
 # Run official Lua 5.5.0 test suite (100% PASS - final OK !!!)
 (cd lua-5.5.0-tests && ../build/lua --nojit all.lua)
 
+# Run performance benchmark suite
+cmake --build build --target benchmark
+# (or directly: bash benchmarks/run.sh)
+
 # Run CLI and disassembler tests
 bash tests/test_cli_flags.sh
 bash tests/test_disasm_metadata.sh

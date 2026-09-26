@@ -222,3 +222,12 @@ add_custom_target(test
     DEPENDS lua test_c_api test_cpp_api embedding_demo dummy_module lfs cjson
     COMMENT "Running all Lua VM unit tests and API tests"
 )
+
+# Custom benchmark target
+add_custom_target(benchmark
+    COMMAND bash "${CMAKE_SOURCE_DIR}/benchmarks/run.sh" "$<TARGET_FILE:lua>"
+    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}/benchmarks
+    DEPENDS lua
+    COMMENT "Running Lua VM performance benchmark suite"
+)
+

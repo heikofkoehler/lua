@@ -2,7 +2,13 @@
 set -e
 
 DIR="$(cd "$(dirname "$0")/.." && pwd)"
-LUA_BIN="${DIR}/build/lua"
+LUA_BIN="${1:-${DIR}/build/lua}"
+
+if [ ! -x "${LUA_BIN}" ]; then
+    echo "Error: Lua binary '${LUA_BIN}' not found or not executable." >&2
+    echo "Please build the project first (e.g. cmake --build build)." >&2
+    exit 1
+fi
 
 echo "=========================================================="
 echo " Lua Implementation Performance Benchmark Suite"
