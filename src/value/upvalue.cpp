@@ -17,7 +17,10 @@ void UpvalueObject::set(std::vector<Value>& /*currentStack*/, const Value& value
     } else {
         // Use the owner coroutine's stack
         if (VM::currentVM && value.isObj()) {
-            // Stack modification: move owner coroutine to gray if it was black
+            // Forward barrier: if owner is black and value is white during MARK,
+            // gray the value directly (more precise than re-graying the owner).
+            VM::currentVM->writeBarrier(owner_, value.asObj());
+            // Backward barrier: re-gray owner if it was black (conservative).
             VM::currentVM->writeBarrierBackward(owner_, value.asObj());
         }
         owner_->stack[stackIndex_] = value;

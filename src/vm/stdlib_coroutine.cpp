@@ -61,6 +61,10 @@ bool native_coroutine_resume(VM* vm, int argCount) {
     // Push arguments to coroutine stack
     size_t pushedCount = args.size();
     for (auto it = args.rbegin(); it != args.rend(); ++it) {
+        if (it->isObj()) {
+            vm->writeBarrier(co, it->asObj());
+            vm->writeBarrierBackward(co, it->asObj());
+        }
         co->stack.push_back(*it);
     }
 

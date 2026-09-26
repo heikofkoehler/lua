@@ -303,6 +303,10 @@ CoroutineObject* VM::createCoroutine(const Value& func) {
 
     if (func.isClosure() && !func.asClosureObj()->isC()) {
         ClosureObject* closure = func.asClosureObj();
+        if (func.isObj()) {
+            writeBarrier(co, func.asObj());
+            writeBarrierBackward(co, func.asObj());
+        }
         co->stack.push_back(func);
         
         CallFrame frame;
@@ -2465,7 +2469,10 @@ bool VM::callValue(int argCount, int retCount, bool isTailCall, const char* meta
             
             for (int i = 0; i <= argCount; i++) {
                 Value val = currentCoroutine_->stack[calleePos + i];
-                if (val.isObj()) writeBarrierBackward(currentCoroutine_, val.asObj());
+                if (val.isObj()) {
+                    writeBarrier(currentCoroutine_, val.asObj());
+                    writeBarrierBackward(currentCoroutine_, val.asObj());
+                }
                 currentCoroutine_->stack[oldStackBase - 1 + i] = val;
             }
             

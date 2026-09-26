@@ -610,7 +610,13 @@ bool VM::run(size_t targetFrameCount) {
                 // Add stackBase offset if inside a function
                 size_t actualSlot = currentCoroutine_->frames.empty() ? slot : (currentFrame().stackBase + slot);
                 Value val = pop();
-                if (val.isObj()) writeBarrierBackward(currentCoroutine_, val.asObj());
+                if (val.isObj()) {
+                    // Forward barrier (incremental): if the coroutine is black
+                    // and val is white during MARK, gray val so it is marked.
+                    writeBarrier(currentCoroutine_, val.asObj());
+                    // Backward + generational barrier.
+                    writeBarrierBackward(currentCoroutine_, val.asObj());
+                }
                 currentCoroutine_->stack[actualSlot] = val;
                 break;
             }
@@ -1789,6 +1795,10 @@ bool VM::run(size_t targetFrameCount) {
                         done = true;
                         break;
                     } else if (newIndex.isFunction()) {
+                        if (t.isObj()) {
+                            writeBarrier(currentCoroutine_, t.asObj());
+                            writeBarrierBackward(currentCoroutine_, t.asObj());
+                        }
                         currentCoroutine_->stack[currentCoroutine_->stack.size() - 3] = t;
                         currentCoroutine_->stack.insert(currentCoroutine_->stack.end() - 3, newIndex);
                         callValue(3, 1, false, "newindex"); // Expect 0 results (0 + 1 = 1)

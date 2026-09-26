@@ -336,6 +336,10 @@ bool native_debug_setlocal(VM* vm, int argCount) {
     int slot = localIndex - 1;
     if (frame->isC) {
         if (frame->stackBase + slot < stackTop) {
+            if (newValue.isObj()) {
+                vm->writeBarrier(co, newValue.asObj());
+                vm->writeBarrierBackward(co, newValue.asObj());
+            }
             co->stack[frame->stackBase + slot] = newValue;
             for (int i = 0; i < argCount; i++) vm->pop();
             vm->push(Value::runtimeString(vm->internString("(C temporary)")));
@@ -358,8 +362,11 @@ bool native_debug_setlocal(VM* vm, int argCount) {
             if (frame->stackBase + slot >= co->stack.size()) {
                 co->stack.resize(frame->stackBase + slot + 1, Value::nil());
             }
+            if (newValue.isObj()) {
+                vm->writeBarrier(co, newValue.asObj());
+                vm->writeBarrierBackward(co, newValue.asObj());
+            }
             co->stack[frame->stackBase + slot] = newValue;
-            if (newValue.isObj()) vm->writeBarrierBackward(co, newValue.asObj());
             for (int i = 0; i < argCount; i++) vm->pop();
             vm->push(Value::runtimeString(vm->internString(name)));
             vm->currentCoroutine()->lastResultCount = 1;
@@ -376,8 +383,11 @@ bool native_debug_setlocal(VM* vm, int argCount) {
             if (frame->stackBase + slot >= co->stack.size()) {
                 co->stack.resize(frame->stackBase + slot + 1, Value::nil());
             }
+            if (newValue.isObj()) {
+                vm->writeBarrier(co, newValue.asObj());
+                vm->writeBarrierBackward(co, newValue.asObj());
+            }
             co->stack[frame->stackBase + slot] = newValue;
-            if (newValue.isObj()) vm->writeBarrierBackward(co, newValue.asObj());
             for (int i = 0; i < argCount; i++) vm->pop();
             vm->push(Value::runtimeString(vm->internString("(temporary)")));
             vm->currentCoroutine()->lastResultCount = 1;
