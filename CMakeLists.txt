@@ -85,6 +85,7 @@ set(SOURCES
     src/vm/vm.cpp
     src/vm/run_impl.cpp
     src/vm/jit.cpp
+    src/vm/jit_x64.cpp
     src/vm/gc_impl.cpp
     src/vm/stdlib_base.cpp
     src/vm/stdlib_string.cpp
@@ -211,6 +212,18 @@ set_target_properties(test_cpp_api PROPERTIES
     ENABLE_EXPORTS ON
 )
 
+# x86_64 JIT Test Executable
+add_executable(test_jit_x64 tests/test_jit_x64.cpp ${CORE_SOURCES})
+target_compile_options(test_jit_x64 PRIVATE -Wall -Wextra -Wpedantic -Wno-gnu-anonymous-struct -Wno-nested-anon-types)
+target_include_directories(test_jit_x64 PRIVATE ${CMAKE_SOURCE_DIR}/src ${CMAKE_SOURCE_DIR}/include)
+if(USE_JIT)
+    target_link_libraries(test_jit_x64 PRIVATE asmjit::asmjit)
+endif()
+set_target_properties(test_jit_x64 PROPERTIES 
+    RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}
+    ENABLE_EXPORTS ON
+)
+
 # Modern C++ Embedding Demo Executable
 add_executable(embedding_demo examples/embedding_demo.cpp ${CORE_SOURCES})
 target_compile_options(embedding_demo PRIVATE -Wall -Wextra -Wpedantic -Wno-gnu-anonymous-struct -Wno-nested-anon-types)
@@ -272,11 +285,12 @@ add_custom_target(test
     COMMAND ./run_all_tests.sh ../build/lua
     COMMAND ../build/test_c_api
     COMMAND ../build/test_cpp_api
+    COMMAND ../build/test_jit_x64
     COMMAND ./test_luac.sh ../build/lua ../build/luac
     COMMAND ./test_lsp.sh ../build/lua ../build/lua-lsp
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}/tests
-    DEPENDS lua luac lua-lsp test_c_api test_cpp_api embedding_demo dummy_module lfs cjson
-    COMMENT "Running all Lua VM unit tests, API tests, luac tests, and LSP tests"
+    DEPENDS lua luac lua-lsp test_c_api test_cpp_api test_jit_x64 embedding_demo dummy_module lfs cjson
+    COMMENT "Running all Lua VM unit tests, API tests, JIT tests, luac tests, and LSP tests"
 )
 
 # Custom benchmark target

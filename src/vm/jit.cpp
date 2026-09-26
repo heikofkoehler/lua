@@ -18,8 +18,10 @@ JitRuntime JITCompiler::rt_;
 JITCompiler::JITCompiler(VM* vm) : vm_(vm) { (void)vm_; }
 JITCompiler::~JITCompiler() {}
 
-JITFunc JITCompiler::compile(FunctionObject* function) {
-    if (function->getJITCode()) return function->getJITCode();
+bool JITCompiler::assembleA64(FunctionObject* function, CodeHolder& code) {
+    if (!code.is_initialized()) {
+        code.init(Environment(Arch::kAArch64));
+    }
 
     // Intern string constants in the chunk before compiling
     vm_->internConstants(*function);
@@ -39,8 +41,6 @@ JITFunc JITCompiler::compile(FunctionObject* function) {
 
     (void)vm_; // Suppress unused warning
 
-    CodeHolder code;
-    code.init(rt_.environment());
     a64::Assembler a(&code);
 
     // Registers (using callee-saved x19-x25 for stable state):
@@ -1436,7 +1436,7 @@ JITFunc JITCompiler::compile(FunctionObject* function) {
             }
             default: {
                 // Unsupported opcode, cannot safely compile function
-                return nullptr;
+                return false;
             }
         }
     }
@@ -1466,6 +1466,22 @@ JITFunc JITCompiler::compile(FunctionObject* function) {
     a.ldp(a64::x29, a64::x30, a64::ptr_post(a64::sp, 96));
     
     a.ret(a64::x30);
+    return true;
+}
+
+JITFunc JITCompiler::compileA64(FunctionObject* function) {
+#if !(defined(__aarch64__) || defined(_M_ARM64))
+    (void)function;
+    return nullptr;
+#else
+    if (function->getJITCode()) return function->getJITCode();
+
+    CodeHolder code;
+    code.init(rt_.environment());
+
+    if (!assembleA64(function, code)) {
+        return nullptr;
+    }
 
     JITFunc fn;
 #ifdef __APPLE__
@@ -1482,6 +1498,18 @@ JITFunc JITCompiler::compile(FunctionObject* function) {
 
     function->setJITCode(fn);
     return fn;
+#endif
+}
+
+JITFunc JITCompiler::compile(FunctionObject* function) {
+#if defined(__aarch64__) || defined(_M_ARM64)
+    return compileA64(function);
+#elif defined(__x86_64__) || defined(_M_X64)
+    return compileX64(function);
+#else
+    (void)function;
+    return nullptr;
+#endif
 }
 
 #endif

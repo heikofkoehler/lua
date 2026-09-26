@@ -6,14 +6,16 @@ Enhance the performance of the Lua VM by implementing a **Template Just-In-Time 
 ## 2. Current Implementation Status ✅
 
 ### 2.1 Completed Infrastructure
-- **Library Integration**: AsmJit library integrated for ARM64 machine code generation
+- **Library Integration**: AsmJit library integrated for native ARM64 and x86_64 machine code generation
+- **Dual Architecture Backend**: Dedicated code generation backends for ARM64 (`src/vm/jit.cpp`) and x86_64 (`src/vm/jit_x64.cpp`) with System V AMD64 and Windows x64 ABI support
+- **Multi-Architecture Dispatch**: Host architecture auto-detection (`compile`) with cross-architecture emission support (`assembleA64`, `assembleX64`)
 - **Hotness Detection**: Function hotness counters implemented with thresholds (50 for OP_LOOP, 10 for OP_CALL/OP_TAIL_CALL)
 - **JIT Compiler Class**: `JITCompiler` class with AsmJit runtime and compilation methods
 - **Memory Management**: Executable memory allocation via AsmJit's JitRuntime
 - **VM Integration**: JIT compiler instantiated in VM, friend class access to internal state
 
-### 2.2 Completed Templates (Phases 2 & 4)
-The following opcode categories are fully implemented with native ARM64 code generation in `src/vm/jit.cpp`:
+### 2.2 Completed Templates (Phases 2, 4 & 5)
+The following opcode categories are fully implemented with native ARM64 and x86_64 code generation in `src/vm/jit.cpp` and `src/vm/jit_x64.cpp`:
 
 **Stack Operations:**
 - `OP_CONSTANT`, `OP_CONSTANT_LONG` - Load constants directly to stack
@@ -69,15 +71,12 @@ The following opcode categories are fully implemented with native ARM64 code gen
 - **Triggering**: Automatic JIT compilation when hotness exceeds threshold
 - **Caching**: Compiled JIT code cached in `FunctionObject::jitCode_`
 
-## 3. Future Extensions (Phase 5+)
-
-### 3.1 x86_64 Architecture Backend
-- Extend AsmJit code generation templates to support x86_64 calling conventions and instruction sets alongside ARM64.
-
-### 3.2 Inline Caching & Polymorphic Type Feedback
+## 3. Future Extensions
+ 
+### 3.1 Inline Caching & Polymorphic Type Feedback
 - Record seen types at `OP_GET_TABLE` / `OP_SET_TABLE` sites to emit monomorphic table access inline caches without indirect calls.
 
-### 3.3 Trace JIT / Loop Invariant Code Motion
+### 3.2 Trace JIT / Loop Invariant Code Motion
 - Further specialize hot inner loops by hoisting bounds checks and invariant table lookups out of loops.
 
 ## 4. Architectural Approach: Template JIT

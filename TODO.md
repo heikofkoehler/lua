@@ -35,5 +35,4 @@ This document tracks the features, specifications, and modernization improvement
 - [x] **Lua C API & Dynamic Library (`liblua`)**: Lua 5.4/5.5 compatible C API (`lua.h`, `lauxlib.h`, `lualib.h`, `luaconf.h`) and shared library build for dynamic module loading and Luarocks packages.
 - [x] **Modern C++17/20 Embedding API**: Header-only C++ interface (`include/lua/lua.hpp`) with RAII `lua::Context`, automatic stack marshaling, STL container conversions, callable lambda bindings, and multi-return tuples.
 - [x] **Lua 5.5 Specification Compliance**: 100% pass rate on official Lua 5.5.0 test suite (`all.lua`).
-- [x] **LSP Support:** Native Language Server Protocol (`lua-lsp` & `lua --lsp`) implementation over JSON-RPC 2.0 with diagnostics, document symbols, hover documentation, jump-to-definition, and context-aware code completion.
-- [ ] **x86_64 JIT Backend:** Extend AsmJit code generation to x86_64 architecture.
+- [x] **x86_64 JIT Backend:** Complete AsmJit code generation for x86_64 architecture (`src/vm/jit_x64.cpp`) with System V AMD64 and Windows x64 ABI support, SSE2/int48 fast paths, multi-architecture dispatch (`compileA64`/`compileX64`), and cross-architecture test assembly.
