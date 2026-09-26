@@ -329,6 +329,7 @@ args = ["--stdio"]
 
 ## Documentation & Roadmaps
 
+- [Architecture, State & Complexity Deep Dive](docs/ARCHITECTURE_AND_COMPLEXITY.md): Comprehensive analysis of codebase metrics, subsystems, JIT backends, GC, and algorithmic complexity.
 - [Documentation Index](docs/INDEX.md): Overview of architecture, value representation, GC, and standard libraries.
 - [C API & Modern C++ Embedding API](docs/C_API.md): Standard C API, dynamic shared library, and modern C++17/20 `lua::Context` embedding interface.
 - [Lua 5.5 Compliance Plan & Status](docs/LUA_5_5_COMPLIANCE_PLAN.md): Architectural gap analysis, test suite diagnostic matrix, and implementation roadmap for full Lua 5.5 compliance.

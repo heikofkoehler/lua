@@ -3,6 +3,7 @@
 Welcome to the internal documentation for the Lua VM project. These documents provide design and implementation details useful for programmers working on the codebase.
 
 ## Core Architecture
+- [Architecture, State & Complexity Deep Dive](ARCHITECTURE_AND_COMPLEXITY.md): Comprehensive analysis of codebase metrics, subsystems, JIT backends, GC, and complexity.
 - [VM Architecture and Execution Loop](VM_ARCHITECTURE.md): The execution stack, call frames, and the main dispatch loop.
 - [Value Representation (NaN-Boxing)](VALUE_REPRESENTATION.md): How all Lua values are packed into 64-bit doubles.
 - [Compiler Pipeline](COMPILER_PIPELINE.md): Lexing, parsing, AST, and bytecode generation.
