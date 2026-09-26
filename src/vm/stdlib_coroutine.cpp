@@ -219,6 +219,11 @@ bool native_coroutine_wrap(VM* vm, int argCount) {
     vm->push(func);
     if (!native_coroutine_create(vm, 1)) return false;
     Value co = vm->pop();
+    // 'co' is only in a C++ local here, not on any VM stack. Temp-root it
+    // across compileSource/createClosure below, which allocate and can
+    // trigger a GC that would otherwise collect the coroutine (and its frame
+    // closure) while we still hold the dangling Value.
+    TempRootGuard coGuard(vm, co.asObj());
 
     // Create a closure that captures 'co' and calls resume
     std::string wrapScript = 

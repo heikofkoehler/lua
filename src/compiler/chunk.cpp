@@ -779,6 +779,12 @@ std::unique_ptr<FunctionObject> FunctionObject::deserialize(std::istream& is, co
     int arity = 0, upvalueCount = 0;
     readValue(is, arity);
     readValue(is, upvalueCount);
+    // Defensive: corrupted bytecode can encode negative or absurd arity /
+    // upvalue counts, which would crash call setup or closure allocation.
+    // Lua functions are limited to 255 parameters and 255 upvalues.
+    if (arity < 0 || arity > 255 || upvalueCount < 0 || upvalueCount > 255) {
+        throw std::runtime_error("bad binary format (invalid arity/upvalue count)");
+    }
     uint8_t varargs = 0;
     readValue(is, varargs);
     bool hasVarargs = (varargs & 1) != 0;

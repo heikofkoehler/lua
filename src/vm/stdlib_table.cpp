@@ -358,8 +358,12 @@ bool native_table_unpack(VM* vm, int argCount) {
     size_t count = static_cast<size_t>(n + 1);
     std::vector<Value> results;
     results.reserve(count);
-    for (int64_t k = i; k <= j; k++) {
+    // NB: do not use `for (k = i; k <= j; k++)`: when j == INT64_MAX the
+    // terminal k++ overflows and the loop never ends. Break on k == j so the
+    // increment only runs while k < j.
+    for (int64_t k = i;; ++k) {
         results.push_back(table_get(vm, tableVal, vm->makeInteger(k)));
+        if (k == j) break;
     }
     
     for (int k = 0; k < argCount; k++) vm->pop();
