@@ -211,7 +211,15 @@ StringObject* VM::internString(const char* chars, size_t length, bool isConstant
         std::string s(chars, length);
         auto it = runtimeStrings_.find(s);
         if (it != runtimeStrings_.end()) {
-            return it->second;
+            StringObject* str = it->second;
+            if (str->color() == GCObject::Color::WHITE) {
+                // WHITE: not yet marked in an ongoing incremental cycle.
+                // The caller is about to root this string; gray it now so
+                // the GC visits it and it survives the sweep. (Erasing here
+                // would break interning: equal strings must share pointers.)
+                markObject(str);
+            }
+            return str;
         }
     }
 
@@ -302,6 +310,12 @@ CoroutineObject* VM::createCoroutine(ClosureObject* closure) {
 }
 
 CoroutineObject* VM::createCoroutine(const Value& func) {
+    // The func value may be unanchored: native_coroutine_create pops it into
+    // a C++ local before calling us, so it is not on any VM stack. Temp-root
+    // it across the allocation below, which can trigger a GC that would
+    // otherwise collect the closure while co->frames[0].closure still points
+    // to it (use-after-free observed as null function_ in coroutine.resume).
+    TempRootGuard funcGuard(this, func.isObj() ? func.asObj() : nullptr);
     CoroutineObject* co = allocateObject<CoroutineObject>();
     coroutines_.push_back(co);
 
@@ -1131,7 +1145,15 @@ uint8_t VM::readByte() {
 }
 
 Value VM::getConstant(size_t index) {
-    Value constant = currentFrame().chunk->constants()[index];
+    // Defensive: corrupted/truncated bytecode can encode an out-of-range
+    // constant index. Raise a catchable error instead of crashing on an
+    // out-of-bounds vector access.
+    const auto& constants = currentFrame().chunk->constants();
+    if (index >= constants.size()) {
+        runtimeError("bad constant index (" + std::to_string(index) + ")");
+        return Value::nil(); // unreachable; runtimeError throws
+    }
+    Value constant = constants[index];
     
     if (constant.isString() && !constant.isRuntimeString()) {
         StringObject* str = currentFrame().chunk->getString(constant.asStringIndex());
