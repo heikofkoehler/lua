@@ -1277,7 +1277,7 @@ bool VM::run(size_t targetFrameCount) {
 #ifdef USE_JIT
                         if (!jit()->compile(func)) {
                             // If compilation failed, reset hotness to prevent immediate retry
-                            func->resetHotness(-1000); 
+                            func->resetHotness(-1000000000); 
                         }
 #endif
                     }
@@ -1352,7 +1352,7 @@ bool VM::run(size_t targetFrameCount) {
                     if (isJitEnabled() && !func->getJITCode() && func->incrementHotness() >= 10) {
 #ifdef USE_JIT
                         if (!jit()->compile(func)) {
-                            func->resetHotness(-1000); 
+                            func->resetHotness(-1000000000); 
                         }
 #endif
                     }
@@ -1384,7 +1384,7 @@ bool VM::run(size_t targetFrameCount) {
                     if (isJitEnabled() && !func->getJITCode() && func->incrementHotness() >= 10) {
 #ifdef USE_JIT
                         if (!jit()->compile(func)) {
-                            func->resetHotness(-1000); 
+                            func->resetHotness(-1000000000); 
                         }
 #endif
                     }
@@ -2230,7 +2230,7 @@ bool VM::run(size_t targetFrameCount) {
                             if (isJitEnabled() && !func->getJITCode() && func->incrementHotness() >= 50) {
 #ifdef USE_JIT
                                 if (!jit()->compile(func)) {
-                                    func->resetHotness(-1000);
+                                    func->resetHotness(-1000000000);
                                 }
 #endif
                             }
@@ -2254,7 +2254,7 @@ bool VM::run(size_t targetFrameCount) {
                             if (isJitEnabled() && !func->getJITCode() && func->incrementHotness() >= 50) {
 #ifdef USE_JIT
                                 if (!jit()->compile(func)) {
-                                    func->resetHotness(-1000);
+                                    func->resetHotness(-1000000000);
                                 }
 #endif
                             }

@@ -1,6 +1,7 @@
 #include "vm/jit.hpp"
 #include "value/closure.hpp"
 #include "value/coroutine.hpp"
+#include "value/table.hpp"
 #include <iostream>
 #include <vector>
 #include <cstddef>
@@ -31,6 +32,10 @@ JITFunc JITCompiler::compile(FunctionObject* function) {
     size_t offsetIp = (size_t)&(((CallFrame*)0)->ip);
     size_t offsetHadError = (size_t)&(((VM*)0)->hadError_);
     size_t offsetInterrupted = (size_t)&(((VM*)0)->interrupted_);
+    size_t offsetOpenUpvalues = (size_t)&(((CoroutineObject*)0)->openUpvalues);
+    size_t offsetArray = (size_t)&(((TableObject*)0)->array_);
+    size_t offsetMetatable = (size_t)&(((TableObject*)0)->metatable_);
+    size_t offsetLastLen = (size_t)&(((TableObject*)0)->lastLen_);
 
     (void)vm_; // Suppress unused warning
 
@@ -159,6 +164,19 @@ JITFunc JITCompiler::compile(FunctionObject* function) {
                 a.sub(top_reg, top_reg, 8);
                 break;
             }
+            case OpCode::OP_DUP: {
+                a.ldr(scratch, a64::ptr(top_reg, -8));
+                a.str(scratch, a64::ptr(top_reg));
+                a.add(top_reg, top_reg, 8);
+                break;
+            }
+            case OpCode::OP_SWAP: {
+                a.ldr(scratch, a64::ptr(top_reg, -8));
+                a.ldr(scratch2, a64::ptr(top_reg, -16));
+                a.str(scratch, a64::ptr(top_reg, -16));
+                a.str(scratch2, a64::ptr(top_reg, -8));
+                break;
+            }
             case OpCode::OP_TRUE: {
                 a.mov(scratch, Value::boolean(true).bits());
                 a.str(scratch, a64::ptr(top_reg));
@@ -179,13 +197,202 @@ JITFunc JITCompiler::compile(FunctionObject* function) {
             }
             case OpCode::OP_LOOP: {
                 uint16_t offset = bytecode[i+1] | (bytecode[i+2] << 8);
-                size_t loop_dest = i + 1 - offset;
                 i += 2;
+                size_t loop_dest = i + 1 - offset;
                 a.ldr(scratch_w, a64::ptr(vm_reg, offsetInterrupted));
                 a.mov(scratch2, loop_dest);
                 a.str(scratch2, a64::ptr(frame_reg, offsetIp));
                 a.cbnz(scratch_w, frame_changed);
                 a.b(labels[loop_dest]);
+                break;
+            }
+            case OpCode::OP_FORPREP: {
+                uint8_t rawBase = bytecode[++i];
+                uint8_t base = rawBase & 0x7F;
+                uint16_t offset = bytecode[i+1] | (bytecode[i+2] << 8);
+                i += 2;
+
+                a.str(top_reg, a64::ptr(co_reg, offsetStack + 8));
+                a.mov(a64::x0, vm_reg);
+                a.mov(a64::x1, (uint32_t)rawBase);
+                a.mov(a64::x2, (uint32_t)offset);
+                a.mov(scratch, (uint64_t)VM::jitForPrep);
+                a.blr(scratch);
+                // Reload state after C++ call
+                a.ldr(stack_reg, a64::ptr(co_reg, offsetStack));
+                a.ldr(scratch, a64::ptr(co_reg, offsetFrames + 8));
+                a.sub(frame_reg, scratch, sizeof(CallFrame));
+                a.ldr(scratch, a64::ptr(frame_reg, offsetStackBase));
+                a.add(local_reg, stack_reg, scratch, a64::lsl(3));
+                a.ldrb(scratch_w, a64::ptr(vm_reg, offsetHadError));
+                a.cbnz(scratch_w, frame_changed);
+
+                // If skipLoop returned true (w0 != 0), branch forward to labels[i + 1 + offset]
+                Label loop_start = a.new_label();
+                a.cbz(a64::w0, loop_start);
+                // skipLoop: top_reg = local_reg + base * 8
+                a.add(top_reg, local_reg, (uint64_t)base * 8);
+                a.b(labels[i + 1 + offset]);
+
+                a.bind(loop_start);
+                // Loop starts: top_reg = local_reg + (base + 4) * 8
+                a.add(top_reg, local_reg, (uint64_t)(base + 4) * 8);
+                break;
+            }
+            case OpCode::OP_FORLOOP: {
+                uint8_t base = bytecode[++i];
+                uint16_t offset = bytecode[i+1] | (bytecode[i+2] << 8);
+                i += 2;
+                size_t loop_dest = i + 1 - offset;
+
+                Label fallback = a.new_label();
+                Label loop_cont = a.new_label();
+                Label loop_end = a.new_label();
+                Label step_neg = a.new_label();
+                Label try_float = a.new_label();
+                Label step_neg_f = a.new_label();
+
+                // 1. Check interrupted flag (for debug hooks / signals)
+                a.ldr(scratch_w, a64::ptr(vm_reg, offsetInterrupted));
+                a.cbnz(scratch_w, frame_changed);
+
+                // 2. Check if openUpvalues is empty: __begin_ == __end_
+                a.ldr(scratch, a64::ptr(co_reg, offsetOpenUpvalues));
+                a.ldr(scratch2, a64::ptr(co_reg, offsetOpenUpvalues + 8));
+                a.cmp(scratch, scratch2);
+                a.b_ne(fallback);
+
+                // 3. Load v_init, v_limit, v_step
+                a64::Gp reg_init = a64::x11;
+                a64::Gp reg_limit = a64::x12;
+                a64::Gp reg_step = a64::x13;
+                a64::Gp reg_tag = a64::x14;
+
+                a.ldr(reg_init, a64::ptr(local_reg, (uint64_t)base * 8));
+                a.ldr(reg_limit, a64::ptr(local_reg, (uint64_t)(base + 1) * 8));
+                a.ldr(reg_step, a64::ptr(local_reg, (uint64_t)(base + 2) * 8));
+
+                // Check if all are integer: tag == 0xFFF3
+                a.lsr(reg_tag, reg_init, 48);
+                a.mov(scratch, 0xFFF3);
+                a.cmp(reg_tag, scratch);
+                a.b_ne(try_float);
+
+                a.lsr(reg_tag, reg_step, 48);
+                a.cmp(reg_tag, scratch);
+                a.b_ne(try_float);
+
+                a.lsr(reg_tag, reg_limit, 48);
+                a.cmp(reg_tag, scratch);
+                a.b_ne(fallback); // mixed int/float limit or big int -> fallback
+
+                // All 3 are 48-bit inline integers!
+                a.sbfx(reg_init, reg_init, 0, 48);
+                a.sbfx(reg_step, reg_step, 0, 48);
+                a.sbfx(reg_limit, reg_limit, 0, 48);
+
+                // nextI = init + step with overflow check
+                a64::Gp reg_next = a64::x15;
+                a.adds(reg_next, reg_init, reg_step);
+                a.b_vs(fallback); // 64-bit overflow -> fallback
+
+                // Check 48-bit range for nextI: sbfx check, nextI must fit in 48 bits
+                a.sbfx(scratch, reg_next, 0, 48);
+                a.cmp(scratch, reg_next);
+                a.b_ne(fallback);
+
+                // Step direction check
+                a.cmp(reg_step, 0);
+                a.b_le(step_neg);
+
+                // step > 0: nextI <= limitI
+                a.cmp(reg_next, reg_limit);
+                a.b_gt(loop_end);
+                a.b(loop_cont);
+
+                a.bind(step_neg);
+                // step <= 0: nextI >= limitI
+                a.cmp(reg_next, reg_limit);
+                a.b_lt(loop_end);
+
+                a.bind(loop_cont);
+                // Pack nextI into 48-bit tagged integer Value
+                a.mov(scratch, 0xFFF3);
+                a.bfi(reg_next, scratch, 48, 16);
+                a.str(reg_next, a64::ptr(local_reg, (uint64_t)base * 8));
+                a.str(reg_next, a64::ptr(local_reg, (uint64_t)(base + 3) * 8));
+                a.mov(scratch, (uint64_t)loop_dest);
+                a.str(scratch, a64::ptr(frame_reg, offsetIp));
+                a.b(labels[loop_dest]);
+
+                // Float path
+                a.bind(try_float);
+                a.mov(scratch, 0xFFF1);
+                a.lsr(reg_tag, reg_init, 48);
+                a.cmp(reg_tag, scratch);
+                a.b_hs(fallback);
+
+                a.lsr(reg_tag, reg_step, 48);
+                a.cmp(reg_tag, scratch);
+                a.b_hs(fallback);
+
+                a.lsr(reg_tag, reg_limit, 48);
+                a.cmp(reg_tag, scratch);
+                a.b_hs(fallback);
+
+                // All 3 are IEEE-754 floats
+                a.fmov(a64::d0, reg_init);
+                a.fmov(a64::d1, reg_limit);
+                a.fmov(a64::d2, reg_step);
+
+                a.fadd(a64::d3, a64::d0, a64::d2); // nextF = initF + stepF
+                a.fcmp(a64::d2, 0.0);
+                a.b_le(step_neg_f);
+
+                // stepF > 0: nextF <= limitF
+                a.fcmp(a64::d3, a64::d1);
+                a.b_vs(loop_end); // NaN -> end
+                a.b_gt(loop_end);
+                a.fmov(reg_next, a64::d3);
+                a.str(reg_next, a64::ptr(local_reg, (uint64_t)base * 8));
+                a.str(reg_next, a64::ptr(local_reg, (uint64_t)(base + 3) * 8));
+                a.mov(scratch, (uint64_t)loop_dest);
+                a.str(scratch, a64::ptr(frame_reg, offsetIp));
+                a.b(labels[loop_dest]);
+
+                a.bind(step_neg_f);
+                // stepF <= 0: nextF >= limitF
+                a.fcmp(a64::d3, a64::d1);
+                a.b_vs(loop_end);
+                a.b_lt(loop_end);
+                a.fmov(reg_next, a64::d3);
+                a.str(reg_next, a64::ptr(local_reg, (uint64_t)base * 8));
+                a.str(reg_next, a64::ptr(local_reg, (uint64_t)(base + 3) * 8));
+                a.mov(scratch, (uint64_t)loop_dest);
+                a.str(scratch, a64::ptr(frame_reg, offsetIp));
+                a.b(labels[loop_dest]);
+
+                // Fallback: call VM::jitForLoopFallback
+                a.bind(fallback);
+                a.str(top_reg, a64::ptr(co_reg, offsetStack + 8));
+                a.mov(a64::x0, vm_reg);
+                a.mov(a64::x1, (uint32_t)base);
+                a.mov(scratch, (uint64_t)VM::jitForLoopFallback);
+                a.blr(scratch);
+                // Reload state
+                a.ldr(stack_reg, a64::ptr(co_reg, offsetStack));
+                a.ldr(scratch, a64::ptr(co_reg, offsetFrames + 8));
+                a.sub(frame_reg, scratch, sizeof(CallFrame));
+                a.ldr(scratch, a64::ptr(frame_reg, offsetStackBase));
+                a.add(local_reg, stack_reg, scratch, a64::lsl(3));
+                a.ldrb(scratch_w, a64::ptr(vm_reg, offsetHadError));
+                a.cbnz(scratch_w, frame_changed);
+                // If jitForLoopFallback returned true (canContinue), branch backward
+                a.cbnz(a64::w0, labels[loop_dest]);
+
+                a.bind(loop_end);
+                // Loop ended: stack resize to actualBase (base * 8)
+                a.add(top_reg, local_reg, (uint64_t)base * 8);
                 break;
             }
             case OpCode::OP_JUMP_IF_FALSE: {
@@ -395,6 +602,60 @@ JITFunc JITCompiler::compile(FunctionObject* function) {
                 break;
             }
             case OpCode::OP_GET_TABLE: {
+                Label fallback = a.new_label();
+                Label success = a.new_label();
+
+                a.ldr(scratch, a64::ptr(top_reg, -8));   // key
+                a.ldr(scratch2, a64::ptr(top_reg, -16)); // tbl
+
+                // 1. Check tbl is TableObject (0xFFF5)
+                a64::Gp tag_tbl = a64::x11;
+                a.lsr(tag_tbl, scratch2, 48);
+                a.mov(a64::x13, 0xFFF5);
+                a.cmp(tag_tbl, a64::x13);
+                a.b_ne(fallback);
+
+                // 2. Extract TableObject pointer (clear top 16 bits)
+                a64::Gp tbl_ptr = a64::x12;
+                a.ubfx(tbl_ptr, scratch2, 0, 48);
+
+                // 3. Check metatable is nil
+                a.ldr(a64::x14, a64::ptr(tbl_ptr, offsetMetatable));
+                a.mov(a64::x15, Value::nil().bits());
+                a.cmp(a64::x14, a64::x15);
+                a.b_ne(fallback);
+
+                // 4. Check key is integer (0xFFF3)
+                a64::Gp tag_key = a64::x11;
+                a.lsr(tag_key, scratch, 48);
+                a.mov(a64::x13, 0xFFF3);
+                a.cmp(tag_key, a64::x13);
+                a.b_ne(fallback);
+
+                // 5. Check 1 <= idx <= array_.size()
+                a64::Gp idx = a64::x13;
+                a.sbfx(idx, scratch, 0, 48);
+                a.cmp(idx, 1);
+                a.b_lt(fallback);
+
+                // array_.size() = (end - begin) in bytes
+                a64::Gp arr_begin = a64::x14;
+                a64::Gp arr_end = a64::x15;
+                a.ldr(arr_begin, a64::ptr(tbl_ptr, offsetArray));
+                a.ldr(arr_end, a64::ptr(tbl_ptr, offsetArray + 8));
+                a.sub(arr_end, arr_end, arr_begin); // size in bytes
+                a.sub(idx, idx, 1); // 0-based idx
+                a.lsl(idx, idx, 3); // idx in bytes
+                a.cmp(idx, arr_end);
+                a.b_hs(fallback);
+
+                // Fast array load
+                a.ldr(scratch, a64::ptr(arr_begin, idx));
+                a.str(scratch, a64::ptr(top_reg, -16));
+                a.sub(top_reg, top_reg, 8);
+                a.b(success);
+
+                a.bind(fallback);
                 a.str(top_reg, a64::ptr(co_reg, offsetStack + 8));
                 a.mov(a64::x0, vm_reg);
                 a.mov(a64::x1, (uint32_t)(i + 1));
@@ -415,9 +676,73 @@ JITFunc JITCompiler::compile(FunctionObject* function) {
                 a.sub(frame_reg, scratch, sizeof(CallFrame));
                 a.ldr(scratch, a64::ptr(frame_reg, offsetStackBase));
                 a.add(local_reg, stack_reg, scratch, a64::lsl(3));
+
+                a.bind(success);
                 break;
             }
             case OpCode::OP_SET_TABLE: {
+                Label fallback = a.new_label();
+                Label success = a.new_label();
+
+                a.ldr(scratch, a64::ptr(top_reg, -8));    // val
+                a.ldr(scratch2, a64::ptr(top_reg, -16));  // key
+                a64::Gp tbl_val = a64::x13;
+                a.ldr(tbl_val, a64::ptr(top_reg, -24));   // tbl
+
+                // 1. Check tbl is TableObject (0xFFF5)
+                a64::Gp tag_tbl = a64::x11;
+                a.lsr(tag_tbl, tbl_val, 48);
+                a.mov(a64::x12, 0xFFF5);
+                a.cmp(tag_tbl, a64::x12);
+                a.b_ne(fallback);
+
+                // 2. Extract TableObject pointer
+                a64::Gp tbl_ptr = a64::x12;
+                a.ubfx(tbl_ptr, tbl_val, 0, 48);
+
+                // 3. Check metatable is nil
+                a.ldr(a64::x14, a64::ptr(tbl_ptr, offsetMetatable));
+                a.mov(a64::x15, Value::nil().bits());
+                a.cmp(a64::x14, a64::x15);
+                a.b_ne(fallback);
+
+                // 4. Check val is not a GC object (tag <= 0xFFF3)
+                a64::Gp tag_val = a64::x11;
+                a.lsr(tag_val, scratch, 48);
+                a.mov(a64::x14, 0xFFF3);
+                a.cmp(tag_val, a64::x14);
+                a.b_hi(fallback); // tag > 0xFFF3 is GC object
+
+                // 5. Check key is integer (0xFFF3)
+                a64::Gp tag_key = a64::x11;
+                a.lsr(tag_key, scratch2, 48);
+                a.cmp(tag_key, a64::x14);
+                a.b_ne(fallback);
+
+                // 6. Check 1 <= idx <= array_.size()
+                a64::Gp idx = a64::x11;
+                a.sbfx(idx, scratch2, 0, 48);
+                a.cmp(idx, 1);
+                a.b_lt(fallback);
+
+                a64::Gp arr_begin = a64::x14;
+                a64::Gp arr_end = a64::x15;
+                a.ldr(arr_begin, a64::ptr(tbl_ptr, offsetArray));
+                a.ldr(arr_end, a64::ptr(tbl_ptr, offsetArray + 8));
+                a.sub(arr_end, arr_end, arr_begin);
+                a.sub(idx, idx, 1);
+                a.lsl(idx, idx, 3);
+                a.cmp(idx, arr_end);
+                a.b_hs(fallback);
+
+                // Fast array store
+                a.str(scratch, a64::ptr(arr_begin, idx));
+                // Invalidate lastLen_ (set to 0)
+                a.str(a64::xzr, a64::ptr(tbl_ptr, offsetLastLen));
+                a.sub(top_reg, top_reg, 24);
+                a.b(success);
+
+                a.bind(fallback);
                 a.str(top_reg, a64::ptr(co_reg, offsetStack + 8));
                 a.mov(a64::x0, vm_reg);
                 a.mov(a64::x1, (uint32_t)(i + 1));
@@ -438,6 +763,8 @@ JITFunc JITCompiler::compile(FunctionObject* function) {
                 a.sub(frame_reg, scratch, sizeof(CallFrame));
                 a.ldr(scratch, a64::ptr(frame_reg, offsetStackBase));
                 a.add(local_reg, stack_reg, scratch, a64::lsl(3));
+
+                a.bind(success);
                 break;
             }
             case OpCode::OP_GET_UPVALUE: {
@@ -599,18 +926,124 @@ JITFunc JITCompiler::compile(FunctionObject* function) {
                 a.add(local_reg, stack_reg, scratch, a64::lsl(3));
                 break;
             }
+            case OpCode::OP_CALL_MULTI: {
+                uint8_t fixedArgCount = bytecode[++i];
+                uint8_t retCount = bytecode[++i];
+
+                a.str(top_reg, a64::ptr(co_reg, offsetStack + 8));
+                a.mov(a64::x0, vm_reg);
+                a.mov(a64::x1, (uint32_t)fixedArgCount);
+                a.mov(a64::x2, (uint32_t)retCount);
+                a.mov(a64::x3, (uint32_t)(i + 1));
+                a.mov(scratch, (uint64_t)VM::jitCallMulti);
+                a.blr(scratch);
+                a.ldr(top_reg, a64::ptr(co_reg, offsetStack + 8));
+                a.ldrb(scratch_w, a64::ptr(vm_reg, offsetHadError));
+                a.cbnz(scratch, frame_changed);
+                a.ldr(stack_reg, a64::ptr(co_reg, offsetStack));
+
+                a.ldr(scratch, a64::ptr(co_reg, offsetFrames + 8));
+                a.ldr(scratch2, a64::ptr(co_reg, offsetFrames));
+                a.sub(scratch, scratch, scratch2);
+                a.cmp(scratch, frames_size_reg);
+                a.b_ne(frame_changed); 
+
+                a.ldr(scratch, a64::ptr(co_reg, offsetFrames + 8));
+                a.sub(frame_reg, scratch, sizeof(CallFrame));
+                a.ldr(scratch, a64::ptr(frame_reg, offsetStackBase));
+                a.add(local_reg, stack_reg, scratch, a64::lsl(3));
+                break;
+            }
+            case OpCode::OP_TAILCALL: {
+                uint8_t argCount = bytecode[++i];
+                a.str(top_reg, a64::ptr(co_reg, offsetStack + 8));
+                a.mov(a64::x0, vm_reg);
+                a.mov(a64::x1, (uint32_t)argCount);
+                a.mov(a64::x2, (uint32_t)(i + 1));
+                a.mov(scratch, (uint64_t)VM::jitTailCall);
+                a.blr(scratch);
+                a.ldr(top_reg, a64::ptr(co_reg, offsetStack + 8));
+                a.b(frame_changed);
+                break;
+            }
+            case OpCode::OP_TAILCALL_MULTI: {
+                uint8_t fixedArgCount = bytecode[++i];
+                a.str(top_reg, a64::ptr(co_reg, offsetStack + 8));
+                a.mov(a64::x0, vm_reg);
+                a.mov(a64::x1, (uint32_t)fixedArgCount);
+                a.mov(a64::x2, (uint32_t)(i + 1));
+                a.mov(scratch, (uint64_t)VM::jitTailCallMulti);
+                a.blr(scratch);
+                a.ldr(top_reg, a64::ptr(co_reg, offsetStack + 8));
+                a.b(frame_changed);
+                break;
+            }
             case OpCode::OP_BAND:
             case OpCode::OP_BOR:
-            case OpCode::OP_BXOR:
-            case OpCode::OP_SHL:
-            case OpCode::OP_SHR: {
+            case OpCode::OP_BXOR: {
+                Label fallback = a.new_label();
+                Label success = a.new_label();
+
+                a.ldr(scratch, a64::ptr(top_reg, -8));   // val2
+                a.ldr(scratch2, a64::ptr(top_reg, -16)); // val1
+
+                a64::Gp tag1 = a64::x11;
+                a64::Gp tag2 = a64::x12;
+                a.lsr(tag2, scratch, 48);
+                a.lsr(tag1, scratch2, 48);
+
+                a.mov(a64::x13, 0xFFF3);
+                a.cmp(tag1, a64::x13);
+                a.b_ne(fallback);
+                a.cmp(tag2, a64::x13);
+                a.b_ne(fallback);
+
+                if (op == OpCode::OP_BAND) {
+                    a.and_(scratch2, scratch2, scratch);
+                } else if (op == OpCode::OP_BOR) {
+                    a.orr(scratch2, scratch2, scratch);
+                } else if (op == OpCode::OP_BXOR) {
+                    a.eor(scratch2, scratch2, scratch);
+                    a.mov(a64::x13, 0xFFF3);
+                    a.bfi(scratch2, a64::x13, 48, 16);
+                }
+                a.str(scratch2, a64::ptr(top_reg, -16));
+                a.sub(top_reg, top_reg, 8);
+                a.b(success);
+
+                a.bind(fallback);
                 a.str(top_reg, a64::ptr(co_reg, offsetStack + 8));
                 a.mov(a64::x0, vm_reg);
                 a.mov(a64::x1, (uint32_t)(i + 1));
                 if (op == OpCode::OP_BAND) a.mov(scratch, (uint64_t)VM::jitBand);
                 else if (op == OpCode::OP_BOR) a.mov(scratch, (uint64_t)VM::jitBor);
                 else if (op == OpCode::OP_BXOR) a.mov(scratch, (uint64_t)VM::jitBxor);
-                else if (op == OpCode::OP_SHL) a.mov(scratch, (uint64_t)VM::jitShl);
+                a.blr(scratch);
+                a.ldr(top_reg, a64::ptr(co_reg, offsetStack + 8));
+                a.ldrb(scratch_w, a64::ptr(vm_reg, offsetHadError));
+                a.cbnz(scratch, frame_changed);
+                a.ldr(stack_reg, a64::ptr(co_reg, offsetStack));
+
+                a.ldr(scratch, a64::ptr(co_reg, offsetFrames + 8));
+                a.ldr(scratch2, a64::ptr(co_reg, offsetFrames));
+                a.sub(scratch, scratch, scratch2);
+                a.cmp(scratch, frames_size_reg);
+                a.b_ne(frame_changed);
+
+                a.ldr(scratch, a64::ptr(co_reg, offsetFrames + 8));
+                a.sub(frame_reg, scratch, sizeof(CallFrame));
+                a.ldr(scratch, a64::ptr(frame_reg, offsetStackBase));
+                a.add(local_reg, stack_reg, scratch, a64::lsl(3));
+
+                a.bind(success);
+                break;
+            }
+            case OpCode::OP_SHL:
+            case OpCode::OP_SHR: {
+                a.str(top_reg, a64::ptr(co_reg, offsetStack + 8));
+                a.mov(a64::x0, vm_reg);
+                a.mov(a64::x1, (uint32_t)(i + 1));
+                if (op == OpCode::OP_SHL) a.mov(scratch, (uint64_t)VM::jitShl);
                 else if (op == OpCode::OP_SHR) a.mov(scratch, (uint64_t)VM::jitShr);
                 a.blr(scratch);
                 a.ldr(top_reg, a64::ptr(co_reg, offsetStack + 8));
@@ -631,6 +1064,28 @@ JITFunc JITCompiler::compile(FunctionObject* function) {
                 break;
             }
             case OpCode::OP_BNOT: {
+                Label fallback = a.new_label();
+                Label success = a.new_label();
+
+                a.ldr(scratch, a64::ptr(top_reg, -8));
+                a64::Gp tag = a64::x11;
+                a.lsr(tag, scratch, 48);
+                a.mov(a64::x12, 0xFFF3);
+                a.cmp(tag, a64::x12);
+                a.b_ne(fallback);
+
+                a.sbfx(scratch2, scratch, 0, 48);
+                a.mvn(scratch2, scratch2);
+                a.sbfx(a64::x13, scratch2, 0, 48);
+                a.cmp(a64::x13, scratch2);
+                a.b_ne(fallback);
+
+                a.mov(a64::x13, 0xFFF3);
+                a.bfi(scratch2, a64::x13, 48, 16);
+                a.str(scratch2, a64::ptr(top_reg, -8));
+                a.b(success);
+
+                a.bind(fallback);
                 a.str(top_reg, a64::ptr(co_reg, offsetStack + 8));
                 a.mov(a64::x0, vm_reg);
                 a.mov(a64::x1, (uint32_t)(i + 1));
@@ -651,6 +1106,8 @@ JITFunc JITCompiler::compile(FunctionObject* function) {
                 a.sub(frame_reg, scratch, sizeof(CallFrame));
                 a.ldr(scratch, a64::ptr(frame_reg, offsetStackBase));
                 a.add(local_reg, stack_reg, scratch, a64::lsl(3));
+
+                a.bind(success);
                 break;
             }
             case OpCode::OP_IDIV:
@@ -686,28 +1143,108 @@ JITFunc JITCompiler::compile(FunctionObject* function) {
             case OpCode::OP_DIV: {
                 Label fallback = a.new_label();
                 Label success = a.new_label();
+                Label float_int = a.new_label();
+                Label int_float = a.new_label();
+                Label both_floats_rhs_int = a.new_label();
 
-                a.ldr(scratch, a64::ptr(top_reg, -8)); // val2
-                a.ldr(scratch2, a64::ptr(top_reg, -16)); // val1
-                
-                a64::Gp tag = a64::x11;
-                a.lsr(tag, scratch, 48);
-                a.mov(a64::x12, 0xFFF1);
-                a.cmp(tag, a64::x12);
+                a.ldr(scratch, a64::ptr(top_reg, -8));   // val2 (rhs)
+                a.ldr(scratch2, a64::ptr(top_reg, -16)); // val1 (lhs)
+
+                a64::Gp tag1 = a64::x11;
+                a64::Gp tag2 = a64::x12;
+                a.lsr(tag2, scratch, 48);
+                a.lsr(tag1, scratch2, 48);
+
+                a.mov(a64::x13, 0xFFF3); // INTEGER tag
+                a.cmp(tag1, a64::x13);
+                a.b_ne(float_int);
+                // lhs is integer
+                a.cmp(tag2, a64::x13);
+                a.b_ne(int_float);
+
+                // Both are integers!
+                if (op == OpCode::OP_DIV) {
+                    // Division in Lua is always floating-point: 5 / 2 = 2.5
+                    a.sbfx(scratch2, scratch2, 0, 48);
+                    a.sbfx(scratch, scratch, 0, 48);
+                    a.scvtf(a64::d0, scratch2);
+                    a.scvtf(a64::d1, scratch);
+                    a.fdiv(a64::d0, a64::d0, a64::d1);
+                    a.fmov(scratch, a64::d0);
+                    a.str(scratch, a64::ptr(top_reg, -16));
+                    a.sub(top_reg, top_reg, 8);
+                    a.b(success);
+                } else {
+                    a.sbfx(scratch2, scratch2, 0, 48);
+                    a.sbfx(scratch, scratch, 0, 48);
+                    if (op == OpCode::OP_ADD) a.add(scratch2, scratch2, scratch);
+                    else if (op == OpCode::OP_SUB) a.sub(scratch2, scratch2, scratch);
+                    else if (op == OpCode::OP_MUL) a.mul(scratch2, scratch2, scratch);
+
+                    // Check if scratch2 fits in 48-bit signed integer
+                    a.sbfx(a64::x14, scratch2, 0, 48);
+                    a.cmp(a64::x14, scratch2);
+                    a.b_ne(fallback);
+
+                    a.mov(a64::x14, 0xFFF3);
+                    a.bfi(scratch2, a64::x14, 48, 16);
+                    a.str(scratch2, a64::ptr(top_reg, -16));
+                    a.sub(top_reg, top_reg, 8);
+                    a.b(success);
+                }
+
+                // lhs is not int: check if lhs is float (< 0xFFF1)
+                a.bind(float_int);
+                a.mov(a64::x14, 0xFFF1);
+                a.cmp(tag1, a64::x14);
                 a.b_hs(fallback);
 
-                a.lsr(tag, scratch2, 48);
-                a.cmp(tag, a64::x12);
+                // lhs is float: check rhs
+                a.cmp(tag2, a64::x13);
+                a.b_eq(both_floats_rhs_int);
+                a.cmp(tag2, a64::x14);
                 a.b_hs(fallback);
 
-                a.fmov(a64::d1, scratch); // d1 = val2
-                a.fmov(a64::d0, scratch2); // d0 = val1
-                
+                // Both are floats!
+                a.fmov(a64::d0, scratch2);
+                a.fmov(a64::d1, scratch);
                 if (op == OpCode::OP_ADD) a.fadd(a64::d0, a64::d0, a64::d1);
                 else if (op == OpCode::OP_SUB) a.fsub(a64::d0, a64::d0, a64::d1);
                 else if (op == OpCode::OP_MUL) a.fmul(a64::d0, a64::d0, a64::d1);
                 else if (op == OpCode::OP_DIV) a.fdiv(a64::d0, a64::d0, a64::d1);
-                
+                a.fmov(scratch, a64::d0);
+                a.str(scratch, a64::ptr(top_reg, -16));
+                a.sub(top_reg, top_reg, 8);
+                a.b(success);
+
+                // lhs is float, rhs is int
+                a.bind(both_floats_rhs_int);
+                a.sbfx(scratch, scratch, 0, 48);
+                a.scvtf(a64::d1, scratch);
+                a.fmov(a64::d0, scratch2);
+                if (op == OpCode::OP_ADD) a.fadd(a64::d0, a64::d0, a64::d1);
+                else if (op == OpCode::OP_SUB) a.fsub(a64::d0, a64::d0, a64::d1);
+                else if (op == OpCode::OP_MUL) a.fmul(a64::d0, a64::d0, a64::d1);
+                else if (op == OpCode::OP_DIV) a.fdiv(a64::d0, a64::d0, a64::d1);
+                a.fmov(scratch, a64::d0);
+                a.str(scratch, a64::ptr(top_reg, -16));
+                a.sub(top_reg, top_reg, 8);
+                a.b(success);
+
+                // lhs is int, rhs is not int
+                a.bind(int_float);
+                a.mov(a64::x14, 0xFFF1);
+                a.cmp(tag2, a64::x14);
+                a.b_hs(fallback);
+
+                // lhs is int, rhs is float
+                a.sbfx(scratch2, scratch2, 0, 48);
+                a.scvtf(a64::d0, scratch2);
+                a.fmov(a64::d1, scratch);
+                if (op == OpCode::OP_ADD) a.fadd(a64::d0, a64::d0, a64::d1);
+                else if (op == OpCode::OP_SUB) a.fsub(a64::d0, a64::d0, a64::d1);
+                else if (op == OpCode::OP_MUL) a.fmul(a64::d0, a64::d0, a64::d1);
+                else if (op == OpCode::OP_DIV) a.fdiv(a64::d0, a64::d0, a64::d1);
                 a.fmov(scratch, a64::d0);
                 a.str(scratch, a64::ptr(top_reg, -16));
                 a.sub(top_reg, top_reg, 8);
@@ -724,10 +1261,29 @@ JITFunc JITCompiler::compile(FunctionObject* function) {
             case OpCode::OP_NEG: {
                 Label fallback = a.new_label();
                 Label success = a.new_label();
+                Label is_float = a.new_label();
 
                 a.ldr(scratch, a64::ptr(top_reg, -8)); // val1
                 a64::Gp tag = a64::x11;
                 a.lsr(tag, scratch, 48);
+
+                a.mov(a64::x12, 0xFFF3);
+                a.cmp(tag, a64::x12);
+                a.b_ne(is_float);
+
+                // Integer negation
+                a.sbfx(scratch2, scratch, 0, 48);
+                a.neg(scratch2, scratch2);
+                a.sbfx(a64::x13, scratch2, 0, 48);
+                a.cmp(a64::x13, scratch2);
+                a.b_ne(fallback);
+
+                a.mov(a64::x13, 0xFFF3);
+                a.bfi(scratch2, a64::x13, 48, 16);
+                a.str(scratch2, a64::ptr(top_reg, -8));
+                a.b(success);
+
+                a.bind(is_float);
                 a.mov(a64::x12, 0xFFF1);
                 a.cmp(tag, a64::x12);
                 a.b_hs(fallback);
@@ -775,30 +1331,68 @@ JITFunc JITCompiler::compile(FunctionObject* function) {
             case OpCode::OP_GREATER_EQUAL: {
                 Label fallback = a.new_label();
                 Label is_true = a.new_label();
+                Label is_false = a.new_label();
                 Label success = a.new_label();
+                Label check_floats = a.new_label();
 
-                a.ldr(scratch, a64::ptr(top_reg, -8)); // val2
-                a.ldr(scratch2, a64::ptr(top_reg, -16)); // val1
-                
-                a64::Gp tag = a64::x11;
-                a.lsr(tag, scratch, 48);
-                a.mov(a64::x12, 0xFFF1);
-                a.cmp(tag, a64::x12);
+                a.ldr(scratch, a64::ptr(top_reg, -8));   // val2 (rhs)
+                a.ldr(scratch2, a64::ptr(top_reg, -16)); // val1 (lhs)
+
+                a64::Gp tag1 = a64::x11;
+                a64::Gp tag2 = a64::x12;
+                a.lsr(tag2, scratch, 48);
+                a.lsr(tag1, scratch2, 48);
+
+                // If OP_EQUAL and exact bits match, it is equal!
+                // (except for floats where NaN != NaN, so only if not float)
+                if (op == OpCode::OP_EQUAL) {
+                    Label not_exact = a.new_label();
+                    a.cmp(scratch, scratch2);
+                    a.b_ne(not_exact);
+                    // Same bits: check if float
+                    a.mov(a64::x13, 0xFFF1);
+                    a.cmp(tag1, a64::x13);
+                    a.b_hs(is_true); // Non-float identical bits: true!
+                    a.bind(not_exact);
+                }
+
+                // Check if both are integers (0xFFF3)
+                a.mov(a64::x13, 0xFFF3);
+                a.cmp(tag1, a64::x13);
+                a.b_ne(check_floats);
+                a.cmp(tag2, a64::x13);
+                a.b_ne(check_floats);
+
+                // Both are integers!
+                a.sbfx(scratch2, scratch2, 0, 48);
+                a.sbfx(scratch, scratch, 0, 48);
+                a.cmp(scratch2, scratch);
+                if (op == OpCode::OP_EQUAL) a.b_eq(is_true);
+                else if (op == OpCode::OP_LESS) a.b_lt(is_true);
+                else if (op == OpCode::OP_LESS_EQUAL) a.b_le(is_true);
+                else if (op == OpCode::OP_GREATER) a.b_gt(is_true);
+                else if (op == OpCode::OP_GREATER_EQUAL) a.b_ge(is_true);
+                a.b(is_false);
+
+                // Check if both are floats (< 0xFFF1)
+                a.bind(check_floats);
+                a.mov(a64::x13, 0xFFF1);
+                a.cmp(tag1, a64::x13);
                 a.b_hs(fallback);
-                a.lsr(tag, scratch2, 48);
-                a.cmp(tag, a64::x12);
+                a.cmp(tag2, a64::x13);
                 a.b_hs(fallback);
 
-                a.fmov(a64::d1, scratch);
                 a.fmov(a64::d0, scratch2);
+                a.fmov(a64::d1, scratch);
                 a.fcmp(a64::d0, a64::d1);
-                
+
                 if (op == OpCode::OP_EQUAL) a.b_eq(is_true);
                 else if (op == OpCode::OP_LESS) a.b_mi(is_true);
                 else if (op == OpCode::OP_LESS_EQUAL) a.b_ls(is_true);
                 else if (op == OpCode::OP_GREATER) a.b_gt(is_true);
                 else if (op == OpCode::OP_GREATER_EQUAL) a.b_ge(is_true);
-                
+
+                a.bind(is_false);
                 a.mov(scratch, Value::boolean(false).bits());
                 a.str(scratch, a64::ptr(top_reg, -16));
                 a.sub(top_reg, top_reg, 8);
@@ -841,20 +1435,12 @@ JITFunc JITCompiler::compile(FunctionObject* function) {
                 break;
             }
             default: {
-                // Unsupported opcode, fall back to interpreter
-                a.str(top_reg, a64::ptr(co_reg, offsetStack + 8));
-                if (start_i == 0) {
-                    a.mov(a64::x0, -1);
-                } else {
-                    a.mov(a64::x0, (uint64_t)start_i); // Return current IP to the interpreter
-                }
-                a.b(epilogue);
-                goto compilation_done;
+                // Unsupported opcode, cannot safely compile function
+                return nullptr;
             }
         }
     }
 
-compilation_done:
     // Bind any remaining labels to prevent asmjit errors
     for (size_t j = 0; j < labels.size(); j++) {
         if (!boundLabels[j]) {

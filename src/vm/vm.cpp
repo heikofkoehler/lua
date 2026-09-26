@@ -1220,10 +1220,7 @@ void VM::runtimeError(const std::string& message, int level) {
             isRunningErrorHandler_ = prevRunning;
             throw;
         } catch (const RuntimeError&) {
-            isHandlingStackError_ = prevStackError;
-            errorHandlerDepth_--;
-            isRunningErrorHandler_ = prevRunning;
-            throw;
+            handlerSuccess = false;
         } catch (...) {
             handlerSuccess = false;
         }
@@ -3003,6 +3000,23 @@ void VM::jitCall(VM* vm, uint32_t argCount, uint32_t retCount, uint32_t nextIp) 
     vm->callValue(argCount, retCount);
 }
 
+void VM::jitCallMulti(VM* vm, uint32_t fixedArgCount, uint32_t retCount, uint32_t nextIp) {
+    vm->getFrame(0)->ip = nextIp;
+    int actualArgCount = static_cast<int>(fixedArgCount) + static_cast<int>(vm->currentCoroutine_->lastResultCount);
+    vm->callValue(actualArgCount, retCount);
+}
+
+void VM::jitTailCall(VM* vm, uint32_t argCount, uint32_t nextIp) {
+    vm->getFrame(0)->ip = nextIp;
+    vm->callValue(argCount, 0, true);
+}
+
+void VM::jitTailCallMulti(VM* vm, uint32_t fixedArgCount, uint32_t nextIp) {
+    vm->getFrame(0)->ip = nextIp;
+    int actualArgCount = static_cast<int>(fixedArgCount) + static_cast<int>(vm->currentCoroutine_->lastResultCount);
+    vm->callValue(actualArgCount, 0, true);
+}
+
 void VM::jitReturnValue(VM* vm, uint32_t count) {
     size_t stackBase = vm->getFrame(0)->stackBase;
     vm->closeUpvalues(stackBase);
@@ -3393,4 +3407,174 @@ void VM::jitLe(VM* vm, uint32_t nextIp) {
             vm->runtimeError("attempt to compare " + a.typeToString() + " and " + b.typeToString());
         }
     }
+}
+
+bool VM::jitForPrep(VM* vm, uint32_t rawBase, uint32_t offset) {
+    (void)offset;
+    bool stepDefault = (rawBase & 0x80) != 0;
+    uint8_t base = rawBase & 0x7F;
+    size_t actualBase = vm->currentFrame().stackBase + base;
+    if (stepDefault) {
+        if (actualBase + 1 >= vm->currentCoroutine_->stack.size()) {
+            vm->runtimeError("Invalid stack for numeric for");
+            return true;
+        }
+        vm->push(Value::integer(1));
+        vm->push(Value::nil());
+    } else {
+        if (actualBase + 2 >= vm->currentCoroutine_->stack.size()) {
+            vm->runtimeError("Invalid stack for numeric for");
+            return true;
+        }
+        vm->push(Value::nil());
+    }
+    Value& v_init = vm->currentCoroutine_->stack[actualBase];
+    Value& v_limit = vm->currentCoroutine_->stack[actualBase + 1];
+    Value& v_step = vm->currentCoroutine_->stack[actualBase + 2];
+    Value& v_ext = vm->currentCoroutine_->stack[actualBase + 3];
+
+    auto convertVal = [vm](Value& v, const char* name, int64_t& outI, double& outD, bool& isInt) -> bool {
+        if (v.isInteger()) {
+            outI = v.asInteger();
+            isInt = true;
+            return true;
+        } else if (v.isFloat()) {
+            outD = v.asNumber();
+            isInt = false;
+            return true;
+        } else if (v.isString()) {
+            if (vm->stringToNumber(vm->getStringValue(v), outD, outI, isInt)) {
+                return true;
+            }
+        }
+        vm->runtimeError(std::string("bad 'for' ") + name + " (number expected, got " + vm->typeName(v) + ")");
+        return false;
+    };
+
+    int64_t initI = 0, limitI = 0, stepI = 0;
+    double initD = 0.0, limitD = 0.0, stepD = 0.0;
+    bool initIsInt = false, limitIsInt = false, stepIsInt = false;
+
+    if (!convertVal(v_init, "initial value", initI, initD, initIsInt)) return true;
+    if (!convertVal(v_limit, "limit", limitI, limitD, limitIsInt)) return true;
+    if (!convertVal(v_step, "step", stepI, stepD, stepIsInt)) return true;
+
+    if ((stepIsInt && stepI == 0) || (!stepIsInt && stepD == 0.0)) {
+        vm->runtimeError("'for' step is zero");
+        return true;
+    }
+
+    if (initIsInt && stepIsInt) {
+        bool skipLoop = false;
+        if (limitIsInt) {
+            if (stepI > 0 ? (initI > limitI) : (initI < limitI)) {
+                skipLoop = true;
+            }
+        } else {
+            if (std::isnan(limitD)) {
+                skipLoop = true;
+            } else if (stepI > 0) {
+                if (limitD < static_cast<double>(std::numeric_limits<int64_t>::min())) {
+                    skipLoop = true;
+                } else if (limitD >= static_cast<double>(std::numeric_limits<int64_t>::max())) {
+                    limitI = std::numeric_limits<int64_t>::max();
+                    if (initI > limitI) skipLoop = true;
+                } else {
+                    limitI = static_cast<int64_t>(std::floor(limitD));
+                    if (initI > limitI) skipLoop = true;
+                }
+            } else {
+                if (limitD > static_cast<double>(std::numeric_limits<int64_t>::max())) {
+                    skipLoop = true;
+                } else if (limitD <= static_cast<double>(std::numeric_limits<int64_t>::min())) {
+                    limitI = std::numeric_limits<int64_t>::min();
+                    if (initI < limitI) skipLoop = true;
+                } else {
+                    limitI = static_cast<int64_t>(std::ceil(limitD));
+                    if (initI < limitI) skipLoop = true;
+                }
+            }
+        }
+
+        if (skipLoop) {
+            vm->currentCoroutine_->stack.resize(actualBase);
+            return true;
+        }
+
+        v_init = vm->makeInteger(initI);
+        v_limit = vm->makeInteger(limitI);
+        v_step = vm->makeInteger(stepI);
+        if (v_init.isObj()) vm->writeBarrierBackward(vm->currentCoroutine_, v_init.asObj());
+        if (v_limit.isObj()) vm->writeBarrierBackward(vm->currentCoroutine_, v_limit.asObj());
+        if (v_step.isObj()) vm->writeBarrierBackward(vm->currentCoroutine_, v_step.asObj());
+        v_ext = v_init;
+    } else {
+        double initF = initIsInt ? static_cast<double>(initI) : initD;
+        double limitF = limitIsInt ? static_cast<double>(limitI) : limitD;
+        double stepF = stepIsInt ? static_cast<double>(stepI) : stepD;
+
+        bool skipLoop = false;
+        if (std::isnan(initF) || std::isnan(limitF) || std::isnan(stepF)) {
+            skipLoop = true;
+        } else if (stepF > 0 ? (initF > limitF) : (initF < limitF)) {
+            skipLoop = true;
+        }
+
+        if (skipLoop) {
+            vm->currentCoroutine_->stack.resize(actualBase);
+            return true;
+        }
+
+        v_init = Value::number(initF);
+        v_limit = Value::number(limitF);
+        v_step = Value::number(stepF);
+        v_ext = v_init;
+    }
+    return false;
+}
+
+bool VM::jitForLoopFallback(VM* vm, uint32_t base) {
+    size_t actualBase = vm->currentFrame().stackBase + base;
+    if (actualBase + 3 >= vm->currentCoroutine_->stack.size()) {
+        vm->runtimeError("Invalid stack for numeric for loop");
+        return false;
+    }
+    Value& v_init = vm->currentCoroutine_->stack[actualBase];
+    Value& v_limit = vm->currentCoroutine_->stack[actualBase + 1];
+    Value& v_step = vm->currentCoroutine_->stack[actualBase + 2];
+    Value& v_ext = vm->currentCoroutine_->stack[actualBase + 3];
+
+    bool canContinue = false;
+    if (v_init.isInteger() && v_step.isInteger()) {
+        int64_t initI = v_init.asInteger();
+        int64_t stepI = v_step.asInteger();
+        int64_t limitI = v_limit.asInteger();
+
+        int64_t nextI;
+        bool overflow = __builtin_add_overflow(initI, stepI, &nextI);
+        if (!overflow) {
+            canContinue = (stepI > 0) ? (nextI <= limitI) : (nextI >= limitI);
+        }
+        if (canContinue) {
+            vm->closeUpvalues(actualBase + 3);
+            v_init = vm->makeInteger(nextI);
+            if (v_init.isObj()) vm->writeBarrierBackward(vm->currentCoroutine_, v_init.asObj());
+            v_ext = v_init;
+        }
+    } else {
+        double initF = v_init.asNumber();
+        double stepF = v_step.asNumber();
+        double limitF = v_limit.asNumber();
+        double nextF = initF + stepF;
+        canContinue = (stepF > 0) ? (nextF <= limitF) : (nextF >= limitF);
+        if (canContinue) {
+            vm->closeUpvalues(actualBase + 3);
+            v_init = Value::number(nextF);
+            v_ext = v_init;
+        }
+    }
+    if (!canContinue) {
+        vm->currentCoroutine_->stack.resize(actualBase);
+    }
+    return canContinue;
 }

@@ -173,6 +173,9 @@ public:
     static void jitCloseUpvalues(VM* vm, uint32_t stackIndex);
     static void jitClosure(VM* vm, uint32_t constantIndex, uint32_t bytecodeOffset);
     static void jitCall(VM* vm, uint32_t argCount, uint32_t retCount, uint32_t nextIp);
+    static void jitCallMulti(VM* vm, uint32_t fixedArgCount, uint32_t retCount, uint32_t nextIp);
+    static void jitTailCall(VM* vm, uint32_t argCount, uint32_t nextIp);
+    static void jitTailCallMulti(VM* vm, uint32_t fixedArgCount, uint32_t nextIp);
     static void jitReturnValue(VM* vm, uint32_t count);
     static void jitEnsureStack(VM* vm, uint32_t needed);
 
@@ -201,6 +204,8 @@ public:
     static void jitEq(VM* vm, uint32_t nextIp);
     static void jitLt(VM* vm, uint32_t nextIp);
     static void jitLe(VM* vm, uint32_t nextIp);
+    static bool jitForPrep(VM* vm, uint32_t base, uint32_t offset);
+    static bool jitForLoopFallback(VM* vm, uint32_t base);
 
 
     // Registry for internal use (stable storage)

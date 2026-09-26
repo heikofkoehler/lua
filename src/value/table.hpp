@@ -44,6 +44,7 @@ static inline bool toTableIndex(const Value& key, int64_t& idx) {
 
 // Table object: Lua's associative array (hybrid flat array + hash map)
 class TableObject : public GCObject {
+    friend class JITCompiler;
 public:
     TableObject(size_t nseq = 0, size_t nrec = 0)
         : GCObject(GCObject::Type::TABLE), capacity_(nseq + nrec), arrayCapacity_(nseq) {
