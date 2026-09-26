@@ -227,11 +227,26 @@ Features:
 - **Expression Evaluation**: Direct expressions like `2 + 2` evaluate and print automatically.
 - **Meta-commands**: `=expr`, `globals`, and `help`.
 
-### Bytecode Disassembly
+### Bytecode Disassembly & Compiler (`luac`)
 ```bash
+# Disassemble bytecode directly
 ./build/lua -L script.lua
+
+# Compile Lua script to binary bytecode (default: luac.out)
+./build/luac script.lua
+
+# Compile with custom output file and stripped debug information
+./build/luac -s -o compiled.luac script.lua
+
+# Disassemble bytecode using luac
+./build/luac -l script.lua
+
+# Syntax check only without emitting output
+./build/luac -p script.lua
+
+# Run compiled bytecode directly with the VM
+./build/lua compiled.luac
 ```
-Displays function metadata, parameters, local variable life ranges, constant pools, and recursive nested closures.
 
 ---
 

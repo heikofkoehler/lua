@@ -117,6 +117,25 @@ set_target_properties(lua PROPERTIES
     ENABLE_EXPORTS ON
 )
 
+# Create luac executable
+add_executable(luac src/luac.cpp ${CORE_SOURCES})
+
+if(MSVC)
+    target_compile_options(luac PRIVATE /W4 /WX)
+else()
+    target_compile_options(luac PRIVATE -Wall -Wextra -Wpedantic -Werror -Wno-gnu-anonymous-struct -Wno-nested-anon-types)
+endif()
+
+if(USE_JIT)
+    target_link_libraries(luac PRIVATE asmjit::asmjit)
+endif()
+
+target_include_directories(luac PRIVATE ${CMAKE_SOURCE_DIR}/src ${CMAKE_SOURCE_DIR}/include)
+set_target_properties(luac PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}
+)
+
+
 # Build liblua shared library for external C modules and Luarocks
 add_library(liblua SHARED ${CORE_SOURCES})
 set_target_properties(liblua PROPERTIES
@@ -218,9 +237,10 @@ add_custom_target(test
     COMMAND ./run_all_tests.sh ../build/lua
     COMMAND ../build/test_c_api
     COMMAND ../build/test_cpp_api
+    COMMAND ./test_luac.sh ../build/lua ../build/luac
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}/tests
-    DEPENDS lua test_c_api test_cpp_api embedding_demo dummy_module lfs cjson
-    COMMENT "Running all Lua VM unit tests and API tests"
+    DEPENDS lua luac test_c_api test_cpp_api embedding_demo dummy_module lfs cjson
+    COMMENT "Running all Lua VM unit tests, API tests, and luac tests"
 )
 
 # Custom benchmark target

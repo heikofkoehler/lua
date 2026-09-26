@@ -29,6 +29,7 @@ This document tracks the features, specifications, and modernization improvement
 - [x] **Incremental GC:** Upgrade the mark-and-sweep collector to an incremental or generational model to reduce pause times.
 
 ## 5. Tooling, APIs & Performance
+- [x] **Standalone Bytecode Compiler (`luac`)**: Standard `luac` CLI tool supporting `-o`, `-l` (disassemble/list), `-s` (strip debug info), `-p` (parse-only), `-v` (version), and multi-file bytecode combination.
 - [x] **JIT Compilation:** High-performance ARM64 Template JIT using AsmJit with hotspot detection, compiling arithmetic, bitwise, comparison, table access, closure, and call operations.
 - [x] **Lua C API & Dynamic Library (`liblua`)**: Lua 5.4/5.5 compatible C API (`lua.h`, `lauxlib.h`, `lualib.h`, `luaconf.h`) and shared library build for dynamic module loading and Luarocks packages.
 - [x] **Modern C++17/20 Embedding API**: Header-only C++ interface (`include/lua/lua.hpp`) with RAII `lua::Context`, automatic stack marshaling, STL container conversions, callable lambda bindings, and multi-return tuples.
