@@ -8,11 +8,16 @@
 #include "value/closure.hpp"
 #include "value/userdata.hpp"
 #include "value/file.hpp"
+#include "compiler/lexer.hpp"
+#include "compiler/parser.hpp"
+#include "compiler/codegen.hpp"
 #include <cstring>
 #include <algorithm>
 #include <cmath>
 #include <cstdarg>
 #include <cstdlib>
+#include <fstream>
+#include <iostream>
 
 // State manipulation
 lua_State *lua_newstate(void) {
@@ -1256,4 +1261,64 @@ void lua_replace(lua_State *L, int idx) {
     lua_copy(L, -1, idx);
     lua_pop(L, 1);
 }
+
+int luaL_loadbufferx(lua_State *L, const char *buff, size_t sz, const char *name, const char *mode) {
+    (void)mode;
+    std::string source(buff ? buff : "", sz);
+    std::string chunkName = name ? name : "chunk";
+    try {
+        Lexer lexer(source);
+        Parser parser(lexer);
+        auto program = parser.parse();
+        if (!program) {
+            lua_pushstring(L, "syntax error: unexpected end of input");
+            return LUA_ERRSYNTAX;
+        }
+        CodeGenerator codegen;
+        auto function = codegen.generate(program.get(), chunkName);
+        if (!function) {
+            lua_pushstring(L, "code generation failed");
+            return LUA_ERRSYNTAX;
+        }
+        FunctionObject* funcPtr = function.get();
+        L->vm->registerFunction(function.release());
+        L->vm->internConstants(*funcPtr);
+        ClosureObject* closure = L->vm->createClosure(funcPtr);
+        L->vm->setupRootUpvalues(closure);
+        L->vm->push(Value::closure(closure));
+        return LUA_OK;
+    } catch (const CompileError& e) {
+        lua_pushstring(L, e.what());
+        return LUA_ERRSYNTAX;
+    } catch (const std::exception& e) {
+        lua_pushstring(L, e.what());
+        return LUA_ERRSYNTAX;
+    }
+}
+
+int luaL_loadstring(lua_State *L, const char *s) {
+    return luaL_loadbufferx(L, s, s ? strlen(s) : 0, s, nullptr);
+}
+
+int luaL_loadfilex(lua_State *L, const char *filename, const char *mode) {
+    std::string content;
+    std::string chunkName;
+    if (filename == nullptr) {
+        chunkName = "=stdin";
+        content.assign((std::istreambuf_iterator<char>(std::cin)),
+                       std::istreambuf_iterator<char>());
+    } else {
+        std::ifstream file(filename);
+        if (!file.is_open()) {
+            std::string err = std::string("cannot open ") + filename;
+            lua_pushstring(L, err.c_str());
+            return LUA_ERRFILE;
+        }
+        content.assign((std::istreambuf_iterator<char>(file)),
+                       std::istreambuf_iterator<char>());
+        chunkName = std::string("@") + filename;
+    }
+    return luaL_loadbufferx(L, content.data(), content.size(), chunkName.c_str(), mode);
+}
+
 

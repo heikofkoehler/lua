@@ -16,6 +16,7 @@ typedef struct luaL_Reg {
 
 #define LUA_NOREF       (-2)
 #define LUA_REFNIL      (-1)
+#define LUA_ERRFILE     (LUA_ERRERR+1)
 
 #define luaL_checkversion(L) ((void)0)
 #define luaL_newstate() lua_newstate()
@@ -95,6 +96,18 @@ LUALIB_API int         (luaL_ref) (lua_State *L, int t);
 LUALIB_API void        (luaL_unref) (lua_State *L, int t, int ref);
 
 LUALIB_API int         (luaL_error) (lua_State *L, const char *fmt, ...);
+
+/* Load / Do functions */
+LUALIB_API int         (luaL_loadbufferx) (lua_State *L, const char *buff, size_t sz, const char *name, const char *mode);
+#define luaL_loadbuffer(L, s, sz, n) luaL_loadbufferx(L, s, sz, n, NULL)
+LUALIB_API int         (luaL_loadstring) (lua_State *L, const char *s);
+LUALIB_API int         (luaL_loadfilex) (lua_State *L, const char *filename, const char *mode);
+#define luaL_loadfile(L, f) luaL_loadfilex(L, f, NULL)
+
+#define luaL_dostring(L, s) \
+    (luaL_loadstring(L, s) || lua_pcall(L, 0, LUA_MULTRET, 0))
+#define luaL_dofile(L, fn) \
+    (luaL_loadfile(L, fn) || lua_pcall(L, 0, LUA_MULTRET, 0))
 
 /* Buffer functions */
 LUALIB_API void        (luaL_buffinit) (lua_State *L, luaL_Buffer *B);

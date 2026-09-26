@@ -25,7 +25,7 @@ cmake_install.cmake
 Thumbs.db
 
 # Executables
-lua
+/lua
 *.exe
 
 # Test scripts

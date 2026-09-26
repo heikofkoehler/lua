@@ -109,7 +109,7 @@ endif()
 target_link_libraries(lua PRIVATE linenoise)
 
 # Include directories
-target_include_directories(lua PRIVATE ${CMAKE_SOURCE_DIR}/src)
+target_include_directories(lua PRIVATE ${CMAKE_SOURCE_DIR}/src ${CMAKE_SOURCE_DIR}/include)
 
 # Set output directory and enable symbol exports for dynamic modules
 set_target_properties(lua PROPERTIES
@@ -124,7 +124,7 @@ set_target_properties(liblua PROPERTIES
     LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}
     RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}
 )
-target_include_directories(liblua PUBLIC ${CMAKE_SOURCE_DIR}/src)
+target_include_directories(liblua PUBLIC ${CMAKE_SOURCE_DIR}/src ${CMAKE_SOURCE_DIR}/include)
 if(USE_JIT)
     target_link_libraries(liblua PRIVATE asmjit::asmjit)
 endif()
@@ -136,11 +136,35 @@ target_include_directories(dummy_module PRIVATE ${CMAKE_SOURCE_DIR}/src)
 # C API Test Executable
 add_executable(test_c_api tests/test_c_api.cpp ${CORE_SOURCES})
 target_compile_options(test_c_api PRIVATE -Wall -Wextra -Wpedantic -Wno-gnu-anonymous-struct -Wno-nested-anon-types)
-target_include_directories(test_c_api PRIVATE ${CMAKE_SOURCE_DIR}/src)
+target_include_directories(test_c_api PRIVATE ${CMAKE_SOURCE_DIR}/src ${CMAKE_SOURCE_DIR}/include)
 if(USE_JIT)
     target_link_libraries(test_c_api PRIVATE asmjit::asmjit)
 endif()
 set_target_properties(test_c_api PROPERTIES 
+    RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}
+    ENABLE_EXPORTS ON
+)
+
+# Modern C++ Embedding API Test Executable
+add_executable(test_cpp_api tests/test_cpp_api.cpp ${CORE_SOURCES})
+target_compile_options(test_cpp_api PRIVATE -Wall -Wextra -Wpedantic -Wno-gnu-anonymous-struct -Wno-nested-anon-types)
+target_include_directories(test_cpp_api PRIVATE ${CMAKE_SOURCE_DIR}/src ${CMAKE_SOURCE_DIR}/include)
+if(USE_JIT)
+    target_link_libraries(test_cpp_api PRIVATE asmjit::asmjit)
+endif()
+set_target_properties(test_cpp_api PROPERTIES 
+    RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}
+    ENABLE_EXPORTS ON
+)
+
+# Modern C++ Embedding Demo Executable
+add_executable(embedding_demo examples/embedding_demo.cpp ${CORE_SOURCES})
+target_compile_options(embedding_demo PRIVATE -Wall -Wextra -Wpedantic -Wno-gnu-anonymous-struct -Wno-nested-anon-types)
+target_include_directories(embedding_demo PRIVATE ${CMAKE_SOURCE_DIR}/src ${CMAKE_SOURCE_DIR}/include)
+if(USE_JIT)
+    target_link_libraries(embedding_demo PRIVATE asmjit::asmjit)
+endif()
+set_target_properties(embedding_demo PROPERTIES 
     RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}
     ENABLE_EXPORTS ON
 )
@@ -192,7 +216,9 @@ endif()
 # Custom test target
 add_custom_target(test
     COMMAND ./run_all_tests.sh ../build/lua
+    COMMAND ../build/test_c_api
+    COMMAND ../build/test_cpp_api
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}/tests
-    DEPENDS lua test_c_api dummy_module lfs cjson
-    COMMENT "Running all Lua VM tests"
+    DEPENDS lua test_c_api test_cpp_api embedding_demo dummy_module lfs cjson
+    COMMENT "Running all Lua VM unit tests and API tests"
 )
