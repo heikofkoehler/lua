@@ -98,6 +98,8 @@ set(SOURCES
     src/vm/stdlib_utf8.cpp
     src/api/lua_api.cpp
     src/value/socket.cpp
+    src/lsp/analysis.cpp
+    src/lsp/server.cpp
 )
 
 # Core sources for reuse in tests
@@ -143,6 +145,24 @@ endif()
 
 target_include_directories(luac PRIVATE ${CMAKE_SOURCE_DIR}/src ${CMAKE_SOURCE_DIR}/include)
 set_target_properties(luac PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}
+)
+
+# Create lua-lsp executable
+add_executable(lua-lsp src/lsp/main.cpp ${CORE_SOURCES})
+
+if(MSVC)
+    target_compile_options(lua-lsp PRIVATE /W4 /WX)
+else()
+    target_compile_options(lua-lsp PRIVATE -Wall -Wextra -Wpedantic -Werror -Wno-gnu-anonymous-struct -Wno-nested-anon-types)
+endif()
+
+if(USE_JIT)
+    target_link_libraries(lua-lsp PRIVATE asmjit::asmjit)
+endif()
+
+target_include_directories(lua-lsp PRIVATE ${CMAKE_SOURCE_DIR}/src ${CMAKE_SOURCE_DIR}/include)
+set_target_properties(lua-lsp PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}
 )
 
@@ -253,9 +273,10 @@ add_custom_target(test
     COMMAND ../build/test_c_api
     COMMAND ../build/test_cpp_api
     COMMAND ./test_luac.sh ../build/lua ../build/luac
+    COMMAND ./test_lsp.sh ../build/lua ../build/lua-lsp
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}/tests
-    DEPENDS lua luac test_c_api test_cpp_api embedding_demo dummy_module lfs cjson
-    COMMENT "Running all Lua VM unit tests, API tests, and luac tests"
+    DEPENDS lua luac lua-lsp test_c_api test_cpp_api embedding_demo dummy_module lfs cjson
+    COMMENT "Running all Lua VM unit tests, API tests, luac tests, and LSP tests"
 )
 
 # Custom benchmark target
@@ -271,7 +292,7 @@ add_custom_target(benchmark
 # ==============================================================================
 
 # Install binaries and shared library
-install(TARGETS lua luac liblua
+install(TARGETS lua luac lua-lsp liblua
     EXPORT LuaTargets
     RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
     LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}

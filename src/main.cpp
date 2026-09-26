@@ -2,6 +2,7 @@
 #include "compiler/lexer.hpp"
 #include "compiler/parser.hpp"
 #include "compiler/codegen.hpp"
+#include "lsp/server.hpp"
 #include "vm/vm.hpp"
 #include <iostream>
 #include <fstream>
@@ -618,6 +619,7 @@ void printUsage(const char* program) {
               << "  -v        show version information\n"
               << "  -E        ignore environment variables\n"
               << "  -W        turn warnings on\n"
+              << "  --lsp     start Language Server Protocol (LSP) server\n"
               << "  --        stop handling options\n"
               << "  -         stop handling options and execute stdin" << std::endl;
 }
@@ -666,6 +668,9 @@ int main(int argc, char* argv[]) {
         if (arg == "--nojit") {
             jitEnabled = false;
             continue;
+        } else if (arg == "--lsp") {
+            lsp::LanguageServer server;
+            return server.run(std::cin, std::cout);
         } else if (arg == "-c" || arg == "--compile") {
             compileOnly = true;
             continue;

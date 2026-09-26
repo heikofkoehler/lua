@@ -109,6 +109,16 @@ curl -s -X POST http://127.0.0.1:8080/api/render \
 - **`utf8`**: `char`, `charpattern`, `codes`, `codepoint`, `len`, `offset` (supporting dual-return index ranges and lax mode).
 - **`debug`**: `getinfo`, `getlocal`, `setlocal`, `getupvalue`, `setupvalue`, `upvalueid`, `upvaluejoin`, `traceback`, `sethook`.
 
+### Tooling & Language Server Protocol (LSP)
+- **Standalone Compiler (`luac`)**: Compile chunks to bytecode (`-o`), list disassembly (`-l`), strip debug info (`-s`), syntax check (`-p`), and combine multiple scripts into one closure.
+- **Native Language Server (`lua-lsp` & `lua --lsp`)**:
+  - Full Language Server Protocol (JSON-RPC 2.0 over stdio) implementation.
+  - Real-time syntax diagnostics with exact line and column ranges (`textDocument/publishDiagnostics`).
+  - Document symbol hierarchy and outline (`textDocument/documentSymbol`).
+  - Rich hover tooltips with Markdown documentation for Lua 5.5 standard libraries, keywords, and user declarations (`textDocument/hover`).
+  - Jump to definition for local variables, parameters, and functions (`textDocument/definition`).
+  - Context-aware code completions for keywords, globals, and table members (`textDocument/completion`).
+
 ---
 
 ## Building
@@ -169,6 +179,12 @@ bash tests/run_all_tests.sh "$PWD/build/lua"
 # Run performance benchmark suite
 cmake --build build --target benchmark
 # (or directly: bash benchmarks/run.sh)
+
+# Run luac compiler test suite
+bash tests/test_luac.sh
+
+# Run native Language Server Protocol (LSP) test suite
+bash tests/test_lsp.sh
 
 # Run CLI and disassembler tests
 bash tests/test_cli_flags.sh
@@ -261,6 +277,52 @@ Features:
 
 # Run compiled bytecode directly with the VM
 ./build/lua compiled.luac
+```
+
+### Language Server Protocol (`lua-lsp`)
+
+Start the native Language Server Protocol engine over standard I/O (JSON-RPC 2.0):
+
+```bash
+# Run dedicated LSP server
+./build/lua-lsp --stdio
+
+# Or start via main interpreter binary
+./build/lua --lsp
+```
+
+#### Editor Configuration Examples
+
+**VS Code (`settings.json`):**
+```json
+{
+  "lua.lsp.serverPath": "/usr/local/bin/lua-lsp"
+}
+```
+
+**Neovim (`init.lua`):**
+```lua
+vim.api.nvim_create_autocmd("FileType", {
+  pattern = "lua",
+  callback = function()
+    vim.lsp.start({
+      name = "lua-lsp",
+      cmd = { "/usr/local/bin/lua-lsp", "--stdio" },
+      root_dir = vim.fs.dirname(vim.fs.find({ ".git" }, { upward = true })[1]),
+    })
+  end,
+})
+```
+
+**Helix (`languages.toml`):**
+```toml
+[[language]]
+name = "lua"
+language-servers = ["lua-lsp"]
+
+[language-server.lua-lsp]
+command = "lua-lsp"
+args = ["--stdio"]
 ```
 
 ---
