@@ -11,6 +11,10 @@
 
 namespace {
 
+// Maximum __index/__newindex chain traversals before reporting a possible
+// loop. Matches PUC Lua's MAXTAGLOOP (2000).
+constexpr int MAX_TAG_LOOP = 2000;
+
 struct AbstractVal {
     enum Source { UNKNOWN, GLOBAL, LOCAL, UPVALUE, FIELD, METHOD };
     Source source = UNKNOWN;
@@ -683,7 +687,7 @@ bool VM::run(size_t targetFrameCount) {
 
                 Value t = upTable;
                 bool done = false;
-                for (int loop = 0; loop < 100; loop++) {
+                for (int loop = 0; loop < MAX_TAG_LOOP; loop++) {
                     if (t.isTable()) {
                         TableObject* table = t.asTableObj();
                         Value value = table->get(key);
@@ -755,7 +759,7 @@ bool VM::run(size_t targetFrameCount) {
 
                 Value t = upTable;
                 bool done = false;
-                for (int loop = 0; loop < 100; loop++) {
+                for (int loop = 0; loop < MAX_TAG_LOOP; loop++) {
                     if (t.isTable()) {
                         TableObject* table = t.asTableObj();
                         if (table->has(key)) {
@@ -1697,7 +1701,7 @@ bool VM::run(size_t targetFrameCount) {
 
                 Value t = tableValue;
                 bool done = false;
-                for (int loop = 0; loop < 100; loop++) {
+                for (int loop = 0; loop < MAX_TAG_LOOP; loop++) {
                     if (t.isTable()) {
                         TableObject* table = t.asTableObj();
                         Value value = table->get(key);
@@ -1752,7 +1756,7 @@ bool VM::run(size_t targetFrameCount) {
 
                 Value t = tableValue;
                 bool done = false;
-                for (int loop = 0; loop < 100; loop++) {
+                for (int loop = 0; loop < MAX_TAG_LOOP; loop++) {
                     if (t.isTable()) {
                         TableObject* table = t.asTableObj();
                         if (table->getMetatable().isNil() || table->has(key)) {

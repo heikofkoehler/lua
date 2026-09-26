@@ -9,6 +9,7 @@
 #include <iostream>
 #include <fstream>
 #include <sstream>
+#include <cstdint>
 #include <chrono>
 #include <thread>
 
@@ -156,7 +157,9 @@ bool native_collectgarbage(VM* vm, int argCount) {
             return false;
         }
         double limit = vm->peek(0).asNumber();
-        vm->setMemoryLimit(static_cast<size_t>(limit));
+        // A limit of 0 (or negative) means "no limit" rather than 0 bytes,
+        // which could never be satisfied.
+        vm->setMemoryLimit(limit <= 0 ? SIZE_MAX : static_cast<size_t>(limit));
         for(int i=0; i<argCount; i++) vm->pop();
         vm->push(Value::nil());
         vm->currentCoroutine()->lastResultCount = 1;
