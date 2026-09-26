@@ -257,6 +257,16 @@ public:
     void markValue(const Value& value);
     void markObject(GCObject* object);
     void grayObject(GCObject* object);
+    // Temporary GC roots: for objects held in C++ locals that are not yet
+    // anchored in the object graph. A GC can run before the caller anchors
+    // them (e.g. createClosure allocates upvalues after creating the closure),
+    // and an unanchored object would be collected while the C++ code still
+    // uses it (use-after-free). Push the root right after addObject, pop it
+    // once the object is anchored (stack, frame, global, ...). Use
+    // TempRootGuard for exception safety. The caller MUST anchor the object
+    // before the next allocation that could trigger a GC.
+    void pushTempRoot(GCObject* obj) { tempRoots_.push_back(obj); }
+    void popTempRoot() { tempRoots_.pop_back(); }
     void sweep();
     void runFinalizers(bool force = false);
     void freeObject(GCObject* object);
@@ -384,6 +394,7 @@ private:
     GCObject* toBeFinalized_;     // Linked list of objects to be finalized
     std::vector<GCObject*> grayStack_; // Worklist for marking
     std::vector<GCObject*> rememberedSet_; // Old objects pointing to young objects (Generational GC)
+    std::vector<GCObject*> tempRoots_; // C++-held objects not yet anchored in the object graph
     size_t bytesAllocated_;       // Total bytes allocated
     size_t nextGC_;               // Threshold for next GC
     size_t memoryLimit_;          // Maximum bytes allowed before Emergency GC
@@ -422,6 +433,17 @@ private:
 
     // Trace execution (for debugging)
     void traceExecution();
+};
+
+// RAII guard for VM::pushTempRoot/popTempRoot (exception safe).
+class TempRootGuard {
+public:
+    TempRootGuard(VM* vm, GCObject* obj) : vm_(vm) { vm_->pushTempRoot(obj); }
+    ~TempRootGuard() { vm_->popTempRoot(); }
+    TempRootGuard(const TempRootGuard&) = delete;
+    TempRootGuard& operator=(const TempRootGuard&) = delete;
+private:
+    VM* vm_;
 };
 
 #endif // LUA_VM_HPP

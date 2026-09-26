@@ -44,6 +44,8 @@ void VM::markRoots() {
     for (int i = 0; i < Value::NUM_TYPES; i++) markValue(typeMetatables_[i]);
     markValue(lastErrorObject_);
     for (const auto& h : errorHandlers_) markValue(h);
+    // Temporarily rooted C++-held objects (not yet anchored in the graph)
+    for (GCObject* obj : tempRoots_) markObject(obj);
 
     // Mark interned constants
     for (const auto& val : rootedConstants_) {

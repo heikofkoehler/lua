@@ -4,7 +4,7 @@
 
 void ClosureObject::setUpvalue(size_t index, UpvalueObject* upvalue) {
     if (index < upvalues_.size()) {
-        if (upvalue && VM::currentVM) {
+        if (upvalue) {
             VM::currentVM->writeBarrier(this, upvalue);
         }
         upvalues_[index] = upvalue;

@@ -1298,6 +1298,10 @@ bool VM::run(size_t targetFrameCount) {
                 FunctionObject* function = currentFrame().chunk->getFunction(funcIndex);
 
                 ClosureObject* closure = createClosure(function);
+                // Anchor the closure on the stack BEFORE capturing upvalues:
+                // captureUpvalue allocates and can trigger a GC, which would
+                // collect the unanchored closure (use-after-free).
+                push(Value::closure(closure));
 
                 // Capture upvalues
                 for (size_t i = 0; i < closure->upvalueCount(); i++) {
@@ -1313,8 +1317,6 @@ bool VM::run(size_t targetFrameCount) {
                         closure->setUpvalue(i, upvalue);
                     }
                 }
-
-                push(Value::closure(closure));
                 break;
             }
 
@@ -1327,6 +1329,10 @@ bool VM::run(size_t targetFrameCount) {
                 FunctionObject* function = currentFrame().chunk->getFunction(funcIndex);
 
                 ClosureObject* closure = createClosure(function);
+                // Anchor the closure on the stack BEFORE capturing upvalues:
+                // captureUpvalue allocates and can trigger a GC, which would
+                // collect the unanchored closure (use-after-free).
+                push(Value::closure(closure));
 
                 // Capture upvalues
                 for (size_t i = 0; i < closure->upvalueCount(); i++) {
@@ -1342,8 +1348,6 @@ bool VM::run(size_t targetFrameCount) {
                         closure->setUpvalue(i, upvalue);
                     }
                 }
-
-                push(Value::closure(closure));
                 break;
             }
 

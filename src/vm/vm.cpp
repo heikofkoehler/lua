@@ -268,6 +268,10 @@ ClosureObject* VM::createClosure(FunctionObject* function) {
     size_t closureSize = sizeof(ClosureObject) + function->upvalueCount() * sizeof(UpvalueObject*);
     checkGC(closureSize);
     
+    // NOTE: the returned closure is NOT anchored in the object graph yet.
+    // The caller must anchor it (stack push, temp root, ...) before any
+    // subsequent allocation that could trigger a GC -- see setupRootUpvalues
+    // and OP_CLOSURE. An unanchored closure is collected as garbage.
     try {
         ClosureObject* closure = new ClosureObject(function, function->upvalueCount());
         addObject(closure);
@@ -331,6 +335,13 @@ CoroutineObject* VM::createCoroutine(const Value& func) {
 
 void VM::setupRootUpvalues(ClosureObject* closure, const Value& env, bool hasEnv) {
     if (closure->upvalueCount() == 0) return;
+
+    // The closure may not be anchored in the object graph yet (the caller
+    // anchors it after we return). The allocations below can trigger a GC,
+    // which would collect the unanchored closure (use-after-free). Temp-root
+    // it for the duration. The caller MUST anchor the closure before its
+    // next allocation.
+    TempRootGuard guard(this, closure);
 
     UpvalueObject* envUpvalue = nullptr;
     
@@ -2998,6 +3009,10 @@ void VM::jitClosure(VM* vm, uint32_t constantIndex, uint32_t bytecodeOffset) {
     FunctionObject* function = vm->getFrame(0)->chunk->getFunction(funcIndex);
 
     ClosureObject* closure = vm->createClosure(function);
+    // Anchor the closure on the stack BEFORE capturing upvalues:
+    // captureUpvalue allocates and can trigger a GC, which would
+    // collect the unanchored closure (use-after-free).
+    vm->push(Value::closure(closure));
 
     const std::vector<uint8_t>& code = vm->getFrame(0)->chunk->code();
     size_t offset = bytecodeOffset;
@@ -3015,8 +3030,6 @@ void VM::jitClosure(VM* vm, uint32_t constantIndex, uint32_t bytecodeOffset) {
             closure->setUpvalue(i, upvalue);
         }
     }
-
-    vm->push(Value::closure(closure));
 }
 
 void VM::jitCall(VM* vm, uint32_t argCount, uint32_t retCount, uint32_t nextIp) {
