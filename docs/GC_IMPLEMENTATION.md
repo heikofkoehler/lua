@@ -86,13 +86,5 @@ JIT-compiled functions need periodic GC checks, especially during loops:
 - **Loop Safety**: Long-running loops should include GC checkpoints to prevent memory exhaustion
 - **Fallback Mechanism**: Complex operations that allocate fall back to the interpreter, which handles GC automatically
 
-### Current Limitations
-The current JIT implementation lacks GC integration:
-- No GC checkpoints in compiled loops
-- Allocation-heavy operations not yet supported
-- Potential for memory leaks in hot JIT code
-
-### Future Enhancements
-- Add C ABI calls to `VM::checkGC()` in JIT templates
-- Implement GC-safe points in loop constructs
-- Support allocation operations with proper GC coordination
+### Current Status & JIT Integration
+JIT operations that allocate (table creation via `OP_NEW_TABLE`, closure creation via `OP_CLOSURE`, string concatenation via `OP_CONCAT`) dispatch via static C++ bridge helpers (e.g. `VM::jitNewTable`, `VM::jitClosure`, `VM::jitConcat`). These helpers call into VM object allocators (`vm->createTable()`, `vm->createClosure()`, etc.), automatically triggering `checkGC()` and tracking memory thresholds.

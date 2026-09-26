@@ -10,11 +10,11 @@ Welcome to the internal documentation for the Lua VM project. These documents pr
 ## Systems
 - [Garbage Collector Implementation](GC_IMPLEMENTATION.md): Details on the tri-color incremental and generational collector.
 - [Standard Library Implementation](STDLIB_IMPLEMENTATION.md): Overview of implemented libraries and native function architecture.
-- [C API Documentation](C_API.md): Guide to the Lua-compatible C API.
+- [C API & Modern C++ Embedding API](C_API.md): Guide to the Lua-compatible C API, shared library embedding, and the modern C++17/20 interface (`lua::Context`).
 - [REPL Features and Implementation](REPL.md): Interactive REPL details including autocomplete and multi-line support.
 
 ## Feature Spotlights
 - [Dot Notation and Method Calls](DOT_NOTATION.md): Implementation details for table access and `obj:method()` syntax.
 - [Bytecode Disassembler](REPL.md#bytecode-disassembly): How to use the `-L` flag to inspect compiled code.
-- [JIT Compilation Plan](JIT_COMPILATION_PLAN.md): Current status and future goals for the experimental JIT compiler.
-- [Lua 5.5 Compliance Plan](LUA_5_5_COMPLIANCE_PLAN.md): Gap analysis and implementation roadmap for full Lua 5.5 compliance.
+- [JIT Compilation Plan & Status](JIT_COMPILATION_PLAN.md): Current architecture and opcode implementation of the ARM64 template JIT compiler.
+- [Lua 5.5 Compliance Plan & Status](LUA_5_5_COMPLIANCE_PLAN.md): Gap analysis, test suite diagnostic matrix, and completed roadmap for full Lua 5.5 compliance.

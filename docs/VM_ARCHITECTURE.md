@@ -64,4 +64,4 @@ The VM includes an optional Just-In-Time (JIT) compiler that can compile hot fun
 - **NaN-boxing**: Native code handles Lua's NaN-boxed value representation for efficient type checking and arithmetic.
 
 ### Current JIT Status
-The JIT compiler currently supports basic arithmetic, stack operations, control flow, and function returns. Complex operations like table creation and function calls fall back to the interpreter.
+The JIT compiler supports full template execution across stack operations, arithmetic, bitwise operators, comparisons, table access and instantiation (`OP_NEW_TABLE`, `OP_GET_TABLE`, `OP_SET_TABLE`), closures, numeric loops (`OP_FORPREP`, `OP_FORLOOP`), and native function call/tail-call dispatches (`OP_CALL`, `OP_TAILCALL`).

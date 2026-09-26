@@ -12,77 +12,73 @@ Enhance the performance of the Lua VM by implementing a **Template Just-In-Time 
 - **Memory Management**: Executable memory allocation via AsmJit's JitRuntime
 - **VM Integration**: JIT compiler instantiated in VM, friend class access to internal state
 
-### 2.2 Completed Templates (Phase 2)
-The following opcodes are fully implemented with native ARM64 code generation:
+### 2.2 Completed Templates (Phases 2 & 4)
+The following opcode categories are fully implemented with native ARM64 code generation in `src/vm/jit.cpp`:
 
 **Stack Operations:**
-- `OP_CONSTANT` - Load constants directly to stack
-- `OP_GET_LOCAL` - Load local variables from frame base
-- `OP_SET_LOCAL` - Store to local variables
-- `OP_POP` - Adjust stack pointer
-- `OP_NIL` - Push nil values
+- `OP_CONSTANT`, `OP_CONSTANT_LONG` - Load constants directly to stack
+- `OP_GET_LOCAL`, `OP_SET_LOCAL` - Load/store local variables relative to frame base
+- `OP_POP`, `OP_DUP`, `OP_SWAP` - Stack manipulations
+- `OP_NIL`, `OP_TRUE`, `OP_FALSE` - Immediate literals
 
-**Arithmetic Operations:**
-- `OP_ADD` - Double precision floating point addition with NaN-boxing
-- `OP_SUB` - Double precision floating point subtraction
-- `OP_LESS_EQUAL` - Floating point comparison with boolean result
-- `OP_GREATER_EQUAL` - Floating point comparison with boolean result
+**Arithmetic & Bitwise Operations:**
+- `OP_ADD`, `OP_SUB`, `OP_MUL`, `OP_DIV` - Double-precision arithmetic with fast inline paths
+- `OP_IDIV`, `OP_MOD`, `OP_POW` - Integer division, modulo, and exponentiation
+- `OP_NEG` - Unary arithmetic negation
+- `OP_BAND`, `OP_BOR`, `OP_BXOR`, `OP_BNOT`, `OP_SHL`, `OP_SHR` - 64-bit integer bitwise operations
 
-**Control Flow:**
-- `OP_JUMP` - Unconditional jumps to labeled addresses
-- `OP_LOOP` - Backward jumps for loop constructs
-- `OP_JUMP_IF_FALSE` - Conditional jumps based on falsy values (nil/false)
+**Comparisons & Logic:**
+- `OP_EQUAL` - Equality comparison with type checking
+- `OP_LESS`, `OP_LESS_EQUAL`, `OP_GREATER`, `OP_GREATER_EQUAL` - Ordering comparisons
+- `OP_NOT` - Logical negation (truthy/falsy conversion)
 
-**Function Operations:**
-- `OP_RETURN` - Return nil from functions with stack cleanup
-- `OP_RETURN_VALUE` - Return single value from functions with stack cleanup
+**Control Flow & Loops:**
+- `OP_JUMP` - Unconditional forward jumps
+- `OP_LOOP` - Backward jumps for tight loop constructs
+- `OP_JUMP_IF_FALSE` - Conditional branches based on falsy values (nil/false)
+- `OP_FORPREP`, `OP_FORLOOP` - Specialized numeric for-loop mechanics with loop counter updates
 
-### 2.3 Completed Execution Integration (Phase 3)
+**Table & Field Access:**
+- `OP_NEW_TABLE` - Table instantiation
+- `OP_GET_TABLE`, `OP_SET_TABLE` - Indexed table reads and writes (with array fast paths)
+- `OP_LEN` - Length operator for strings and tables
+
+**Globals & Upvalues:**
+- `OP_GET_GLOBAL`, `OP_SET_GLOBAL` - Global environment variable access
+- `OP_GET_TABUP`, `OP_SET_TABUP`, `OP_GET_TABUP_LONG`, `OP_SET_TABUP_LONG` - Table upvalue indexing (`_ENV` accesses)
+- `OP_GET_UPVALUE`, `OP_SET_UPVALUE`, `OP_CLOSE_UPVALUE` - Lexical closure upvalue access and closing
+
+**Closures & Functions:**
+- `OP_CLOSURE`, `OP_CLOSURE_LONG` - Nested closure generation and upvalue capture
+- `OP_CONCAT` - String concatenation
+- `OP_CALL`, `OP_CALL_MULTI` - Function call invocation with single and multiple result expectations
+- `OP_TAILCALL`, `OP_TAILCALL_MULTI` - Proper tail call optimization in native code
+- `OP_RETURN`, `OP_RETURN_VALUE`, `OP_RETURN_VALUE_MULTI` - Function return mechanics
+
+### 2.3 Completed Execution Integration
 - **Entry Thunk**: `JITFunc` typedef for compiled function pointers
 - **Context Loading**: VM and coroutine state loaded from registers at function entry
 - **Stack Mapping**: Direct access to `currentCoroutine_->stack` via base pointer register
-- **State Synchronization**: Stack top and frame pointers updated in coroutine object
-- **Fallback Mechanism**: JIT functions return instruction pointer on completion/failure
+- **Stack Headroom**: Automatic dynamic stack capacity validation (`jitEnsureStack`)
+- **State Synchronization**: Stack top and frame pointers synchronized on calls and interpreter fallback
+- **Fallback Mechanism**: JIT functions return instruction pointer on completion/unhandled instructions
 
 ### 2.4 Completed Hotness Tracking
 - **Counters**: `hotness_` field in `FunctionObject` with increment methods
-- **Thresholds**: Different thresholds for different opcodes (loops: 50, calls: 10)
+- **Thresholds**: Tuned thresholds for loop jumps and calls
 - **Triggering**: Automatic JIT compilation when hotness exceeds threshold
 - **Caching**: Compiled JIT code cached in `FunctionObject::jitCode_`
 
-## 3. Remaining Implementation (Phase 4+)
+## 3. Future Extensions (Phase 5+)
 
-### 3.1 Missing Basic Opcodes
-The following fundamental opcodes need template implementation:
-- `OP_MUL`, `OP_DIV`, `OP_MOD` - Arithmetic operations
-- `OP_NEGATE` - Unary negation
-- `OP_NOT` - Logical NOT
-- `OP_EQUAL`, `OP_LESS`, `OP_GREATER` - Comparison operations
-- `OP_TRUE`, `OP_FALSE` - Boolean literals
-- `OP_CALL`, `OP_TAIL_CALL` - Function call mechanics
-- `OP_CLOSURE` - Closure creation with upvalue capture
+### 3.1 x86_64 Architecture Backend
+- Extend AsmJit code generation templates to support x86_64 calling conventions and instruction sets alongside ARM64.
 
-### 3.2 Missing Complex Operations
-- `OP_NEW_TABLE` - Table creation and initialization
-- `OP_SET_TABLE`, `OP_GET_TABLE` - Table operations
-- `OP_SET_UPVALUE`, `OP_GET_UPVALUE` - Upvalue access
-- `OP_CLOSE_UPVALUE` - Upvalue closing
-- String operations (`OP_CONCAT`, etc.)
-- Metamethod support
+### 3.2 Inline Caching & Polymorphic Type Feedback
+- Record seen types at `OP_GET_TABLE` / `OP_SET_TABLE` sites to emit monomorphic table access inline caches without indirect calls.
 
-### 3.3 Missing Advanced Features
-- **Multi-return Values**: Current implementation only handles single returns
-- **Error Handling**: Exception propagation and stack unwinding
-- **Garbage Collection**: Periodic GC checks during JIT execution
-- **Debug Support**: Source line mapping and debug hooks
-- **Coroutine Support**: Yield/resume across JIT boundaries
-
-### 3.4 C++ Callbacks for Complex Opcodes
-For opcodes requiring significant C++ logic:
-1. Implement static helper methods in `VM` class
-2. Add C ABI function calls in JIT templates
-3. Handle register preservation across calls
-4. Maintain stack consistency during callbacks
+### 3.3 Trace JIT / Loop Invariant Code Motion
+- Further specialize hot inner loops by hoisting bounds checks and invariant table lookups out of loops.
 
 ## 4. Architectural Approach: Template JIT
 A Template JIT is the most pragmatic approach for a stack-based VM. Instead of building a complex Intermediate Representation (IR) and optimizing it, the JIT maps each individual `OpCode` directly to a pre-written "template" of machine code.

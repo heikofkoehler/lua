@@ -40,8 +40,17 @@ The central structure is `lua_State`, which wraps the `VM` and tracks current ex
 ### Userdata
 - `lua_newuserdata(L, size)`: Allocates a new block of memory and pushes it as userdata.
 
+### Chunk Loading & Execution
+- `luaL_loadstring(L, s)`: Compiles a string buffer as a Lua chunk and leaves the compiled function on the stack. Returns `LUA_OK` or error code.
+- `luaL_loadbufferx(L, buff, sz, name, mode)`: Compiles a memory buffer with a custom chunk name and mode.
+- `luaL_loadfilex(L, filename, mode)`: Compiles a file from disk and pushes the resulting function.
+- `luaL_dostring(L, s)`: Convenience macro that loads and executes a string via `lua_pcall`.
+- `luaL_dofile(L, filename)`: Convenience macro that loads and executes a file via `lua_pcall`.
+
 ### Auxiliary Functions
-- `luaL_openlibs(L)`: Initializes all standard Lua libraries.
+- `luaL_openlibs(L)`: Initializes all standard Lua libraries (`_G`, `string`, `table`, `math`, `io`, `os`, `debug`, `utf8`, `coroutine`).
+- `luaL_newstate()`: Allocates and initializes a new `lua_State`.
+- `lua_close(L)`: Closes and releases resources associated with a `lua_State`.
 
 ### Function Calls
 - `lua_pcall(L, nargs, nres, msgh)`: Calls a function in protected mode.
@@ -49,8 +58,10 @@ The central structure is `lua_State`, which wraps the `VM` and tracks current ex
 
 ## Registering C Functions
 
-C functions must follow the signature:
-`int (*lua_CFunction) (lua_State *L)`
+C functions must follow the standard Lua signature:
+```c
+int (*lua_CFunction) (lua_State *L);
+```
 
 Example:
 ```cpp
@@ -69,12 +80,76 @@ lua_setglobal(L, "my_add");
 ## Internal Dispatch
 
 When `OP_CALL` encounters a value of type `TAG_C_FUNCTION`:
-1. It creates a temporary `lua_State` on the C++ stack.
+1. It creates an internal `lua_State` on the C++ stack referencing the active `VM` context.
 2. It sets `stackBase` to point to the first argument.
-3. It calls the `lua_CFunction`.
-4. It captures the return value (number of results) and moves them to the Lua stack, cleaning up the arguments.
+3. It invokes the `lua_CFunction`.
+4. It captures the return count and transfers returned values to the Lua VM stack, cleaning up the call frame.
 
-## Header Files
-- `src/api/lua.h`: The public C-style header.
-- `src/api/lua_state.h`: Internal state definition.
-- `src/api/lua_api.cpp`: Implementation of the API functions.
+---
+
+## Modern C++17/20 Embedding API (`lua::Context`)
+
+The project provides a header-only modern C++ embedding API in `include/lua/lua.hpp` under the `lua` namespace.
+
+### Key Capabilities
+- **RAII Lifecycle**: `lua::Context` automatically creates `lua_State` on construction and safely tears it down via `lua_close` on destruction.
+- **Type-Safe Marshaling**: Automatic conversion between C++ and Lua types via `lua::push` and `lua::get<T>`:
+  - Primitives: `bool`, integers (`int`, `int64_t`, `size_t`), floating point (`float`, `double`), string types (`const char*`, `std::string`, `std::string_view`).
+  - Containers: `std::vector<T>` maps to sequence tables, `std::map<K, V>` and `std::unordered_map<K, V>` map to associative tables.
+  - Optionals: `std::optional<T>` converts `nil` to `std::nullopt` and values to `std::make_optional`.
+  - Multiple Returns: `std::tuple<Args...>` unpacks into multiple return values on the Lua stack.
+- **Direct Lambda Binding**: `ctx.bind(name, callable)` binds arbitrary C++ lambdas, functions, or functors with type-checked argument unmarshaling and GC finalizers.
+- **Table & Global Proxies**: Ergonomic nested indexing `ctx["user"]["name"] = "Alice"`.
+
+### Modern C++ Example
+
+```cpp
+#include <lua/lua.hpp>
+#include <iostream>
+#include <vector>
+#include <tuple>
+
+int main() {
+    lua::Context ctx;
+    ctx.openLibs();
+
+    // Bind lambda returning multiple values
+    ctx.bind("stats", [](const std::vector<double>& values) {
+        double sum = 0.0;
+        double min_val = values.empty() ? 0.0 : values[0];
+        double max_val = min_val;
+        for (double v : values) {
+            sum += v;
+            if (v < min_val) min_val = v;
+            if (v > max_val) max_val = v;
+        }
+        double avg = values.empty() ? 0.0 : sum / values.size();
+        return std::make_tuple(avg, min_val, max_val);
+    });
+
+    // Execute script
+    ctx.execute(R"(
+        avg, min_v, max_v = stats({10.5, 20.0, 30.5, 40.0})
+    )");
+
+    std::cout << "Avg: " << ctx.get<double>("avg") << "\n";
+    std::cout << "Min: " << ctx.get<double>("min_v") << "\n";
+    std::cout << "Max: " << ctx.get<double>("max_v") << "\n";
+    return 0;
+}
+```
+
+---
+
+## Distribution Headers & Shared Library
+
+### Headers (`include/`)
+- `include/lua.h`: Standard C API definitions and function declarations.
+- `include/lauxlib.h`: Auxiliary library functions (`luaL_*`).
+- `include/lualib.h`: Standard library open functions (`luaL_openlibs`).
+- `include/luaconf.h`: Configuration macros and platform-specific definitions.
+- `include/lua.hpp`: Standard C++ wrapper including `lua.h`, `lauxlib.h`, and `lualib.h` inside `extern "C"`.
+- `include/lua/lua.hpp`: Modern C++17/20 header-only embedding API (`lua::Context`).
+
+### Shared Library
+The build generates `liblua.dylib` (macOS) or `liblua.so` (Linux). Third-party C modules and Luarocks packages link against this library or dynamically bind symbols via `package.loadlib`.

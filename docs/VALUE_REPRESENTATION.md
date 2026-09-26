@@ -20,19 +20,23 @@ If the value is a NaN, the lower bits are used to store the type and payload. We
 |------|-----------|---------|
 | Nil | 0xFFF1 | None |
 | Boolean | 0xFFF2 | 0 (false) or 1 (true) |
-| Integer | 0xFFF3 | 32-bit signed integer |
-| String | 0xFFF4 | Index into string pool |
-| Table | 0xFFF5 | Pointer to TableObject |
-| Closure | 0xFFF6 | Pointer to ClosureObject |
-| Function | 0xFFF7 | Pointer to FunctionObject |
-| Native Function | 0xFFF8 | Index into native function table |
-| Userdata | 0xFFF9 | Pointer to UserdataObject |
-| Coroutine | 0xFFFA | Pointer to CoroutineObject |
-| Upvalue | 0xFFFB | Pointer to UpvalueObject |
+| Integer | 0xFFF3 | 48-bit inline signed integer |
+| String | 0xFFF4 | Pointer to `StringObject` or compile-time index |
+| Table | 0xFFF5 | Pointer to `TableObject` |
+| Closure | 0xFFF6 | Pointer to `ClosureObject` |
+| Function | 0xFFF7 | Pointer to `FunctionObject` |
+| Native Function | 0xFFF8 | Index into native function dispatch table |
+| Userdata | 0xFFF9 | Pointer to `UserdataObject` |
+| Coroutine | 0xFFFA | Pointer to `CoroutineObject` |
+| Upvalue | 0xFFFB | Pointer to `UpvalueObject` |
 | C Function | 0xFFFC | Raw C function pointer |
+| File | 0xFFFD | Pointer to `FileObject` |
+| Socket | 0xFFFE | Pointer to `SocketObject` |
+| Int64 | 0xFFFF | Pointer to `Int64Object` or compile-time index |
 
-### Pointer Storage
-On 64-bit systems, only 48 bits of the address space are typically used. This allows us to store the pointer directly in the lower 48 bits of the 64-bit double, with the upper 16 bits acting as the NaN-box and type tag.
+### Pointer & Integer Storage
+- **Pointer Storage**: On 64-bit platforms, canonical virtual address spaces use at most 48 bits. Pointers to heap-allocated `GCObject` subclasses (`TableObject`, `ClosureObject`, `StringObject`, etc.) fit directly in the lower 48 bits, masked alongside the 16-bit NaN tag (`0xFFF0 | Type`).
+- **64-bit Integers**: Values within 48-bit signed range fit directly inline with `Type::INTEGER` (`0xFFF3`). Full 64-bit integers spanning the complete signed range (`[-2^63, 2^63 - 1]`, including `math.mininteger` and `math.maxinteger`) are allocated as `Int64Object` instances tagged with `Type::INT64` (`0xFFFF`), ensuring complete compliance with the Lua 5.3-5.5 integer specifications.
 
 ## Performance Benefits
 - **Zero Overhead for Numbers**: No extra tagging or branching needed for basic arithmetic.
