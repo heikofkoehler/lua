@@ -690,14 +690,13 @@ next_frame:
                     break;
                 }
                 case ROpCode::ROP_RETURN: {
-                    // R(A)..R(A+B-2) are return values (B=1: no values)
-                    int retCount = (B == 0) ? 0 : (B - 1);  // B=0: multires (not supported), B=1: 0 values
-                    if (B == 0) {
-                        hadError_ = true;
-                        return false;
-                    }
+                    // R(A)..R(A+B-2) are return values (B=1: no values, B=0: multires)
+                    bool isMultiRet = (B == 0);
+                    int retCount = isMultiRet ? static_cast<int>(currentCoroutine_->lastResultCount) : (B - 1);
                     
                     // Collect return values
+                    // Re-establish R in case stack reallocated
+                    R = currentCoroutine_->stack.data() + base;
                     std::vector<Value> retVals;
                     for (int i = 0; i < retCount; i++) {
                         retVals.push_back(R[A + i]);
