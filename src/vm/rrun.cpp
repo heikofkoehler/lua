@@ -47,7 +47,7 @@ next_frame:
         // For now, assume the frame was set up with enough space
         
         Value* R = currentCoroutine_->stack.data() + base;
-        size_t pc = 0;
+        size_t pc = frame.ip;  // Restore pc from frame (0 for new frames)
         
         // TODO: Get frame size from translator result (maxRegisters)
         // For now, use a large enough value
@@ -349,6 +349,9 @@ next_frame:
                         currentCoroutine_->stack.push_back(arg);
                     }
                     
+                    // Save pc in caller frame before callValue (which may reallocate frames)
+                    frame.ip = pc;
+                    
                     size_t prevFrames = currentCoroutine_->frames.size();
                     if (!callValue(argCount, retCount)) {
                         return false;
@@ -403,6 +406,8 @@ next_frame:
                     for (auto& arg : args) {
                         currentCoroutine_->stack.push_back(arg);
                     }
+                    // Save pc (though tailcall reuses frame, be safe)
+                    frame.ip = pc;
                     // Use tail call flag
                     size_t prevFrames = currentCoroutine_->frames.size();
                     if (!callValue(argCount, 0, true)) {  // 0 = multires, true = tailcall
@@ -417,20 +422,35 @@ next_frame:
                     break;
                 }
                 case ROpCode::ROP_CLOSURE: {
-                    // R(A) = closure(K[Bx]), followed by B pseudo-instructions
-                    // B = upvalue count, Bx = constant index of function
-                    // For now: only support functions with no upvalues
-                    if (B != 0) {
-                        // Has upvalues; need to read pseudo-instructions
-                        hadError_ = true;
-                        return false;
-                    }
+                    // R(A) = closure(K[Bx]), followed by nup pseudo-instructions
+                    // Each pseudo: ROP_CLOSURE with A=isLocal, Bx=idx
                     Value funcValue = constants[Bx];
                     size_t funcIndex = funcValue.asFunctionIndex();
                     FunctionObject* function = chunk->getFunction(funcIndex);
                     
                     ClosureObject* closure = createClosure(function);
+                    // Anchor for GC
                     R[A] = Value::closure(closure);
+                    
+                    // Capture upvalues from pseudo-instructions
+                    int nup = function->upvalueCount();
+                    for (int i = 0; i < nup; i++) {
+                        uint32_t desc = code[pc++];
+                        // Desc is ROP_CLOSURE with A=isLocal, Bx=idx
+                        uint8_t isLocal = ropGetA(desc);
+                        uint16_t idx = ropGetBx(desc);
+                        
+                        if (isLocal) {
+                            // Capture from current frame's register window
+                            size_t stackIndex = base + idx;
+                            UpvalueObject* upvalue = captureUpvalue(stackIndex);
+                            closure->setUpvalue(i, upvalue);
+                        } else {
+                            // Capture from enclosing function's upvalue
+                            UpvalueObject* upvalue = frame.closure->getUpvalueObj(idx);
+                            closure->setUpvalue(i, upvalue);
+                        }
+                    }
                     break;
                 }
                 case ROpCode::ROP_VARARG: {

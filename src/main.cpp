@@ -2,6 +2,7 @@
 #include "compiler/lexer.hpp"
 #include "compiler/parser.hpp"
 #include "compiler/codegen.hpp"
+#include "compiler/rtranslate.hpp"
 #include "lsp/server.hpp"
 #include "vm/vm.hpp"
 #include <iostream>
@@ -144,7 +145,29 @@ enum class RunStatus {
 };
 
 // Internal run implementation that returns status and error
-RunStatus runInternal(const std::string& source, VM& vm, const std::string& name, std::string& outError, const std::vector<Value>& args = {}) {
+// Helper: translate function and all sub-functions to register bytecode
+static bool attachRegisterCode(FunctionObject* func) {
+    RTranslateResult r = translateToRegister(func);
+    if (!r.ok) {
+        return false;
+    }
+    func->chunk()->setRCode(std::move(r.code), r.maxRegisters);
+    
+    // Recurse into sub-functions
+    Chunk* chunk = func->chunk();
+    for (size_t i = 0; i < chunk->constants().size(); i++) {
+        const Value& c = chunk->constants()[i];
+        if (c.isFunction()) {
+            FunctionObject* sub = chunk->getFunction(c.asFunctionIndex());
+            if (sub && !attachRegisterCode(sub)) {
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
+RunStatus runInternal(const std::string& source, VM& vm, const std::string& name, std::string& outError, const std::vector<Value>& args = {}, bool useRegisterVM = false) {
     try {
         Lexer lexer(source);
         lexer.setSourceName(name);
@@ -160,6 +183,16 @@ RunStatus runInternal(const std::string& source, VM& vm, const std::string& name
         if (!function) return RunStatus::COMPILE_ERROR;
 
         FunctionObject* funcPtr = function.get();
+        
+        // Phase 3/4: Translate to register bytecode if requested
+        if (useRegisterVM) {
+            if (!attachRegisterCode(funcPtr)) {
+                outError = "Failed to translate to register bytecode";
+                return RunStatus::COMPILE_ERROR;
+            }
+            vm.setUseRegisterVM(true);
+        }
+        
         vm.registerFunction(function.release());
 
         if (vm.run(*funcPtr, args)) {
@@ -187,9 +220,9 @@ RunStatus runInternal(const std::string& source, VM& vm, const std::string& name
 }
 
 // Run Lua source code
-bool run(const std::string& source, VM& vm, const std::string& name = "chunk", bool silent = false, const char* progname = "lua", const std::vector<Value>& args = {}) {
+bool run(const std::string& source, VM& vm, const std::string& name = "chunk", bool silent = false, const char* progname = "lua", const std::vector<Value>& args = {}, bool useRegisterVM = false) {
     std::string error;
-    RunStatus status = runInternal(source, vm, name, error, args);
+    RunStatus status = runInternal(source, vm, name, error, args, useRegisterVM);
     if (status != RunStatus::OK && !silent) {
         std::cerr << progname << ": " << error << std::endl;
     }
@@ -277,7 +310,7 @@ int runBytecode(const std::string& path, VM& vm) {
 }
 
 // Run file
-int runFile(const std::string& path, VM& vm, const char* progname = "lua", const std::vector<Value>& args = {}) {
+int runFile(const std::string& path, VM& vm, const char* progname = "lua", const std::vector<Value>& args = {}, bool useRegisterVM = false) {
     try {
         std::ifstream file(path, std::ios::binary);
         if (!file.is_open()) {
@@ -330,7 +363,7 @@ int runFile(const std::string& path, VM& vm, const char* progname = "lua", const
         } else {
             std::stringstream buffer;
             buffer << file.rdbuf();
-            return run(buffer.str(), vm, "@" + path, false, progname, args) ? 0 : 1;
+            return run(buffer.str(), vm, "@" + path, false, progname, args, useRegisterVM) ? 0 : 1;
         }
     } catch (const std::exception& e) {
         std::cerr << progname << ": " << e.what() << std::endl;
@@ -634,6 +667,7 @@ int main(int argc, char* argv[]) {
     bool compileOnly = false;
     bool listBytecode = false;
     bool isBytecode = false;
+    bool useRegisterVM = false;
     std::string outputPath = "";
 
     struct OptionAction {
@@ -673,6 +707,9 @@ int main(int argc, char* argv[]) {
             return server.run(std::cin, std::cout);
         } else if (arg == "-c" || arg == "--compile") {
             compileOnly = true;
+            continue;
+        } else if (arg == "--register") {
+            useRegisterVM = true;
             continue;
         } else if (arg == "-b" || arg == "--bytecode") {
             isBytecode = true;
@@ -851,7 +888,7 @@ int main(int argc, char* argv[]) {
             for (size_t i = 1; i <= n; i++) {
                 scriptArgs.push_back(argTbl->get(Value::integer(static_cast<int64_t>(i))));
             }
-            result = runFile(scriptPath, vm, progname, scriptArgs);
+            result = runFile(scriptPath, vm, progname, scriptArgs, useRegisterVM);
         }
     }
 
