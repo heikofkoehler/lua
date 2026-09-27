@@ -3128,16 +3128,6 @@ void VM::jitEnsureStack(VM* vm, uint32_t needed) {
     }
 }
 
-void VM::jitGetGlobal(VM* vm, uint32_t nameIndex) {
-    Value name = vm->getFrame(0)->chunk->constants()[nameIndex];
-    vm->push(vm->getGlobal(vm->getStringValue(name)));
-}
-
-void VM::jitSetGlobal(VM* vm, uint32_t nameIndex) {
-    Value name = vm->getFrame(0)->chunk->constants()[nameIndex];
-    vm->setGlobal(vm->getStringValue(name), vm->peek(0));
-}
-
 void VM::jitGetTabUp(VM* vm, uint32_t upIndex, uint32_t keyIndex, uint32_t nextIp) {
     UpvalueObject* upvalue = vm->getFrame(0)->closure->getUpvalueObj(upIndex);
     Value upTable = upvalue->get(vm->currentCoroutine_->stack);

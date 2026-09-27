@@ -180,8 +180,6 @@ public:
     static void jitReturnValue(VM* vm, uint32_t count);
     static void jitEnsureStack(VM* vm, uint32_t needed);
 
-    static void jitGetGlobal(VM* vm, uint32_t nameIndex);
-    static void jitSetGlobal(VM* vm, uint32_t nameIndex);
     static void jitGetTabUp(VM* vm, uint32_t upIndex, uint32_t keyIndex, uint32_t nextIp);
     static void jitSetTabUp(VM* vm, uint32_t upIndex, uint32_t keyIndex, uint32_t nextIp);
     static void jitLen(VM* vm, uint32_t nextIp);

@@ -180,10 +180,6 @@ size_t Chunk::disassembleInstruction(size_t offset) const {
         case OpCode::OP_FALSE:
             return simpleInstruction("OP_FALSE", offset);
 
-        case OpCode::OP_GET_GLOBAL:
-            return byteInstruction("OP_GET_GLOBAL", offset);
-        case OpCode::OP_SET_GLOBAL:
-            return byteInstruction("OP_SET_GLOBAL", offset);
         case OpCode::OP_GET_LOCAL:
             return byteInstruction("OP_GET_LOCAL", offset);
         case OpCode::OP_SET_LOCAL:
@@ -385,8 +381,6 @@ size_t Chunk::disassembleInstruction(size_t offset) const {
         case OpCode::OP_DEF_GLOBAL_TABLE:
             return simpleInstruction("OP_DEF_GLOBAL_TABLE", offset);
 
-        case OpCode::OP_YIELD:
-            return yieldInstruction("OP_YIELD", offset);
         case OpCode::OP_YIELD_MULTI:
             return yieldInstruction("OP_YIELD_MULTI", offset);
 
@@ -411,8 +405,6 @@ size_t Chunk::instructionLength(size_t offset) const {
         case OpCode::OP_TRUE:
         case OpCode::OP_FALSE:
             return 1;
-        case OpCode::OP_GET_GLOBAL:
-        case OpCode::OP_SET_GLOBAL:
         case OpCode::OP_GET_LOCAL:
         case OpCode::OP_SET_LOCAL:
         case OpCode::OP_GET_UPVALUE:
@@ -434,7 +426,6 @@ size_t Chunk::instructionLength(size_t offset) const {
         case OpCode::OP_CALL:
         case OpCode::OP_CALL_MULTI:
         case OpCode::OP_DEF_GLOBAL:
-        case OpCode::OP_YIELD:
         case OpCode::OP_YIELD_MULTI:
             return 3;
         case OpCode::OP_FORPREP:
@@ -608,8 +599,6 @@ const uint8_t kOperandSizes[] = {
     0,  // OP_NIL
     0,  // OP_TRUE
     0,  // OP_FALSE
-    1,  // OP_GET_GLOBAL [name_index: u8]
-    1,  // OP_SET_GLOBAL [name_index: u8]
     1,  // OP_GET_LOCAL [slot: u8]
     1,  // OP_SET_LOCAL [slot: u8]
     1,  // OP_GET_UPVALUE [index: u8]
@@ -673,7 +662,6 @@ const uint8_t kOperandSizes[] = {
     2,  // OP_DEF_GLOBAL [upvalue: u8, const_index: u8]
     4,  // OP_DEF_GLOBAL_LONG [upvalue: u8, const_index: u24]
     0,  // OP_DEF_GLOBAL_TABLE
-    2,  // OP_YIELD [args: u8, returns: u8]
     2,  // OP_YIELD_MULTI [fixed_args: u8, returns: u8]
     3,  // OP_FORPREP [base: u8, offset: u16]
     3,  // OP_FORLOOP [base: u8, offset: u16]
@@ -692,7 +680,6 @@ void Chunk::verify(int upvalueCount) const {
     const auto& code = code_;
     const size_t n = code.size();
     const size_t numConsts = constants_.size();
-    const size_t numIds = identifiers_.size();
 
     // Pass 1: decode instructions, check opcode/operand bounds, collect boundaries.
     std::vector<char> isInstrStart(n + 1, 0);
@@ -760,10 +747,6 @@ void Chunk::verify(int upvalueCount) const {
             if (readU24(code, at) >= numConsts)
                 throw std::runtime_error("bad binary format (constant index out of range)");
         };
-        auto checkIdU8 = [&](size_t at) {
-            if (code[at] >= numIds)
-                throw std::runtime_error("bad binary format (identifier index out of range)");
-        };
         auto checkUvU8 = [&](size_t at) {
             if (static_cast<int>(code[at]) >= upvalueCount)
                 throw std::runtime_error("bad binary format (upvalue index out of range)");
@@ -772,7 +755,6 @@ void Chunk::verify(int upvalueCount) const {
         switch (op) {
             case OpCode::OP_CONSTANT: checkConstU8(o); break;
             case OpCode::OP_CONSTANT_LONG: checkConstU24(o); break;
-            case OpCode::OP_GET_GLOBAL: case OpCode::OP_SET_GLOBAL: checkIdU8(o); break;
             case OpCode::OP_GET_UPVALUE: case OpCode::OP_SET_UPVALUE: checkUvU8(o); break;
             case OpCode::OP_GET_TABUP: case OpCode::OP_SET_TABUP:
                 checkUvU8(o); checkConstU8(o + 1); break;

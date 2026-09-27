@@ -417,40 +417,6 @@ bool JITCompiler::assembleA64(FunctionObject* function, CodeHolder& code) {
                 a.add(top_reg, top_reg, 8);
                 break;
             }
-            case OpCode::OP_GET_GLOBAL: {
-                uint8_t index = bytecode[++i];
-                a.str(top_reg, a64::ptr(co_reg, offsetStack + 8));
-                a.mov(a64::x0, vm_reg);
-                a.mov(a64::x1, (uint32_t)index);
-                a.mov(scratch, (uint64_t)VM::jitGetGlobal);
-                a.blr(scratch);
-                a.ldr(top_reg, a64::ptr(co_reg, offsetStack + 8));
-                a.ldrb(scratch_w, a64::ptr(vm_reg, offsetHadError));
-                a.cbnz(scratch, frame_changed);
-                a.ldr(stack_reg, a64::ptr(co_reg, offsetStack));
-                a.ldr(scratch, a64::ptr(co_reg, offsetFrames + 8));
-                a.sub(frame_reg, scratch, sizeof(CallFrame));
-                a.ldr(scratch, a64::ptr(frame_reg, offsetStackBase));
-                a.add(local_reg, stack_reg, scratch, a64::lsl(3));
-                break;
-            }
-            case OpCode::OP_SET_GLOBAL: {
-                uint8_t index = bytecode[++i];
-                a.str(top_reg, a64::ptr(co_reg, offsetStack + 8));
-                a.mov(a64::x0, vm_reg);
-                a.mov(a64::x1, (uint32_t)index);
-                a.mov(scratch, (uint64_t)VM::jitSetGlobal);
-                a.blr(scratch);
-                a.ldr(top_reg, a64::ptr(co_reg, offsetStack + 8));
-                a.ldrb(scratch_w, a64::ptr(vm_reg, offsetHadError));
-                a.cbnz(scratch, frame_changed);
-                a.ldr(stack_reg, a64::ptr(co_reg, offsetStack));
-                a.ldr(scratch, a64::ptr(co_reg, offsetFrames + 8));
-                a.sub(frame_reg, scratch, sizeof(CallFrame));
-                a.ldr(scratch, a64::ptr(frame_reg, offsetStackBase));
-                a.add(local_reg, stack_reg, scratch, a64::lsl(3));
-                break;
-            }
             case OpCode::OP_GET_TABUP: {
                 uint8_t upIndex = bytecode[++i];
                 uint8_t keyIndex = bytecode[++i];

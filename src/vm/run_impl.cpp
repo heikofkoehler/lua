@@ -89,16 +89,6 @@ std::vector<AbstractVal> simulateStack(VM* vm, const CallFrame& frame, size_t op
                 astack.push_back({AbstractVal::UNKNOWN, "", false, ""});
                 break;
             }
-            case OpCode::OP_GET_GLOBAL: {
-                uint8_t nameIndex = code[cur + 1];
-                std::string gname = chunk->getIdentifier(nameIndex);
-                astack.push_back({AbstractVal::GLOBAL, gname, false, ""});
-                break;
-            }
-            case OpCode::OP_SET_GLOBAL: {
-                if (!astack.empty()) astack.pop_back();
-                break;
-            }
             case OpCode::OP_GET_LOCAL: {
                 uint8_t slot = code[cur + 1];
                 std::string lname;
@@ -566,35 +556,6 @@ bool VM::run(size_t targetFrameCount) {
             case OpCode::OP_FALSE:
                 push(Value::boolean(false));
                 break;
-
-            case OpCode::OP_GET_GLOBAL: {
-                uint8_t nameIndex = readByte();
-                const std::string& varName = currentFrame().chunk->getIdentifier(nameIndex);
-                auto it = globals_.find(varName);
-                if (it == globals_.end()) {
-                    // Try to look up in _G table if it exists
-                    auto git = globals_.find("_G");
-                    if (git != globals_.end() && git->second.isTable()) {
-                        Value val = git->second.asTableObj()->get(varName);
-                        if (!val.isNil()) {
-                            push(val);
-                            break;
-                        }
-                    }
-                    runtimeError("Undefined variable '" + varName + "'");
-                    push(Value::nil());
-                } else {
-                    push(it->second);
-                }
-                break;
-            }
-
-            case OpCode::OP_SET_GLOBAL: {
-                uint8_t nameIndex = readByte();
-                const std::string& varName = currentFrame().chunk->getIdentifier(nameIndex);
-                setGlobal(varName, peek(0));
-                break;
-            }
 
             case OpCode::OP_GET_LOCAL: {
                 uint8_t slot = readByte();
@@ -2039,7 +2000,6 @@ bool VM::run(size_t targetFrameCount) {
                 break;
             }
 
-            case OpCode::OP_YIELD:
             case OpCode::OP_YIELD_MULTI: {
                 uint8_t operand = readByte();
                 uint8_t retCount = readByte();
@@ -2053,12 +2013,7 @@ bool VM::run(size_t targetFrameCount) {
                     return false;
                 }
 
-                size_t actualCount;
-                if (op == OpCode::OP_YIELD_MULTI) {
-                    actualCount = static_cast<size_t>(operand) + currentCoroutine_->lastResultCount;
-                } else {
-                    actualCount = operand;
-                }
+                size_t actualCount = static_cast<size_t>(operand) + currentCoroutine_->lastResultCount;
                 
                 // Pop yielded values and save them
                 currentCoroutine_->yieldedValues.clear();

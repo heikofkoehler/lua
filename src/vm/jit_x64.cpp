@@ -425,26 +425,6 @@ bool JITCompiler::assembleX64(FunctionObject* function, CodeHolder& code) {
                 a.lea(top_reg, x86::ptr(local_reg, (int32_t)base * 8));
                 break;
             }
-            case OpCode::OP_GET_GLOBAL: {
-                uint8_t index = bytecode[++i];
-                a.mov(x86::qword_ptr(co_reg, offsetStack + 8), top_reg);
-                callHelperX64(a, (void*)VM::jitGetGlobal, vm_reg, 2, (uint32_t)index);
-                a.mov(top_reg, x86::qword_ptr(co_reg, offsetStack + 8));
-                a.cmp(x86::byte_ptr(vm_reg, offsetHadError), 0);
-                a.jne(frame_changed);
-                a.mov(stack_reg, x86::qword_ptr(co_reg, offsetStack));
-                break;
-            }
-            case OpCode::OP_SET_GLOBAL: {
-                uint8_t index = bytecode[++i];
-                a.mov(x86::qword_ptr(co_reg, offsetStack + 8), top_reg);
-                callHelperX64(a, (void*)VM::jitSetGlobal, vm_reg, 2, (uint32_t)index);
-                a.mov(top_reg, x86::qword_ptr(co_reg, offsetStack + 8));
-                a.cmp(x86::byte_ptr(vm_reg, offsetHadError), 0);
-                a.jne(frame_changed);
-                a.mov(stack_reg, x86::qword_ptr(co_reg, offsetStack));
-                break;
-            }
             case OpCode::OP_GET_TABUP: {
                 uint8_t upIndex = bytecode[++i];
                 uint8_t keyIndex = bytecode[++i];

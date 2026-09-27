@@ -15,8 +15,6 @@ enum class OpCode : uint8_t {
     OP_FALSE,       // Push false
 
     // Variables
-    OP_GET_GLOBAL,  // Get global variable [name_index: uint8_t]
-    OP_SET_GLOBAL,  // Set global variable [name_index: uint8_t]
     OP_GET_LOCAL,   // Get local variable [slot: uint8_t]
     OP_SET_LOCAL,   // Set local variable [slot: uint8_t]
     OP_GET_UPVALUE, // Get upvalue [index: uint8_t]
@@ -99,7 +97,6 @@ enum class OpCode : uint8_t {
     OP_DEF_GLOBAL_LONG,   // [upvalue: uint8_t, const_index: 24-bit] Check defined, else set
     OP_DEF_GLOBAL_TABLE,  // Stack: [value, env_table, key_name]. Check defined, else set
 
-    OP_YIELD,       // Yield from coroutine [args: uint8_t, returns: uint8_t]
     OP_YIELD_MULTI, // Yield with multires from coroutine [fixed_args: uint8_t, returns: uint8_t]
 
     OP_FORPREP,     // Prepare numeric for loop [base: uint8_t, offset: uint16_t]
@@ -116,8 +113,6 @@ inline const char* opcodeName(OpCode op) {
         case OpCode::OP_NIL:         return "OP_NIL";
         case OpCode::OP_TRUE:        return "OP_TRUE";
         case OpCode::OP_FALSE:       return "OP_FALSE";
-        case OpCode::OP_GET_GLOBAL:  return "OP_GET_GLOBAL";
-        case OpCode::OP_SET_GLOBAL:  return "OP_SET_GLOBAL";
         case OpCode::OP_GET_LOCAL:     return "OP_GET_LOCAL";
         case OpCode::OP_SET_LOCAL:     return "OP_SET_LOCAL";
         case OpCode::OP_GET_UPVALUE:   return "OP_GET_UPVALUE";
@@ -182,7 +177,6 @@ inline const char* opcodeName(OpCode op) {
         case OpCode::OP_DEF_GLOBAL:        return "OP_DEF_GLOBAL";
         case OpCode::OP_DEF_GLOBAL_LONG:   return "OP_DEF_GLOBAL_LONG";
         case OpCode::OP_DEF_GLOBAL_TABLE:  return "OP_DEF_GLOBAL_TABLE";
-        case OpCode::OP_YIELD:         return "OP_YIELD";
         case OpCode::OP_YIELD_MULTI:   return "OP_YIELD_MULTI";
         case OpCode::OP_FORPREP:       return "OP_FORPREP";
         case OpCode::OP_FORLOOP:       return "OP_FORLOOP";
