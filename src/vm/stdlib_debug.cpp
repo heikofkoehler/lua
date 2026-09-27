@@ -235,6 +235,9 @@ bool native_debug_getlocal(VM* vm, int argCount) {
     if (frame->closure) {
         FunctionObject* func = frame->closure->function();
         size_t ip = (frame->isInterruptedByHook || frame->ip == 0) ? frame->ip : frame->ip - 1;
+        if (func->chunk() && ip > 0 && ip >= func->chunk()->size()) {
+            ip = func->chunk()->size() - 1;
+        }
         int namedSlot = -1;
         const char* name = luaF_getlocalname(func, localIndex, ip, &namedSlot);
         if (name) {
@@ -355,6 +358,9 @@ bool native_debug_setlocal(VM* vm, int argCount) {
     if (frame->closure) {
         FunctionObject* func = frame->closure->function();
         size_t ip = (frame->isInterruptedByHook || frame->ip == 0) ? frame->ip : frame->ip - 1;
+        if (func->chunk() && ip > 0 && ip >= func->chunk()->size()) {
+            ip = func->chunk()->size() - 1;
+        }
         int namedSlot = -1;
         const char* name = luaF_getlocalname(func, localIndex, ip, &namedSlot);
         if (name) {

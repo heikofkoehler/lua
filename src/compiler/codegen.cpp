@@ -298,6 +298,97 @@ public:
     void visitLabel(LabelStmtNode*) override {}
     void visitProgram(ProgramNode* n) override { check(n->statements()); }
 };
+
+static inline int64_t lua_shift_left(int64_t x, int64_t y) {
+    if (y < 0) {
+        if (y <= -64) return 0;
+        return static_cast<int64_t>(static_cast<uint64_t>(x) >> (-y));
+    } else {
+        if (y >= 64) return 0;
+        return static_cast<int64_t>(static_cast<uint64_t>(x) << y);
+    }
+}
+
+static inline int64_t lua_shift_right(int64_t x, int64_t y) {
+    if (y < 0) {
+        if (y <= -64) return 0;
+        return static_cast<int64_t>(static_cast<uint64_t>(x) << (-y));
+    } else {
+        if (y >= 64) return 0;
+        return static_cast<int64_t>(static_cast<uint64_t>(x) >> y);
+    }
+}
+
+static inline bool LTintfloat(int64_t i, double f) {
+    if (std::isnan(f)) return false;
+    if (f >= 9223372036854775808.0) return true;
+    if (f <= -9223372036854775808.0) return false;
+    double intpart;
+    if (std::modf(f, &intpart) == 0.0) {
+        return i < static_cast<int64_t>(f);
+    }
+    return static_cast<double>(i) < f;
+}
+
+static inline bool LEintfloat(int64_t i, double f) {
+    if (std::isnan(f)) return false;
+    if (f >= 9223372036854775808.0) return true;
+    if (f < -9223372036854775808.0) return false;
+    double intpart;
+    if (std::modf(f, &intpart) == 0.0) {
+        return i <= static_cast<int64_t>(f);
+    }
+    return static_cast<double>(i) <= f;
+}
+
+static inline bool LTfloatint(double f, int64_t i) {
+    if (std::isnan(f)) return false;
+    if (f >= 9223372036854775808.0) return false;
+    if (f < -9223372036854775808.0) return true;
+    double intpart;
+    if (std::modf(f, &intpart) == 0.0) {
+        return static_cast<int64_t>(f) < i;
+    }
+    return f < static_cast<double>(i);
+}
+
+static inline bool LEfloatint(double f, int64_t i) {
+    if (std::isnan(f)) return false;
+    if (f >= 9223372036854775808.0) return false;
+    if (f <= -9223372036854775808.0) return true;
+    double intpart;
+    if (std::modf(f, &intpart) == 0.0) {
+        return static_cast<int64_t>(f) <= i;
+    }
+    return f <= static_cast<double>(i);
+}
+
+static bool constEqual(const ConstValue& a, const ConstValue& b) {
+    if (a.isNil() && b.isNil()) return true;
+    if (a.isBool() && b.isBool()) return a.bVal == b.bVal;
+    if (a.isString() && b.isString()) return a.sVal == b.sVal;
+    if (a.isInt() && b.isInt()) return a.iVal == b.iVal;
+    if (a.isFloat() && b.isFloat()) return a.fVal == b.fVal;
+    if (a.isInt() && b.isFloat()) {
+        double d = b.fVal;
+        if (std::isnan(d) || d < -9223372036854775808.0 || d >= 9223372036854775808.0) return false;
+        double intpart;
+        if (std::modf(d, &intpart) == 0.0) {
+            return a.iVal == static_cast<int64_t>(d);
+        }
+        return false;
+    }
+    if (a.isFloat() && b.isInt()) {
+        double d = a.fVal;
+        if (std::isnan(d) || d < -9223372036854775808.0 || d >= 9223372036854775808.0) return false;
+        double intpart;
+        if (std::modf(d, &intpart) == 0.0) {
+            return static_cast<int64_t>(d) == b.iVal;
+        }
+        return false;
+    }
+    return false;
+}
 } // anonymous namespace
 
 CodeGenerator::CodeGenerator()
@@ -344,6 +435,9 @@ std::unique_ptr<FunctionObject> CodeGenerator::generate(ProgramNode* program, co
     setLine(program->lastLine());
     emitReturn();
 
+    // Optimize bytecode
+    optimizeChunk(currentChunk());
+
     // Resolve forward gotos (top level) - stubs are emitted here, after return
     emitGotoStubs();
 
@@ -361,6 +455,331 @@ std::unique_ptr<FunctionObject> CodeGenerator::generate(ProgramNode* program, co
         function->addLocalVar(l.name, l.startPC, l.endPC, l.slot);
     }
     return function;
+}
+
+ConstValue CodeGenerator::evalConst(ExprNode* node) {
+    if (!node) return ConstValue::none();
+
+    if (auto* lit = dynamic_cast<LiteralNode*>(node)) {
+        if (lit->isLargeInt()) {
+            return ConstValue::fromInt(lit->largeInt());
+        }
+        const Value& v = lit->value();
+        if (v.isNil()) return ConstValue::nil();
+        if (v.isBool()) return ConstValue::fromBool(v.asBool());
+        if (v.isInteger()) return ConstValue::fromInt(v.asInteger());
+        if (v.isFloat()) return ConstValue::fromFloat(v.asNumber());
+        return ConstValue::none();
+    }
+
+    if (auto* slit = dynamic_cast<StringLiteralNode*>(node)) {
+        return ConstValue::fromString(slit->content());
+    }
+
+    if (auto* grp = dynamic_cast<GroupExprNode*>(node)) {
+        return evalConst(grp->expr());
+    }
+
+    if (auto* var = dynamic_cast<VariableExprNode*>(node)) {
+        int slot = resolveLocal(var->name());
+        if (slot != -1) {
+            for (int i = static_cast<int>(locals_.size()) - 1; i >= 0; i--) {
+                if (locals_[i].slot == slot) {
+                    if (locals_[i].isConstant && !locals_[i].constValue.isNone()) {
+                        return locals_[i].constValue;
+                    }
+                    break;
+                }
+            }
+        }
+        CompilerState* curr = enclosingCompiler_;
+        while (curr != nullptr) {
+            for (int i = static_cast<int>(curr->locals.size()) - 1; i >= 0; i--) {
+                if (curr->locals[i].name == var->name()) {
+                    if (curr->locals[i].isConstant && !curr->locals[i].constValue.isNone()) {
+                        return curr->locals[i].constValue;
+                    }
+                    break;
+                }
+            }
+            curr = curr->enclosing;
+        }
+        return ConstValue::none();
+    }
+
+    if (auto* un = dynamic_cast<UnaryNode*>(node)) {
+        ConstValue op = evalConst(un->operand());
+        if (op.isNone()) return ConstValue::none();
+
+        switch (un->op()) {
+            case TokenType::MINUS:
+                if (op.isInt()) {
+                    return ConstValue::fromInt(static_cast<int64_t>(0ULL - static_cast<uint64_t>(op.iVal)));
+                }
+                if (op.isFloat()) {
+                    return ConstValue::fromFloat(-op.fVal);
+                }
+                return ConstValue::none();
+
+            case TokenType::NOT:
+                return ConstValue::fromBool(!op.isTruthy());
+
+            case TokenType::TILDE: {
+                int64_t i;
+                if (op.toInteger(i)) return ConstValue::fromInt(~i);
+                return ConstValue::none();
+            }
+
+            case TokenType::HASH:
+                if (op.isString()) return ConstValue::fromInt(static_cast<int64_t>(op.sVal.size()));
+                return ConstValue::none();
+
+            default:
+                return ConstValue::none();
+        }
+    }
+
+    if (auto* bin = dynamic_cast<BinaryNode*>(node)) {
+        if (bin->op() == TokenType::AND) {
+            ConstValue l = evalConst(bin->left());
+            if (!l.isNone()) {
+                if (!l.isTruthy()) return l;
+                return evalConst(bin->right());
+            }
+            return ConstValue::none();
+        }
+
+        if (bin->op() == TokenType::OR) {
+            ConstValue l = evalConst(bin->left());
+            if (!l.isNone()) {
+                if (l.isTruthy()) return l;
+                return evalConst(bin->right());
+            }
+            return ConstValue::none();
+        }
+
+        ConstValue l = evalConst(bin->left());
+        if (l.isNone()) return ConstValue::none();
+        ConstValue r = evalConst(bin->right());
+        if (r.isNone()) return ConstValue::none();
+
+        switch (bin->op()) {
+            case TokenType::PLUS:
+                if (l.isInt() && r.isInt()) {
+                    return ConstValue::fromInt(static_cast<int64_t>(static_cast<uint64_t>(l.iVal) + static_cast<uint64_t>(r.iVal)));
+                }
+                if (l.isNumber() && r.isNumber()) {
+                    return ConstValue::fromFloat(l.asFloat() + r.asFloat());
+                }
+                return ConstValue::none();
+
+            case TokenType::MINUS:
+                if (l.isInt() && r.isInt()) {
+                    return ConstValue::fromInt(static_cast<int64_t>(static_cast<uint64_t>(l.iVal) - static_cast<uint64_t>(r.iVal)));
+                }
+                if (l.isNumber() && r.isNumber()) {
+                    return ConstValue::fromFloat(l.asFloat() - r.asFloat());
+                }
+                return ConstValue::none();
+
+            case TokenType::STAR:
+                if (l.isInt() && r.isInt()) {
+                    return ConstValue::fromInt(static_cast<int64_t>(static_cast<uint64_t>(l.iVal) * static_cast<uint64_t>(r.iVal)));
+                }
+                if (l.isNumber() && r.isNumber()) {
+                    return ConstValue::fromFloat(l.asFloat() * r.asFloat());
+                }
+                return ConstValue::none();
+
+            case TokenType::SLASH:
+                if (l.isNumber() && r.isNumber()) {
+                    return ConstValue::fromFloat(l.asFloat() / r.asFloat());
+                }
+                return ConstValue::none();
+
+            case TokenType::SLASH_SLASH:
+                if (l.isInt() && r.isInt()) {
+                    if (r.iVal == 0) return ConstValue::none();
+                    if (r.iVal == -1 && l.iVal == INT64_MIN) return ConstValue::fromInt(INT64_MIN);
+                    int64_t q = l.iVal / r.iVal;
+                    int64_t rem = l.iVal % r.iVal;
+                    if ((l.iVal ^ r.iVal) < 0 && rem != 0) q--;
+                    return ConstValue::fromInt(q);
+                }
+                if (l.isNumber() && r.isNumber()) {
+                    if (r.asFloat() == 0.0) return ConstValue::none();
+                    return ConstValue::fromFloat(std::floor(l.asFloat() / r.asFloat()));
+                }
+                return ConstValue::none();
+
+            case TokenType::PERCENT:
+                if (l.isInt() && r.isInt()) {
+                    if (r.iVal == 0) return ConstValue::none();
+                    if (r.iVal == -1 && l.iVal == INT64_MIN) return ConstValue::fromInt(0);
+                    int64_t rem = l.iVal % r.iVal;
+                    if ((l.iVal ^ r.iVal) < 0 && rem != 0) rem += r.iVal;
+                    return ConstValue::fromInt(rem);
+                }
+                if (l.isNumber() && r.isNumber()) {
+                    if (r.asFloat() == 0.0) return ConstValue::none();
+                    double da = l.asFloat(), db = r.asFloat();
+                    double m = std::fmod(da, db);
+                    if ((m > 0.0) ? (db < 0.0) : (m < 0.0 && db > 0.0)) m += db;
+                    return ConstValue::fromFloat(m);
+                }
+                return ConstValue::none();
+
+            case TokenType::CARET:
+                if (l.isNumber() && r.isNumber()) {
+                    return ConstValue::fromFloat(std::pow(l.asFloat(), r.asFloat()));
+                }
+                return ConstValue::none();
+
+            case TokenType::AMPERSAND: {
+                int64_t ia, ib;
+                if (l.toInteger(ia) && r.toInteger(ib)) return ConstValue::fromInt(ia & ib);
+                return ConstValue::none();
+            }
+
+            case TokenType::PIPE: {
+                int64_t ia, ib;
+                if (l.toInteger(ia) && r.toInteger(ib)) return ConstValue::fromInt(ia | ib);
+                return ConstValue::none();
+            }
+
+            case TokenType::TILDE: {
+                int64_t ia, ib;
+                if (l.toInteger(ia) && r.toInteger(ib)) return ConstValue::fromInt(ia ^ ib);
+                return ConstValue::none();
+            }
+
+            case TokenType::LESS_LESS: {
+                int64_t ia, ib;
+                if (l.toInteger(ia) && r.toInteger(ib)) return ConstValue::fromInt(lua_shift_left(ia, ib));
+                return ConstValue::none();
+            }
+
+            case TokenType::GREATER_GREATER: {
+                int64_t ia, ib;
+                if (l.toInteger(ia) && r.toInteger(ib)) return ConstValue::fromInt(lua_shift_right(ia, ib));
+                return ConstValue::none();
+            }
+
+            case TokenType::DOT_DOT:
+                return ConstValue::none();
+
+            case TokenType::EQUAL_EQUAL:
+                return ConstValue::fromBool(constEqual(l, r));
+
+            case TokenType::BANG_EQUAL:
+            case TokenType::TILDE_EQUAL:
+                return ConstValue::fromBool(!constEqual(l, r));
+
+            case TokenType::LESS:
+                if (l.isInt() && r.isInt()) return ConstValue::fromBool(l.iVal < r.iVal);
+                if (l.isInt() && r.isFloat()) return ConstValue::fromBool(LTintfloat(l.iVal, r.fVal));
+                if (l.isFloat() && r.isInt()) return ConstValue::fromBool(LTfloatint(l.fVal, r.iVal));
+                if (l.isFloat() && r.isFloat()) return ConstValue::fromBool(l.fVal < r.fVal);
+                if (l.isString() && r.isString()) return ConstValue::fromBool(l.sVal < r.sVal);
+                return ConstValue::none();
+
+            case TokenType::LESS_EQUAL:
+                if (l.isInt() && r.isInt()) return ConstValue::fromBool(l.iVal <= r.iVal);
+                if (l.isInt() && r.isFloat()) return ConstValue::fromBool(LEintfloat(l.iVal, r.fVal));
+                if (l.isFloat() && r.isInt()) return ConstValue::fromBool(LEfloatint(l.fVal, r.iVal));
+                if (l.isFloat() && r.isFloat()) return ConstValue::fromBool(l.fVal <= r.fVal);
+                if (l.isString() && r.isString()) return ConstValue::fromBool(l.sVal <= r.sVal);
+                return ConstValue::none();
+
+            case TokenType::GREATER:
+                if (l.isInt() && r.isInt()) return ConstValue::fromBool(l.iVal > r.iVal);
+                if (l.isInt() && r.isFloat()) return ConstValue::fromBool(!LEintfloat(l.iVal, r.fVal));
+                if (l.isFloat() && r.isInt()) return ConstValue::fromBool(!LEfloatint(l.fVal, r.iVal));
+                if (l.isFloat() && r.isFloat()) return ConstValue::fromBool(l.fVal > r.fVal);
+                if (l.isString() && r.isString()) return ConstValue::fromBool(l.sVal > r.sVal);
+                return ConstValue::none();
+
+            case TokenType::GREATER_EQUAL:
+                if (l.isInt() && r.isInt()) return ConstValue::fromBool(l.iVal >= r.iVal);
+                if (l.isInt() && r.isFloat()) return ConstValue::fromBool(!LTintfloat(l.iVal, r.fVal));
+                if (l.isFloat() && r.isInt()) return ConstValue::fromBool(!LTfloatint(l.fVal, r.iVal));
+                if (l.isFloat() && r.isFloat()) return ConstValue::fromBool(l.fVal >= r.fVal);
+                if (l.isString() && r.isString()) return ConstValue::fromBool(l.sVal >= r.sVal);
+                return ConstValue::none();
+
+            default:
+                return ConstValue::none();
+        }
+    }
+
+    return ConstValue::none();
+}
+
+void CodeGenerator::emitConstValue(const ConstValue& cv, int line) {
+    setLine(exprLineOverride_ > 0 ? exprLineOverride_ : line);
+    switch (cv.type) {
+        case ConstValue::Type::NIL_VAL:
+            emitOpCode(OpCode::OP_NIL);
+            break;
+        case ConstValue::Type::BOOL:
+            emitOpCode(cv.bVal ? OpCode::OP_TRUE : OpCode::OP_FALSE);
+            break;
+        case ConstValue::Type::INT: {
+            int64_t val = cv.iVal;
+            if (val >= -(1LL << 47) && val < (1LL << 47)) {
+                emitConstant(Value::integer(val));
+            } else {
+                size_t idx = currentChunk()->addInt64(val);
+                emitConstant(Value::compileTimeInt64(idx));
+            }
+            break;
+        }
+        case ConstValue::Type::FLOAT:
+            emitConstant(Value::number(cv.fVal));
+            break;
+        case ConstValue::Type::STRING: {
+            size_t stringIndex = currentChunk()->addString(cv.sVal);
+            emitConstant(Value::string(stringIndex));
+            break;
+        }
+        default:
+            break;
+    }
+}
+
+void CodeGenerator::optimizeChunk(Chunk* chunk) {
+    if (!chunk || chunk->size() == 0) return;
+
+    // 1. Thread jumps (jump chaining)
+    bool changed = true;
+    int iterations = 0;
+    while (changed && iterations < 10) {
+        changed = false;
+        iterations++;
+        size_t ip = 0;
+        while (ip < chunk->size()) {
+            OpCode op = static_cast<OpCode>(chunk->at(ip));
+            size_t instrLen = chunk->instructionLength(ip);
+            if (op == OpCode::OP_JUMP || op == OpCode::OP_JUMP_IF_FALSE) {
+                uint16_t offset = static_cast<uint16_t>(chunk->at(ip + 1) | (chunk->at(ip + 2) << 8));
+                size_t target = ip + 3 + offset;
+                if (target + 3 <= chunk->size() &&
+                    static_cast<OpCode>(chunk->at(target)) == OpCode::OP_JUMP) {
+                    uint16_t nextOffset = static_cast<uint16_t>(chunk->at(target + 1) | (chunk->at(target + 2) << 8));
+                    size_t nextTarget = target + 3 + nextOffset;
+                    if (nextTarget >= ip + 3 && nextTarget != target) {
+                        size_t newOffset = nextTarget - (ip + 3);
+                        if (newOffset <= UINT16_MAX) {
+                            chunk->code()[ip + 1] = static_cast<uint8_t>(newOffset & 0xFF);
+                            chunk->code()[ip + 2] = static_cast<uint8_t>((newOffset >> 8) & 0xFF);
+                            changed = true;
+                        }
+                    }
+                }
+            }
+            ip += instrLen;
+        }
+    }
 }
 
 void CodeGenerator::visitLiteral(LiteralNode* node) {
@@ -398,6 +817,12 @@ void CodeGenerator::visitStringLiteral(StringLiteralNode* node) {
 }
 
 void CodeGenerator::visitUnary(UnaryNode* node) {
+    ConstValue cv = evalConst(node);
+    if (!cv.isNone()) {
+        emitConstValue(cv, node->line());
+        return;
+    }
+
     setLine(node->line());
 
     uint8_t oldRetCount = expectedRetCount_;
@@ -439,17 +864,35 @@ void CodeGenerator::visitUnary(UnaryNode* node) {
 }
 
 void CodeGenerator::visitBinary(BinaryNode* node) {
+    ConstValue cv = evalConst(node);
+    if (!cv.isNone()) {
+        emitConstValue(cv, node->line());
+        return;
+    }
+
     setLine(node->line());
 
     uint8_t oldRetCount = expectedRetCount_;
     bool oldTailCall = isTailCall_;
 
-    // Binary operators always evaluate their operands to exactly one value
-    expectedRetCount_ = 2; // ONE
-    isTailCall_ = false;
-
     // Handle short-circuiting logical operators
     if (node->op() == TokenType::AND) {
+        ConstValue leftVal = evalConst(node->left());
+        if (!leftVal.isNone()) {
+            if (!leftVal.isTruthy()) {
+                emitConstValue(leftVal, node->line());
+            } else {
+                expectedRetCount_ = 2; // ONE (binary operators always produce 1 value)
+                isTailCall_ = false;
+                node->right()->accept(*this);
+            }
+            expectedRetCount_ = oldRetCount;
+            isTailCall_ = oldTailCall;
+            return;
+        }
+
+        expectedRetCount_ = 2; // ONE
+        isTailCall_ = false;
         node->left()->accept(*this);
         size_t endJump = emitJump(OpCode::OP_JUMP_IF_FALSE);
         emitOpCode(OpCode::OP_POP); // Pop left value
@@ -460,6 +903,22 @@ void CodeGenerator::visitBinary(BinaryNode* node) {
         return;
     }
     if (node->op() == TokenType::OR) {
+        ConstValue leftVal = evalConst(node->left());
+        if (!leftVal.isNone()) {
+            if (leftVal.isTruthy()) {
+                emitConstValue(leftVal, node->line());
+            } else {
+                expectedRetCount_ = 2; // ONE (binary operators always produce 1 value)
+                isTailCall_ = false;
+                node->right()->accept(*this);
+            }
+            expectedRetCount_ = oldRetCount;
+            isTailCall_ = oldTailCall;
+            return;
+        }
+
+        expectedRetCount_ = 2; // ONE
+        isTailCall_ = false;
         node->left()->accept(*this);
         // Jump to end if true (a or b -> if a is true, result is a)
         size_t elseJump = emitJump(OpCode::OP_JUMP_IF_FALSE);
@@ -472,6 +931,10 @@ void CodeGenerator::visitBinary(BinaryNode* node) {
         isTailCall_ = oldTailCall;
         return;
     }
+
+    // Binary operators always evaluate their operands to exactly one value
+    expectedRetCount_ = 2; // ONE
+    isTailCall_ = false;
 
     // Compile left operand
     int oldOverride = exprLineOverride_;
@@ -749,6 +1212,11 @@ void CodeGenerator::visitLocalDeclStmt(LocalDeclStmtNode* node) {
         emitOpCode(OpCode::OP_SET_LOCAL);
         emitByte(static_cast<uint8_t>(slot)); 
     } else {
+        ConstValue cv = ConstValue::none();
+        if (node->isConstant()) {
+            cv = node->initializer() ? evalConst(node->initializer()) : ConstValue::nil();
+        }
+
         // Compile initializer
         if (node->initializer()) {
             if (dynamic_cast<FunctionExprNode*>(node->initializer())) {
@@ -761,7 +1229,7 @@ void CodeGenerator::visitLocalDeclStmt(LocalDeclStmtNode* node) {
         }
 
         // Add local variable (value is already on stack)
-        addLocal(node->name(), node->isConstant(), node->isClose());
+        addLocal(node->name(), node->isConstant(), node->isClose(), cv);
     }
 }
 
@@ -818,8 +1286,17 @@ void CodeGenerator::visitMultipleLocalDeclStmt(MultipleLocalDeclStmtNode* node) 
     }
 
     // 5. Add local variables (values are already on stack in correct order)
-    for (const auto& var : vars) {
-        addLocal(var.name, var.isConstant, var.isClose);
+    for (size_t i = 0; i < vars.size(); i++) {
+        const auto& var = vars[i];
+        ConstValue cv = ConstValue::none();
+        if (var.isConstant) {
+            if (i < initializers.size()) {
+                cv = evalConst(initializers[i].get());
+            } else {
+                cv = ConstValue::nil();
+            }
+        }
+        addLocal(var.name, var.isConstant, var.isClose, cv);
     }
 }
 
@@ -2246,6 +2723,9 @@ void CodeGenerator::compileFunction(const std::string& name, const std::vector<s
     setLine(lastLineDefined);
     emitOpCode(OpCode::OP_RETURN);
 
+    // Optimize bytecode
+    optimizeChunk(currentChunk());
+
     // Resolve forward gotos - stubs are emitted here, after return
     emitGotoStubs();
 
@@ -2418,7 +2898,7 @@ void CodeGenerator::addBreakJump(size_t jump) {
     loopStack_.back().jumps.push_back(jump);
 }
 
-void CodeGenerator::addLocal(const std::string& name, bool isConstant, bool isClose) {
+void CodeGenerator::addLocal(const std::string& name, bool isConstant, bool isClose, const ConstValue& constValue) {
     if (localCount_ >= 200) {
         std::string where = (lineDefined_ == 0)
             ? "main function"
@@ -2436,6 +2916,7 @@ void CodeGenerator::addLocal(const std::string& name, bool isConstant, bool isCl
     local.startPC = currentChunk()->size();
     local.seq = ++varSequence_;
     local.locVarIndex = finishedLocals_.size();
+    local.constValue = constValue;
     finishedLocals_.push_back({name, local.startPC, 0, local.slot});
     locals_.push_back(local);
     activeVars_.push_back({name, false, scopeDepth_});

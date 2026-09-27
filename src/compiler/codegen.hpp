@@ -5,10 +5,67 @@
 #include "compiler/ast.hpp"
 #include "compiler/chunk.hpp"
 #include "value/function.hpp"
+#include <cmath>
+#include <cstdint>
 #include <deque>
 #include <memory>
 #include <unordered_set>
 #include <unordered_map>
+
+// Compile-time constant representation for constant folding
+struct ConstValue {
+    enum class Type { NONE, NIL_VAL, BOOL, INT, FLOAT, STRING };
+    Type type = Type::NONE;
+    bool bVal = false;
+    int64_t iVal = 0;
+    double fVal = 0.0;
+    std::string sVal;
+
+    ConstValue() = default;
+    static ConstValue none() { return ConstValue(); }
+    static ConstValue nil() { ConstValue cv; cv.type = Type::NIL_VAL; return cv; }
+    static ConstValue fromBool(bool b) { ConstValue cv; cv.type = Type::BOOL; cv.bVal = b; return cv; }
+    static ConstValue fromInt(int64_t i) { ConstValue cv; cv.type = Type::INT; cv.iVal = i; return cv; }
+    static ConstValue fromFloat(double f) { ConstValue cv; cv.type = Type::FLOAT; cv.fVal = f; return cv; }
+    static ConstValue fromString(const std::string& s) { ConstValue cv; cv.type = Type::STRING; cv.sVal = s; return cv; }
+
+    bool isNone() const { return type == Type::NONE; }
+    bool isNil() const { return type == Type::NIL_VAL; }
+    bool isBool() const { return type == Type::BOOL; }
+    bool isInt() const { return type == Type::INT; }
+    bool isFloat() const { return type == Type::FLOAT; }
+    bool isNumber() const { return type == Type::INT || type == Type::FLOAT; }
+    bool isString() const { return type == Type::STRING; }
+
+    bool isTruthy() const {
+        if (type == Type::NIL_VAL) return false;
+        if (type == Type::BOOL && !bVal) return false;
+        return true;
+    }
+
+    double asFloat() const {
+        if (type == Type::INT) return static_cast<double>(iVal);
+        return fVal;
+    }
+
+    bool toInteger(int64_t& out) const {
+        if (type == Type::INT) {
+            out = iVal;
+            return true;
+        }
+        if (type == Type::FLOAT) {
+            if (std::isnan(fVal) || fVal < -9223372036854775808.0 || fVal >= 9223372036854775808.0) {
+                return false;
+            }
+            double intpart;
+            if (std::modf(fVal, &intpart) == 0.0) {
+                out = static_cast<int64_t>(fVal);
+                return true;
+            }
+        }
+        return false;
+    }
+};
 
 // CodeGenerator: Walks AST and generates bytecode
 // Implements visitor pattern to traverse AST nodes
@@ -67,6 +124,7 @@ private:
         size_t startPC;   // Instruction offset where local enters scope
         uint32_t seq = 0; // Declaration sequence
         size_t locVarIndex = 0;
+        ConstValue constValue;
     };
 
     // Upvalue tracking
@@ -210,8 +268,13 @@ private:
     void checkGotoScoping(const Goto& g, const Label& lbl);
     void emitGotoStubs();
 
+    // Bytecode optimization
+    ConstValue evalConst(ExprNode* node);
+    void emitConstValue(const ConstValue& cv, int line);
+    void optimizeChunk(Chunk* chunk);
+
     // Variable handling
-    void addLocal(const std::string& name, bool isConstant = false, bool isClose = false);
+    void addLocal(const std::string& name, bool isConstant = false, bool isClose = false, const ConstValue& constValue = ConstValue::none());
     int resolveLocal(const std::string& name);
     void checkConstantAssign(const std::string& name, int line);
     bool isDeclaredGlobal(const std::string& name) const;

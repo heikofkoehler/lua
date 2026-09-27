@@ -28,6 +28,7 @@ public:
 
     // Write a byte to the chunk
     void write(uint8_t byte, int line);
+    void pop();
 
     // Add a constant to the constant pool
     // Returns the index of the constant in the pool

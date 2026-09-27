@@ -20,6 +20,13 @@ void Chunk::write(uint8_t byte, int line) {
     lines_.push_back(line);
 }
 
+void Chunk::pop() {
+    if (!code_.empty()) {
+        code_.pop_back();
+        lines_.pop_back();
+    }
+}
+
 size_t Chunk::addConstant(const Value& value) {
     auto it = constantMap_.find(value.bits());
     if (it != constantMap_.end()) {
