@@ -91,9 +91,8 @@ void RCodeGen::patchJump(size_t pc, size_t target) {
 }
 
 int RCodeGen::addConstant(const Value& v) {
-    (void)v;
-    // TODO: implement constant table
-    return 0;
+    // Add to function's constant table via chunk
+    return (int)func_->chunk()->addConstant(v);
 }
 
 int RCodeGen::genExpr(ExprNode* expr, int destReg) {
@@ -155,11 +154,27 @@ void RCodeGen::visitUnary(UnaryNode* node) {
 }
 
 void RCodeGen::visitBinary(BinaryNode* node) {
-    (void)node;
     int left = genExpr(node->left());
     int right = genExpr(node->right());
     int reg = allocReg();
-    // TODO: map TokenType to ROP_ADD, ROP_SUB, etc.
+    ROpCode op;
+    switch (node->op()) {
+        case TokenType::PLUS: op = ROpCode::ROP_ADD; break;
+        case TokenType::MINUS: op = ROpCode::ROP_SUB; break;
+        case TokenType::STAR: op = ROpCode::ROP_MUL; break;
+        case TokenType::SLASH: op = ROpCode::ROP_DIV; break;
+        case TokenType::SLASH_SLASH: op = ROpCode::ROP_IDIV; break;
+        case TokenType::PERCENT: op = ROpCode::ROP_MOD; break;
+        case TokenType::CARET: op = ROpCode::ROP_POW; break;
+        case TokenType::AMPERSAND: op = ROpCode::ROP_BAND; break;
+        case TokenType::PIPE: op = ROpCode::ROP_BOR; break;
+        case TokenType::TILDE: op = ROpCode::ROP_BXOR; break;
+        case TokenType::LESS_LESS: op = ROpCode::ROP_SHL; break;
+        case TokenType::GREATER_GREATER: op = ROpCode::ROP_SHR; break;
+        case TokenType::DOT_DOT: op = ROpCode::ROP_CONCAT; break;
+        default: op = ROpCode::ROP_ADD; break;  // TODO: comparisons, and/or
+    }
+    emitABC(op, reg, left, right);
     exprReg_ = reg;
     freeReg(left);
     freeReg(right);
