@@ -14,6 +14,7 @@
 
 bool VM::runRegister(size_t targetFrameCount) {
     while (true) {
+next_frame:
         if (currentCoroutine_->status == CoroutineObject::Status::SUSPENDED) {
             return true;
         }
@@ -227,21 +228,40 @@ bool VM::runRegister(size_t targetFrameCount) {
                 }
                 case ROpCode::ROP_NEWTABLE: {
                     // R(A) = new table (B = array hint, C = hash hint)
-                    // TODO: create table object
-                    hadError_ = true;
-                    return false;
+                    TableObject* table = createTable();
+                    R[A] = Value::table(table);
+                    break;
                 }
                 case ROpCode::ROP_GETTABLE: {
                     // R(A) = R(B)[R(C)]
-                    // TODO: table lookup
-                    hadError_ = true;
-                    return false;
+                    Value tableVal = R[B];
+                    Value key = R[C];
+                    // Use the same logic as OP_GET_TABLE (simplified for now)
+                    if (tableVal.isTable()) {
+                        TableObject* table = tableVal.asTableObj();
+                        Value result = table->get(key);
+                        R[A] = result;
+                    } else {
+                        // TODO: metamethod __index
+                        hadError_ = true;
+                        return false;
+                    }
+                    break;
                 }
                 case ROpCode::ROP_SETTABLE: {
                     // R(A)[R(B)] = R(C)
-                    // TODO: table set
-                    hadError_ = true;
-                    return false;
+                    Value tableVal = R[A];
+                    Value key = R[B];
+                    Value val = R[C];
+                    if (tableVal.isTable()) {
+                        TableObject* table = tableVal.asTableObj();
+                        table->set(key, val);
+                    } else {
+                        // TODO: metamethod __newindex
+                        hadError_ = true;
+                        return false;
+                    }
+                    break;
                 }
                 case ROpCode::ROP_SETTABLEMULTI: {
                     // Multi-value table set
@@ -251,27 +271,50 @@ bool VM::runRegister(size_t targetFrameCount) {
                 }
                 case ROpCode::ROP_GETUPVAL: {
                     // R(A) = Up[B]
-                    // TODO: upvalue access
-                    hadError_ = true;
-                    return false;
+                    UpvalueObject* upvalue = frame.closure->getUpvalueObj(B);
+                    if (upvalue) {
+                        R[A] = upvalue->get(currentCoroutine_->stack);
+                    } else {
+                        R[A] = Value::nil();
+                    }
+                    break;
                 }
                 case ROpCode::ROP_SETUPVAL: {
                     // Up[B] = R(A)
-                    // TODO
-                    hadError_ = true;
-                    return false;
+                    UpvalueObject* upvalue = frame.closure->getUpvalueObj(B);
+                    if (upvalue) {
+                        upvalue->set(currentCoroutine_->stack, R[A]);
+                    }
+                    break;
                 }
                 case ROpCode::ROP_GETTABUP: {
                     // R(A) = Up[B][K[C]]  (_ENV global lookup)
-                    // TODO
-                    hadError_ = true;
-                    return false;
+                    UpvalueObject* upvalue = frame.closure->getUpvalueObj(B);
+                    if (!upvalue) {
+                        R[A] = Value::nil();
+                        break;
+                    }
+                    Value upTable = upvalue->get(currentCoroutine_->stack);
+                    Value key = constants[C];
+                    if (upTable.isTable()) {
+                        TableObject* table = upTable.asTableObj();
+                        R[A] = table->get(key);
+                    } else {
+                        R[A] = Value::nil();
+                    }
+                    break;
                 }
                 case ROpCode::ROP_SETTABUP: {
                     // Up[B][K[C]] = R(A)
-                    // TODO
-                    hadError_ = true;
-                    return false;
+                    UpvalueObject* upvalue = frame.closure->getUpvalueObj(B);
+                    if (!upvalue) break;
+                    Value upTable = upvalue->get(currentCoroutine_->stack);
+                    Value key = constants[C];
+                    if (upTable.isTable()) {
+                        TableObject* table = upTable.asTableObj();
+                        table->set(key, R[A]);
+                    }
+                    break;
                 }
                 case ROpCode::ROP_DEFGLOBAL: {
                     // Up[B][K[C]] = R(A), error if already defined
@@ -282,9 +325,66 @@ bool VM::runRegister(size_t targetFrameCount) {
                 case ROpCode::ROP_CALL: {
                     // R(A)..R(A+C-2) = R(A)(R(A+1)..R(A+B-1))
                     // B = arg count + 1 (0 = multires), C = ret count + 1 (0 = multires)
-                    // TODO: implement call with register window
-                    hadError_ = true;
-                    return false;
+                    // For now: only support fixed arg/ret counts, no multires
+                    int argCount = B - 1;
+                    int retCount = C - 1;
+                    if (B == 0 || C == 0) {
+                        // Multires not yet supported
+                        hadError_ = true;
+                        return false;
+                    }
+                    
+                    // Copy function and args to stack top for callValue
+                    // R(A) is function, R(A+1)..R(A+argCount) are args
+                    // Note: R points into stack; we need to push copies
+                    Value funcVal = R[A];
+                    std::vector<Value> args;
+                    for (int i = 0; i < argCount; i++) {
+                        args.push_back(R[A + 1 + i]);
+                    }
+                    
+                    // Push function and args onto stack
+                    currentCoroutine_->stack.push_back(funcVal);
+                    for (auto& arg : args) {
+                        currentCoroutine_->stack.push_back(arg);
+                    }
+                    
+                    size_t prevFrames = currentCoroutine_->frames.size();
+                    if (!callValue(argCount, retCount)) {
+                        return false;
+                    }
+                    
+                    // If a new Lua frame was pushed, break to outer loop to execute it
+                    // (it may have rcode or not; outer loop handles dispatch)
+                    if (currentCoroutine_->frames.size() > prevFrames) {
+                        // Copy results? No, callee hasn't run yet.
+                        // Break inner loop; outer loop will pick up new frame.
+                        // But outer loop expects rcode; if callee has no rcode, we need to return.
+                        CallFrame& newFrame = currentCoroutine_->frames.back();
+                        FunctionObject* newFunc = newFrame.closure->function();
+                        if (!newFunc->chunk()->hasRCode()) {
+                            // Callee has no register code; return to VM::run() for dispatch
+                            // Results will be on stack; caller needs to copy them to registers
+                            // For now, this is a limitation.
+                            hadError_ = true;
+                            return false;
+                        }
+                        // New frame has rcode; break inner loop to execute it
+                        goto next_frame;
+                    }
+                    
+                    // No new frame (C function); results are on stack top
+                    // Copy results back to R(A)..
+                    // retCount results are on stack top
+                    size_t stackSize = currentCoroutine_->stack.size();
+                    for (int i = 0; i < retCount; i++) {
+                        R[A + i] = currentCoroutine_->stack[stackSize - retCount + i];
+                    }
+                    // Pop results from stack
+                    for (int i = 0; i < retCount; i++) {
+                        currentCoroutine_->stack.pop_back();
+                    }
+                    break;
                 }
                 case ROpCode::ROP_TAILCALL: {
                     // return R(A)(R(A+1)..R(A+B-1))
@@ -294,9 +394,20 @@ bool VM::runRegister(size_t targetFrameCount) {
                 }
                 case ROpCode::ROP_CLOSURE: {
                     // R(A) = closure(K[Bx]), followed by B pseudo-instructions
-                    // TODO: create closure, capture upvalues
-                    hadError_ = true;
-                    return false;
+                    // B = upvalue count, Bx = constant index of function
+                    // For now: only support functions with no upvalues
+                    if (B != 0) {
+                        // Has upvalues; need to read pseudo-instructions
+                        hadError_ = true;
+                        return false;
+                    }
+                    Value funcValue = constants[Bx];
+                    size_t funcIndex = funcValue.asFunctionIndex();
+                    FunctionObject* function = chunk->getFunction(funcIndex);
+                    
+                    ClosureObject* closure = createClosure(function);
+                    R[A] = Value::closure(closure);
+                    break;
                 }
                 case ROpCode::ROP_VARARG: {
                     // R(A)..R(A+B-2) = varargs (B=1: no values)
