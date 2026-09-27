@@ -140,6 +140,9 @@ add_executable(luac src/luac.cpp ${CORE_SOURCES})
 add_executable(rtranslate_test src/rtranslate_test.cpp ${CORE_SOURCES})
 target_include_directories(rtranslate_test PRIVATE ${CMAKE_SOURCE_DIR}/src ${CMAKE_SOURCE_DIR}/include)
 
+add_executable(rsp_diff src/rsp_diff.cpp ${CORE_SOURCES})
+target_include_directories(rsp_diff PRIVATE ${CMAKE_SOURCE_DIR}/src ${CMAKE_SOURCE_DIR}/include)
+
 if(MSVC)
     target_compile_options(luac PRIVATE /W4 /WX)
 else()

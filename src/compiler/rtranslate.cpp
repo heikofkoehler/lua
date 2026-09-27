@@ -47,6 +47,17 @@ public:
         return result;
     }
 
+    // Debug: run only the SP computation phase.
+    bool computeSpOnly(std::unordered_map<size_t, int>& spOut,
+                       std::string& errorOut) {
+        if (!computeSp()) {
+            errorOut = error_;
+            return false;
+        }
+        spOut = spAt_;
+        return true;
+    }
+
 private:
     FunctionObject* func_;
     Chunk* chunk_;
@@ -790,4 +801,14 @@ private:
 RTranslateResult translateToRegister(FunctionObject* func) {
     Translator t(func);
     return t.run();
+}
+
+std::unordered_map<size_t, int> rtranslateComputeSp(FunctionObject* func,
+                                                     std::string& error) {
+    Translator t(func);
+    std::unordered_map<size_t, int> spOut;
+    if (!t.computeSpOnly(spOut, error)) {
+        return {};
+    }
+    return spOut;
 }

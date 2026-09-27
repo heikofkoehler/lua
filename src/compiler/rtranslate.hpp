@@ -18,6 +18,7 @@
 
 #include "vm/rinstruction.hpp"
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 class FunctionObject;
@@ -30,5 +31,10 @@ struct RTranslateResult {
 };
 
 RTranslateResult translateToRegister(FunctionObject* func);
+
+// Debug: compute stack depth map without full translation.
+// Returns offset -> sp, or empty map on error (error set).
+std::unordered_map<size_t, int> rtranslateComputeSp(FunctionObject* func,
+                                                     std::string& error);
 
 #endif // LUA_RTRANSLATE_HPP
