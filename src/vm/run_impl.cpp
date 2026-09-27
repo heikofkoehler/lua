@@ -437,7 +437,20 @@ std::string VM::getCallVarInfo(size_t opIp, int argCount) {
 }
 
 bool VM::run(size_t targetFrameCount) {
-    // Main execution loop
+    // Phase 3: Dispatch to register VM if enabled and code is available
+    if (useRegisterVM_) {
+        // Check if the current function has register code
+        if (!currentCoroutine_->frames.empty()) {
+            CallFrame& frame = currentCoroutine_->frames.back();
+            FunctionObject* func = frame.closure->function();
+            if (func->chunk()->hasRCode()) {
+                return runRegister(targetFrameCount);
+            }
+        }
+        // Fall through to stack VM if no register code
+    }
+    
+    // Main execution loop (stack VM)
     while (true) {
         if (currentCoroutine_->status == CoroutineObject::Status::SUSPENDED) {
             return true;

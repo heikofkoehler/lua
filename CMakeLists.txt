@@ -88,6 +88,7 @@ set(SOURCES
     src/compiler/rtranslate.cpp
     src/vm/vm.cpp
     src/vm/run_impl.cpp
+    src/vm/rrun.cpp
     src/vm/jit.cpp
     src/vm/jit_x64.cpp
     src/vm/gc_impl.cpp

@@ -60,6 +60,12 @@ public:
     std::vector<uint8_t>& code() { return code_; }  // Non-const for patching jumps
     uint8_t at(size_t offset) const { return code_[offset]; }
     size_t size() const { return code_.size(); }
+    
+    // Register VM bytecode (Phase 3)
+    const std::vector<uint32_t>& rcode() const { return rcode_; }
+    std::vector<uint32_t>& rcode() { return rcode_; }
+    bool hasRCode() const { return hasRCode_; }
+    void setRCode(std::vector<uint32_t>&& rc) { rcode_ = std::move(rc); hasRCode_ = true; }
 
     const std::string& sourceName() const { return sourceName_; }
     void setSourceName(const std::string& name) { sourceName_ = name; }
@@ -86,7 +92,9 @@ public:
     void verify(int upvalueCount) const;
 
 private:
-    std::vector<uint8_t> code_;        // Bytecode instructions
+    std::vector<uint8_t> code_;        // Bytecode instructions (stack VM)
+    std::vector<uint32_t> rcode_;      // Register bytecode (register VM, Phase 3)
+    bool hasRCode_ = false;            // True if rcode_ is valid
     std::vector<Value> constants_;     // Constant pool
     std::unordered_map<uint64_t, size_t> constantMap_; // For constant deduplication
     std::vector<std::string> identifiers_;  // Identifier pool (variable names)

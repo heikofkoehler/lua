@@ -51,6 +51,7 @@ public:
     bool run(const FunctionObject& function, const std::vector<Value>& args);
     bool run();
     bool run(size_t targetFrameCount);
+    bool runRegister(size_t targetFrameCount);  // Register VM interpreter (Phase 3)
     
     // Execute a protected call
     bool pcall(int argCount);
@@ -63,6 +64,10 @@ public:
 
     // Reset VM state
     void reset();
+
+    // Phase 3: Enable/disable register VM
+    void setUseRegisterVM(bool use) { useRegisterVM_ = use; }
+    bool useRegisterVM() const { return useRegisterVM_; }
 
     void internConstants(const FunctionObject& function);
 
@@ -393,6 +398,7 @@ private:
     CoroutineObject* mainCoroutine_;
     CoroutineObject* currentCoroutine_;
     bool hadError_;               // Error flag
+    bool useRegisterVM_ = false;  // Phase 3: use register interpreter if true
     bool inPcall_;                // Whether we are inside a protected call
     bool isHandlingError_;        // TRUE if we're currently processing an error
     bool isRunningErrorHandler_ = false; // TRUE if we are currently executing a message handler
