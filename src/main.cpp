@@ -3,6 +3,7 @@
 #include "compiler/parser.hpp"
 #include "compiler/codegen.hpp"
 #include "compiler/rtranslate.hpp"
+#include "compiler/rcodegen.hpp"
 #include "lsp/server.hpp"
 #include "vm/vm.hpp"
 #include <iostream>
@@ -177,20 +178,25 @@ RunStatus runInternal(const std::string& source, VM& vm, const std::string& name
 
         if (!program) return RunStatus::COMPILE_ERROR;
 
-        CodeGenerator codegen;
-        auto function = codegen.generate(program.get(), name);
+        std::unique_ptr<FunctionObject> function;
+        FunctionObject* funcPtr = nullptr;
 
-        if (!function) return RunStatus::COMPILE_ERROR;
-
-        FunctionObject* funcPtr = function.get();
-        
-        // Phase 3/4: Translate to register bytecode if requested
         if (useRegisterVM) {
-            if (!attachRegisterCode(funcPtr)) {
-                outError = "Failed to translate to register bytecode";
+            // Direct register compilation: AST -> ROP_* (no translator)
+            RCodeGen rcodegen;
+            FunctionObject* rfunc = rcodegen.compile(program.get());
+            if (!rfunc) {
+                outError = "Failed to compile to register bytecode";
                 return RunStatus::COMPILE_ERROR;
             }
+            function.reset(rfunc);
+            funcPtr = function.get();
             vm.setUseRegisterVM(true);
+        } else {
+            CodeGenerator codegen;
+            function = codegen.generate(program.get(), name);
+            if (!function) return RunStatus::COMPILE_ERROR;
+            funcPtr = function.get();
         }
         
         vm.registerFunction(function.release());
