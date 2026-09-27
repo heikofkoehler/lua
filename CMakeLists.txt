@@ -284,7 +284,7 @@ if(APPLE)
 endif()
 
 # Custom test target
-add_custom_target(test
+add_custom_target(check
     COMMAND ./run_all_tests.sh ../build/lua
     COMMAND ../build/test_c_api
     COMMAND ../build/test_cpp_api
@@ -369,3 +369,28 @@ install(EXPORT LuaTargets
 )
 
 
+
+# Testing
+include(CTest)
+if(BUILD_TESTING)
+    # Internal test suite (211 Lua test files)
+    file(GLOB LUA_TEST_FILES "${CMAKE_SOURCE_DIR}/tests/test_*.lua")
+    foreach(test_file ${LUA_TEST_FILES})
+        get_filename_component(test_name ${test_file} NAME_WE)
+        add_test(NAME ${test_name}
+                 COMMAND $<TARGET_FILE:lua> --nojit ${test_file}
+                 WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}/tests)
+        set_tests_properties(${test_name} PROPERTIES TIMEOUT 60)
+    endforeach()
+
+    # JIT variant (only when JIT is enabled)
+    if(USE_JIT)
+        foreach(test_file ${LUA_TEST_FILES})
+            get_filename_component(test_name ${test_file} NAME_WE)
+            add_test(NAME ${test_name}_jit
+                     COMMAND $<TARGET_FILE:lua> ${test_file}
+                     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}/tests)
+            set_tests_properties(${test_name}_jit PROPERTIES TIMEOUT 60)
+        endforeach()
+    endif()
+endif()
