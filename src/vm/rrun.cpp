@@ -87,11 +87,11 @@ next_frame:
                 }
                 case ROpCode::ROP_ADD: {
                     // R(A) = R(B) + R(C)
-                    // TODO: Use the existing arithmetic helpers with fast paths
-                    // For now, simple implementation
                     Value b = R[B];
                     Value c = R[C];
-                    if (b.isNumber() && c.isNumber()) {
+                    if (b.isInteger() && c.isInteger()) {
+                        R[A] = makeInteger(b.asInteger() + c.asInteger());
+                    } else if (b.isNumber() && c.isNumber()) {
                         R[A] = Value::number(b.asNumber() + c.asNumber());
                     } else {
                         // TODO: call metamethod
@@ -103,7 +103,9 @@ next_frame:
                 case ROpCode::ROP_SUB: {
                     Value b = R[B];
                     Value c = R[C];
-                    if (b.isNumber() && c.isNumber()) {
+                    if (b.isInteger() && c.isInteger()) {
+                        R[A] = makeInteger(b.asInteger() - c.asInteger());
+                    } else if (b.isNumber() && c.isNumber()) {
                         R[A] = Value::number(b.asNumber() - c.asNumber());
                     } else {
                         hadError_ = true;
@@ -114,7 +116,9 @@ next_frame:
                 case ROpCode::ROP_MUL: {
                     Value b = R[B];
                     Value c = R[C];
-                    if (b.isNumber() && c.isNumber()) {
+                    if (b.isInteger() && c.isInteger()) {
+                        R[A] = makeInteger(b.asInteger() * c.asInteger());
+                    } else if (b.isNumber() && c.isNumber()) {
                         R[A] = Value::number(b.asNumber() * c.asNumber());
                     } else {
                         hadError_ = true;
