@@ -303,20 +303,22 @@ void testFunction(FunctionObject* func, int depth = 0) {
     
     if (!error.empty()) {
         std::cout << indent << "TRANSLATOR FAIL " << func->name() << ": " << error << "\n";
+        // Dump partial SP map if available
+        if (!translatorSp.empty()) {
+            std::cout << indent << "  Partial map has " << translatorSp.size() << " entries\n";
+            // Check specific offsets
+            for (size_t off : {8085, 8143}) {
+                auto it = translatorSp.find(off);
+                if (it != translatorSp.end()) {
+                    std::cout << indent << "  sp[" << off << "] = " << it->second << "\n";
+                }
+            }
+        }
     }
     if (!refError.empty()) {
         std::cout << indent << "REF FAIL " << func->name() << ": " << refError << "\n";
     }
     if (!error.empty() || !refError.empty()) {
-        // Dump both maps for comparison at the failing offset
-        if (!refSp.empty()) {
-            std::cout << indent << "Reference SP map has " << refSp.size() << " entries\n";
-            // Find offset 10290 if present
-            auto it = refSp.find(10290);
-            if (it != refSp.end()) {
-                std::cout << indent << "  ref[10290] = " << it->second << "\n";
-            }
-        }
         return;
     }
     
