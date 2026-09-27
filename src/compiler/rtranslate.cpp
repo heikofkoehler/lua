@@ -235,7 +235,8 @@ private:
                     break;
                 case OpCode::OP_CLOSE: {
                     uint8_t slot = byteAt(off + 1);
-                    afterSp = slot;
+                    // Only shrinks, never grows
+                    afterSp = (curSp > (int)slot) ? slot : curSp;
                     break;
                 }
                 // Jumps
