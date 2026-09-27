@@ -181,13 +181,17 @@ void RCodeGen::visitBinary(BinaryNode* node) {
 }
 
 void RCodeGen::visitVariable(VariableExprNode* node) {
-    (void)node;
     int reg = allocReg();
     int local = findLocal(node->name());
     if (local >= 0) {
         emitAB(ROpCode::ROP_MOVE, reg, local);
     } else {
-        // TODO: upvalue or global
+        // Global: R(reg) = Up[0][K[name]]  (_ENV lookup)
+        // TODO: check upvalues first
+        size_t strIdx = func_->chunk()->addString(node->name());
+        Value nameVal = Value::string(strIdx);
+        int c = addConstant(nameVal);
+        emitABC(ROpCode::ROP_GETTABUP, reg, 0, c);
     }
     exprReg_ = reg;
 }
@@ -199,9 +203,37 @@ void RCodeGen::visitVararg(VarargExprNode* node) {
 }
 
 void RCodeGen::visitCall(CallExprNode* node) {
-    (void)node;
-    // TODO: implement
-    exprReg_ = allocReg();
+    int argc = (int)node->args().size();
+    // Generate callee and args into temporaries first
+    int callee = genExpr(node->callee());
+    std::vector<int> argRegs;
+    for (int i = 0; i < argc; ++i) {
+        argRegs.push_back(genExpr(node->args()[i].get()));
+    }
+    // Allocate consecutive block for the call: funcReg..funcReg+argc
+    // Bypass free list to ensure consecutiveness: use bump pointer
+    // Save free list state, allocate block, then restore
+    int funcReg = nextReg_;
+    nextReg_ += 1 + argc;
+    // Move callee and args into the block
+    if (callee != funcReg) {
+        emitAB(ROpCode::ROP_MOVE, funcReg, callee);
+    }
+    freeReg(callee);
+    for (int i = 0; i < argc; ++i) {
+        int target = funcReg + 1 + i;
+        if (argRegs[i] != target) {
+            emitAB(ROpCode::ROP_MOVE, target, argRegs[i]);
+        }
+        freeReg(argRegs[i]);
+    }
+    // Emit CALL: A=funcReg, B=argc+1, C=2 (1 return value)
+    emitABC(ROpCode::ROP_CALL, funcReg, argc + 1, 2);
+    exprReg_ = funcReg;
+    // Free the arg slots for reuse (funcReg holds result)
+    for (int i = 1; i <= argc; ++i) {
+        freeRegs_.push_back(funcReg + i);
+    }
 }
 
 void RCodeGen::visitMethodCall(MethodCallExprNode* node) {
