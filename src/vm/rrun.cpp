@@ -478,20 +478,44 @@ next_frame:
                 }
                 case ROpCode::ROP_FORPREP: {
                     // Numeric for: R(A)=index, R(A+1)=limit, R(A+2)=step; pc += sBx
-                    // TODO
-                    hadError_ = true;
-                    return false;
+                    // R(A+3) is external (loop variable)
+                    // For now: simple number version
+                    Value init = R[A];
+                    Value limit = R[A+1];
+                    Value step = R[A+2];
+                    if (!init.isNumber() || !limit.isNumber() || !step.isNumber()) {
+                        hadError_ = true;
+                        return false;
+                    }
+                    // Adjust: R(A) = init - step (so FORLOOP adds step first)
+                    R[A] = Value::number(init.asNumber() - step.asNumber());
+                    pc += sBx;
+                    break;
                 }
                 case ROpCode::ROP_FORLOOP: {
-                    // TODO
-                    hadError_ = true;
-                    return false;
+                    // R(A) += R(A+2); if (step > 0 ? R(A) <= R(A+1) : R(A) >= R(A+1)) then R(A+3)=R(A); pc += sBx
+                    Value step = R[A+2];
+                    if (!step.isNumber()) {
+                        hadError_ = true;
+                        return false;
+                    }
+                    double stepN = step.asNumber();
+                    double idx = R[A].asNumber() + stepN;
+                    R[A] = Value::number(idx);
+                    double limit = R[A+1].asNumber();
+                    bool cond = (stepN > 0) ? (idx <= limit) : (idx >= limit);
+                    if (cond) {
+                        R[A+3] = R[A];  // external copy
+                        pc += sBx;
+                    }
+                    break;
                 }
                 case ROpCode::ROP_CLOSE: {
                     // Close upvalues / to-be-closed variables with register >= A
-                    // TODO
-                    hadError_ = true;
-                    return false;
+                    // For now: close upvalues with stackIndex >= base + A
+                    size_t level = base + A;
+                    closeUpvalues(level);
+                    break;
                 }
                 case ROpCode::ROP_JMP: {
                     // pc += sBx
