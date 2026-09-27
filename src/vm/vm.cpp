@@ -2578,6 +2578,23 @@ bool VM::callValue(int argCount, int retCount, bool isTailCall, const char* meta
         
         currentCoroutine_->frames.push_back(std::move(frame));
         currentCoroutine_->chunk = function->chunk();
+        
+        // Phase 4: Allocate register window if function has register code
+        CallFrame& newFrame = currentCoroutine_->frames.back();
+        if (function->chunk()->hasRCode()) {
+            int frameSize = function->chunk()->rFrameSize();
+            // Extend stack to allocate register window
+            // Arguments are already at stackBase; need frameSize total registers
+            size_t currentSize = currentCoroutine_->stack.size();
+            size_t neededSize = newFrame.stackBase + frameSize;
+            if (neededSize > currentSize) {
+                size_t toAdd = neededSize - currentSize;
+                for (size_t i = 0; i < toAdd; i++) {
+                    currentCoroutine_->stack.push_back(Value::nil());
+                }
+            }
+        }
+        
         return true;
     }
     
