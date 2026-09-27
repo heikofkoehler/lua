@@ -531,6 +531,8 @@ next_frame:
                     FunctionObject* function = chunk->getFunction(funcIndex);
                     
                     ClosureObject* closure = createClosure(function);
+                    // Re-establish R after potential GC/stack reallocation
+                    R = currentCoroutine_->stack.data() + base;
                     // Anchor for GC
                     R[A] = Value::closure(closure);
                     
