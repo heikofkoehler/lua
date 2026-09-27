@@ -36,8 +36,8 @@ public:
     // Generational state
     uint8_t age() const { return age_; }
     void setAge(uint8_t age) { age_ = age; }
-    bool isOld() const { return age_ >= 1; }
-    void setOld() { age_ = 1; }
+    bool isOld() const { return age_ >= 2; }
+    void setOld() { age_ = 2; }
     bool isRemembered() const { return isRemembered_; }
     void setRemembered(bool r) { isRemembered_ = r; }
 

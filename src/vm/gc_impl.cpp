@@ -428,6 +428,50 @@ void VM::gcStep() {
                 processWeakTables();
                 clearWeakKeys();
                 clearWeakValues();
+
+                // Find young objects to be finalized
+                GCObject** p = &gcObjects_;
+                GCObject** tbfTail = &toBeFinalized_;
+                while (*tbfTail != nullptr) {
+                    tbfTail = &((*tbfTail)->nextRef());
+                }
+                while (*p != nullptr) {
+                    GCObject* obj = *p;
+                    if (obj->color() == GCObject::Color::WHITE && !obj->isOld() && !obj->isFinalized()) {
+                        bool canHaveGC = false;
+                        if (obj->type() == GCObject::Type::TABLE) {
+                            canHaveGC = !static_cast<TableObject*>(obj)->getMetatable().isNil();
+                        } else if (obj->type() == GCObject::Type::USERDATA) {
+                            canHaveGC = !static_cast<UserdataObject*>(obj)->metatable().isNil();
+                        }
+                        if (canHaveGC) {
+                            Value mm = getMetamethod(Value::fromObj(obj), "__gc");
+                            if (!mm.isNil()) {
+                                // Move to end of toBeFinalized_
+                                *p = obj->next();
+                                obj->setNext(*tbfTail);
+                                *tbfTail = obj;
+                                tbfTail = &(obj->nextRef());
+                                
+                                // Resurrect: mark it gray so its references are caught
+                                grayObject(obj);
+                                continue;
+                            }
+                        }
+                    }
+                    p = &(obj->nextRef());
+                }
+
+                while (!grayStack_.empty()) {
+                    GCObject* object = grayStack_.back();
+                    grayStack_.pop_back();
+                    blackenObject(this, object);
+                }
+
+                processWeakTables();
+                clearWeakKeys();
+                clearWeakValues();
+
                 // Sweep (atomic, same step): collect unreachable young objects,
                 // promote survivors. Inlined here instead of going through the
                 // SWEEP state so no mutator code can run between mark and sweep.
@@ -470,72 +514,9 @@ void VM::gcStep() {
                     runFinalizers();
                 }
                 // Stay in PAUSE; the next minor collection starts fresh.
-                // (MARK/SWEEP states are unused in generational mode.)
                 break;
             }
-            case GCState::MARK: {
-                if (!grayStack_.empty()) {
-                    GCObject* object = grayStack_.back();
-                    grayStack_.pop_back();
-                    blackenObject(this, object);
-                } else {
-                    // All objects marked; process weak tables before sweeping
-                    clearWeakValues();
-                    processWeakTables();
-                    clearWeakKeys();
-                    clearWeakValues();
-                    gcState_ = GCState::SWEEP;
-                }
-                break;
-            }
-            case GCState::ATOMIC: {
-                gcState_ = GCState::SWEEP;
-                break;
-            }
-            case GCState::SWEEP: {
-                // Minor sweep: collect unreachable young objects, promote survivors
-                // 1. Sync runtimeStrings_ BEFORE freeing young strings
-                auto sit = runtimeStrings_.begin();
-                while (sit != runtimeStrings_.end()) {
-                    if (sit->second->color() == GCObject::Color::WHITE && !sit->second->isOld()) {
-                        sit = runtimeStrings_.erase(sit);
-                    } else {
-                        ++sit;
-                    }
-                }
-
-                GCObject** current = &gcObjects_;
-                size_t newBytes = 0;
-                while (*current != nullptr) {
-                    GCObject* obj = *current;
-                    if (obj->color() == GCObject::Color::WHITE && !obj->isOld()) {
-                        // Young and unreachable -> collect
-                        *current = obj->next();
-                        freeObject(obj);
-                    } else {
-                        // Survivor or already old -> keep
-                        if (!obj->isOld()) obj->setAge(obj->age() + 1);
-                        if (obj->type() == GCObject::Type::TABLE) {
-                            TableObject* tbl = static_cast<TableObject*>(obj);
-                            Value mt = tbl->getMetatable();
-                            if (!mt.isNil() && mt.isTable() && !mt.asTableObj()->get("__mode").isNil()) {
-                                tbl->cleanNilEntries();
-                            }
-                        }
-                        obj->setColor(GCObject::Color::WHITE);
-                        newBytes += obj->size();
-                        current = &(obj->nextRef());
-                    }
-                }
-                
-                bytesAllocated_ = newBytes;
-                nextGC_ = bytesAllocated_ * 2;
-                if (nextGC_ < 1024 * 1024) nextGC_ = 1024 * 1024;
-
-                runFinalizers();
-                gcState_ = GCState::PAUSE;
-                break;
-            }
+            default: break;
         }
         return;
     }
@@ -655,6 +636,21 @@ void VM::collectGarbage() {
         obj->setRemembered(false);
     }
     rememberedSet_.clear();
+
+    if (gcMode_ == GCMode::GENERATIONAL) {
+        // Full major collection in generational mode:
+        // Perform a full collection cycle across all objects, and promote all survivors to old.
+        gcMode_ = GCMode::INCREMENTAL;
+        gcState_ = GCState::PAUSE;
+        do {
+            gcStep();
+        } while (gcState_ != GCState::PAUSE);
+        gcMode_ = GCMode::GENERATIONAL;
+        for (GCObject* obj = gcObjects_; obj != nullptr; obj = obj->next()) {
+            obj->setOld();
+        }
+        return;
+    }
 
     // If there is already a cycle in progress, finish it first so all
     // objects allocated during that cycle (marked black) are swept or reset to white.
