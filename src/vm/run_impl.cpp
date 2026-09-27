@@ -807,14 +807,20 @@ bool VM::run(size_t targetFrameCount) {
             case OpCode::OP_ADD: {
                 Value b = pop();
                 Value a = pop();
-                Value ca = a, cb = b;
-                if (coerceToNumber(ca) && coerceToNumber(cb)) {
-                    push(add(ca, cb));
-                } else if (!callBinaryMetamethod(a, b, "__add")) {
-                    if (hadError_) return false;
-                    Value badVal = !coerceToNumber(ca) ? a : b;
-                    int opIdx = !coerceToNumber(ca) ? 0 : 1;
-                    runtimeError("attempt to perform arithmetic on a " + typeName(badVal) + " value" + getVarInfo(currentFrame().ip - 1, opIdx));
+                // Fast path: int + int (no coercion, no metamethod check)
+                // Use unsigned arithmetic for well-defined wraparound.
+                if (a.isInteger() && b.isInteger()) {
+                    push(makeInteger(static_cast<int64_t>(static_cast<uint64_t>(a.asInteger()) + static_cast<uint64_t>(b.asInteger()))));
+                } else {
+                    Value ca = a, cb = b;
+                    if (coerceToNumber(ca) && coerceToNumber(cb)) {
+                        push(add(ca, cb));
+                    } else if (!callBinaryMetamethod(a, b, "__add")) {
+                        if (hadError_) return false;
+                        Value badVal = !coerceToNumber(ca) ? a : b;
+                        int opIdx = !coerceToNumber(ca) ? 0 : 1;
+                        runtimeError("attempt to perform arithmetic on a " + typeName(badVal) + " value" + getVarInfo(currentFrame().ip - 1, opIdx));
+                    }
                 }
                 break;
             }
@@ -822,14 +828,19 @@ bool VM::run(size_t targetFrameCount) {
             case OpCode::OP_SUB: {
                 Value b = pop();
                 Value a = pop();
-                Value ca = a, cb = b;
-                if (coerceToNumber(ca) && coerceToNumber(cb)) {
-                    push(subtract(ca, cb));
-                } else if (!callBinaryMetamethod(a, b, "__sub")) {
-                    if (hadError_) return false;
-                    Value badVal = !coerceToNumber(ca) ? a : b;
-                    int opIdx = !coerceToNumber(ca) ? 0 : 1;
-                    runtimeError("attempt to perform arithmetic on a " + typeName(badVal) + " value" + getVarInfo(currentFrame().ip - 1, opIdx));
+                // Fast path: int - int (unsigned for well-defined wraparound)
+                if (a.isInteger() && b.isInteger()) {
+                    push(makeInteger(static_cast<int64_t>(static_cast<uint64_t>(a.asInteger()) - static_cast<uint64_t>(b.asInteger()))));
+                } else {
+                    Value ca = a, cb = b;
+                    if (coerceToNumber(ca) && coerceToNumber(cb)) {
+                        push(subtract(ca, cb));
+                    } else if (!callBinaryMetamethod(a, b, "__sub")) {
+                        if (hadError_) return false;
+                        Value badVal = !coerceToNumber(ca) ? a : b;
+                        int opIdx = !coerceToNumber(ca) ? 0 : 1;
+                        runtimeError("attempt to perform arithmetic on a " + typeName(badVal) + " value" + getVarInfo(currentFrame().ip - 1, opIdx));
+                    }
                 }
                 break;
             }
@@ -837,14 +848,19 @@ bool VM::run(size_t targetFrameCount) {
             case OpCode::OP_MUL: {
                 Value b = pop();
                 Value a = pop();
-                Value ca = a, cb = b;
-                if (coerceToNumber(ca) && coerceToNumber(cb)) {
-                    push(multiply(ca, cb));
-                } else if (!callBinaryMetamethod(a, b, "__mul")) {
-                    if (hadError_) return false;
-                    Value badVal = !coerceToNumber(ca) ? a : b;
-                    int opIdx = !coerceToNumber(ca) ? 0 : 1;
-                    runtimeError("attempt to perform arithmetic on a " + typeName(badVal) + " value" + getVarInfo(currentFrame().ip - 1, opIdx));
+                // Fast path: int * int (unsigned for well-defined wraparound)
+                if (a.isInteger() && b.isInteger()) {
+                    push(makeInteger(static_cast<int64_t>(static_cast<uint64_t>(a.asInteger()) * static_cast<uint64_t>(b.asInteger()))));
+                } else {
+                    Value ca = a, cb = b;
+                    if (coerceToNumber(ca) && coerceToNumber(cb)) {
+                        push(multiply(ca, cb));
+                    } else if (!callBinaryMetamethod(a, b, "__mul")) {
+                        if (hadError_) return false;
+                        Value badVal = !coerceToNumber(ca) ? a : b;
+                        int opIdx = !coerceToNumber(ca) ? 0 : 1;
+                        runtimeError("attempt to perform arithmetic on a " + typeName(badVal) + " value" + getVarInfo(currentFrame().ip - 1, opIdx));
+                    }
                 }
                 break;
             }
