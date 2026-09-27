@@ -234,7 +234,6 @@ private:
                     break;
                 // Pop 1
                 case OpCode::OP_SET_LOCAL:
-                case OpCode::OP_SET_UPVALUE:
                 case OpCode::OP_SET_TABUP:
                 case OpCode::OP_SET_TABUP_LONG:
                 case OpCode::OP_POP:
@@ -242,6 +241,10 @@ private:
                 case OpCode::OP_DEF_GLOBAL:
                 case OpCode::OP_DEF_GLOBAL_LONG:
                     afterSp = curSp - 1;
+                    break;
+                // SET_UPVALUE does NOT pop (the VM uses peek, POP does the popping)
+                case OpCode::OP_SET_UPVALUE:
+                    afterSp = curSp;
                     break;
                 // Pop 1, push 1 (net 0)
                 case OpCode::OP_NEG:
