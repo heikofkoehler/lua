@@ -86,6 +86,7 @@ set(SOURCES
     src/compiler/chunk.cpp
     src/compiler/codegen.cpp
     src/compiler/rtranslate.cpp
+    src/compiler/rcodegen.cpp
     src/vm/vm.cpp
     src/vm/run_impl.cpp
     src/vm/rrun.cpp

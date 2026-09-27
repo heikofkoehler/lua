@@ -88,6 +88,9 @@ private:
     // Expression result: register holding the value
     int exprReg_ = -1;
 
+    // Generated register bytecode
+    std::vector<RInstruction> code_;
+
     // Allocate a temporary register
     int allocReg();
     // Free a temporary register

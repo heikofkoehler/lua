@@ -1,23 +1,26 @@
 #include "compiler/rcodegen.hpp"
 #include "value/string.hpp"
+#include "vm/rinstruction.hpp"
 
 RCodeGen::RCodeGen() {
     pushScope();
 }
 
 FunctionObject* RCodeGen::compile(ProgramNode* program) {
-    // Create main function
-    func_ = new FunctionObject();
-    func_->setNumParams(0);
-    func_->setIsVararg(true);  // Main chunk is vararg
+    // Create main function with a Chunk
+    auto chunk = std::make_unique<Chunk>();
+    func_ = new FunctionObject("", 0, std::move(chunk), 0, true);
 
     nextReg_ = 0;
-    // TODO: implement
+    code_.clear();
 
     program->accept(*this);
 
     // Ensure return at end
     emitAB(ROpCode::ROP_RETURN, 0, 1);  // return 0 values
+
+    // Install register bytecode into the chunk
+    func_->chunk()->setRCode(std::move(code_), nextReg_);
 
     return func_;
 }
@@ -59,27 +62,36 @@ void RCodeGen::popScope() {
 }
 
 void RCodeGen::emitABC(ROpCode op, int a, int b, int c) {
-    // TODO: implement using RInstruction
+    code_.push_back(ropEncodeABC(op, (uint8_t)a, (uint8_t)b, (uint8_t)c));
 }
 
 void RCodeGen::emitAB(ROpCode op, int a, int b) {
-    // TODO: implement
+    code_.push_back(ropEncodeABC(op, (uint8_t)a, (uint8_t)b, 0));
 }
 
 void RCodeGen::emitABx(ROpCode op, int a, int bx) {
-    // TODO: implement
+    code_.push_back(ropEncodeABx(op, (uint8_t)a, (uint16_t)bx));
 }
 
 size_t RCodeGen::emitJump(ROpCode op, int a) {
-    // TODO: implement, return PC
-    return 0;
+    // Emit jump with placeholder offset, return PC for patching
+    size_t pc = code_.size();
+    code_.push_back(ropEncodeAsBx(op, (uint8_t)a, 0));
+    return pc;
 }
 
 void RCodeGen::patchJump(size_t pc, size_t target) {
-    // TODO: implement
+    // Patch a jump instruction at pc to jump to target
+    // offset = target - (pc + 1)
+    int offset = (int)target - (int)(pc + 1);
+    RInstruction old = code_[pc];
+    ROpCode op = (ROpCode)(old & 0xFF);
+    uint8_t a = (old >> 8) & 0xFF;
+    code_[pc] = ropEncodeAsBx(op, a, (int16_t)offset);
 }
 
 int RCodeGen::addConstant(const Value& v) {
+    (void)v;
     // TODO: implement constant table
     return 0;
 }
@@ -108,12 +120,13 @@ void RCodeGen::genBlock(const std::vector<std::unique_ptr<StmtNode>>& stmts) {
 // === Expression visitors ===
 
 void RCodeGen::visitLiteral(LiteralNode* node) {
+    (void)node;
     int reg = allocReg();
     const Value& v = node->value();
     if (v.isNil()) {
         emitAB(ROpCode::ROP_LOADNIL, reg, 1);
-    } else if (v.isBoolean()) {
-        emitAB(ROpCode::ROP_LOADBOOL, reg, v.boolean() ? 1 : 0);
+    } else if (v.isBool()) {
+        emitAB(ROpCode::ROP_LOADBOOL, reg, v.asBool() ? 1 : 0);
     } else if (v.isInteger()) {
         // TODO: use LOADK or LOADI
         int c = addConstant(v);
@@ -126,12 +139,14 @@ void RCodeGen::visitLiteral(LiteralNode* node) {
 }
 
 void RCodeGen::visitStringLiteral(StringLiteralNode* node) {
+    (void)node;
     int reg = allocReg();
     // TODO: intern string, add constant
     exprReg_ = reg;
 }
 
 void RCodeGen::visitUnary(UnaryNode* node) {
+    (void)node;
     int operand = genExpr(node->operand());
     int reg = allocReg();
     // TODO: map TokenType to ROP_UNM, ROP_NOT, ROP_LEN, ROP_BNOT
@@ -140,6 +155,7 @@ void RCodeGen::visitUnary(UnaryNode* node) {
 }
 
 void RCodeGen::visitBinary(BinaryNode* node) {
+    (void)node;
     int left = genExpr(node->left());
     int right = genExpr(node->right());
     int reg = allocReg();
@@ -150,6 +166,7 @@ void RCodeGen::visitBinary(BinaryNode* node) {
 }
 
 void RCodeGen::visitVariable(VariableExprNode* node) {
+    (void)node;
     int reg = allocReg();
     int local = findLocal(node->name());
     if (local >= 0) {
@@ -161,36 +178,43 @@ void RCodeGen::visitVariable(VariableExprNode* node) {
 }
 
 void RCodeGen::visitVararg(VarargExprNode* node) {
+    (void)node;
     // TODO: implement
     exprReg_ = allocReg();
 }
 
 void RCodeGen::visitCall(CallExprNode* node) {
+    (void)node;
     // TODO: implement
     exprReg_ = allocReg();
 }
 
 void RCodeGen::visitMethodCall(MethodCallExprNode* node) {
+    (void)node;
     // TODO: implement
     exprReg_ = allocReg();
 }
 
 void RCodeGen::visitTableConstructor(TableConstructorNode* node) {
+    (void)node;
     // TODO: implement
     exprReg_ = allocReg();
 }
 
 void RCodeGen::visitIndexExpr(IndexExprNode* node) {
+    (void)node;
     // TODO: implement
     exprReg_ = allocReg();
 }
 
 void RCodeGen::visitFunctionExpr(FunctionExprNode* node) {
+    (void)node;
     // TODO: implement closure
     exprReg_ = allocReg();
 }
 
 void RCodeGen::visitGroupExpr(GroupExprNode* node) {
+    (void)node;
     node->expr()->accept(*this);
     // exprReg_ already set
 }
@@ -198,92 +222,114 @@ void RCodeGen::visitGroupExpr(GroupExprNode* node) {
 // === Statement visitors ===
 
 void RCodeGen::visitExprStmt(ExprStmtNode* node) {
+    (void)node;
     int r = genExpr(node->expr());
     freeReg(r);
 }
 
 void RCodeGen::visitAssignmentStmt(AssignmentStmtNode* node) {
+    (void)node;
     // TODO: implement
 }
 
 void RCodeGen::visitIndexAssignmentStmt(IndexAssignmentStmtNode* node) {
+    (void)node;
     // TODO: implement
 }
 
 void RCodeGen::visitLocalDeclStmt(LocalDeclStmtNode* node) {
+    (void)node;
     // TODO: implement
 }
 
 void RCodeGen::visitMultipleLocalDeclStmt(MultipleLocalDeclStmtNode* node) {
+    (void)node;
     // TODO: implement
 }
 
 void RCodeGen::visitMultipleAssignmentStmt(MultipleAssignmentStmtNode* node) {
+    (void)node;
     // TODO: implement
 }
 
 void RCodeGen::visitGlobalDeclStmt(GlobalDeclStmtNode* node) {
+    (void)node;
     // TODO: implement
 }
 
 void RCodeGen::visitMultipleGlobalDeclStmt(MultipleGlobalDeclStmtNode* node) {
+    (void)node;
     // TODO: implement
 }
 
 void RCodeGen::visitIfStmt(IfStmtNode* node) {
+    (void)node;
     // TODO: implement
 }
 
 void RCodeGen::visitWhileStmt(WhileStmtNode* node) {
+    (void)node;
     // TODO: implement
 }
 
 void RCodeGen::visitRepeatStmt(RepeatStmtNode* node) {
+    (void)node;
     // TODO: implement
 }
 
 void RCodeGen::visitForStmt(ForStmtNode* node) {
+    (void)node;
     // TODO: implement
 }
 
 void RCodeGen::visitForInStmt(ForInStmtNode* node) {
+    (void)node;
     // TODO: implement
 }
 
 void RCodeGen::visitFunctionDecl(FunctionDeclNode* node) {
+    (void)node;
     // TODO: implement
 }
 
 void RCodeGen::visitReturn(ReturnStmtNode* node) {
+    (void)node;
     // TODO: implement
 }
 
 void RCodeGen::visitBreak(BreakStmtNode* node) {
+    (void)node;
     // TODO: implement
 }
 
 void RCodeGen::visitGoto(GotoStmtNode* node) {
+    (void)node;
     // TODO: implement
 }
 
 void RCodeGen::visitLabel(LabelStmtNode* node) {
+    (void)node;
     // TODO: implement
 }
 
 void RCodeGen::visitBlock(BlockStmtNode* node) {
+    (void)node;
     genBlock(node->statements());
 }
 
 void RCodeGen::visitProgram(ProgramNode* node) {
+    (void)node;
     genBlock(node->statements());
 }
 
 FunctionObject* RCodeGen::compileFunction(FunctionExprNode* func) {
+    (void)func;
     // TODO: implement
     return nullptr;
 }
 
 FunctionObject* RCodeGen::compileFunction(FunctionDeclNode* func) {
+    (void)func;
     // TODO: implement
     return nullptr;
 }
