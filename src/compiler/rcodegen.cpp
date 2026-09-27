@@ -8,8 +8,10 @@ RCodeGen::RCodeGen() {
 
 FunctionObject* RCodeGen::compile(ProgramNode* program) {
     // Create main function with a Chunk
+    // Main chunk has 1 upvalue: _ENV (at index 0)
     auto chunk = std::make_unique<Chunk>();
-    func_ = new FunctionObject("", 0, std::move(chunk), 0, true);
+    func_ = new FunctionObject("", 0, std::move(chunk), 1, true);
+    func_->addUpvalueName("_ENV");
 
     nextReg_ = 0;
     code_.clear();
@@ -138,9 +140,11 @@ void RCodeGen::visitLiteral(LiteralNode* node) {
 }
 
 void RCodeGen::visitStringLiteral(StringLiteralNode* node) {
-    (void)node;
     int reg = allocReg();
-    // TODO: intern string, add constant
+    size_t strIdx = func_->chunk()->addString(node->content());
+    Value strVal = Value::string(strIdx);
+    int c = addConstant(strVal);
+    emitABx(ROpCode::ROP_LOADK, reg, c);
     exprReg_ = reg;
 }
 
