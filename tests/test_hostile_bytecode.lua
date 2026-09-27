@@ -1,32 +1,32 @@
 -- Regression test: hostile bytecode must raise catchable errors, not crash.
 --
--- 1. Out-of-range constant index: VM::getConstant now checks the index and
---    raises "bad constant index" instead of unchecked vector access.
--- 2. Invalid arity/upvalueCount: FunctionObject::deserialize validates that
---    arity and upvalueCount are in [0, 255]; corrupted values raise
---    "bad binary format" instead of crashing call setup.
+-- The load-time bytecode verifier (Chunk::verify) rejects corrupted chunks
+-- with "bad binary format ..." before any code runs. The runtime guards
+-- (VM::getConstant "bad constant index", arity validation) remain as
+-- defense-in-depth for paths that bypass the verifier.
 --
 -- luacheck: ignore
 
--- Test 1: bad constant index
+-- Test 1: out-of-range constant index must fail at LOAD time now.
 -- 'return 42' compiles to OP_CONSTANT (0x00) <idx>, OP_RETURN.
--- We locate the OP_CONSTANT by finding the pattern and patch the operand.
 local blob = assert(string.dump(assert(load("return 42"))))
 
--- Find OP_CONSTANT (0x00) followed by a small index byte in the code section.
--- The code section comes after the 40-byte header + function metadata.
--- Instead of parsing, we try patching each 0x00 byte that could be an opcode
--- and check for the specific error.
 local found_const_guard = false
 for pos = 1, #blob do
     if blob:byte(pos) == 0x00 then
-        -- Try patching the NEXT byte (potential operand) to 0xFF
         if pos + 1 <= #blob then
             local patched = blob:sub(1, pos) .. "\xFF" .. blob:sub(pos + 2)
-            local ok, f = pcall(load, patched)
-            if ok and f then
+            local f, ferr = load(patched)
+            if not f and type(ferr) == "string"
+               and ferr:find("constant index out of range") then
+                found_const_guard = true
+                break
+            end
+            -- Old runtime-guard path (defense in depth): still acceptable.
+            if f then
                 local cok, cerr = pcall(f)
-                if not cok and type(cerr) == "string" and cerr:find("bad constant index") then
+                if not cok and type(cerr) == "string"
+                   and cerr:find("bad constant index") then
                     found_const_guard = true
                     break
                 end
@@ -34,12 +34,23 @@ for pos = 1, #blob do
         end
     end
 end
-assert(found_const_guard, "expected to trigger 'bad constant index' guard")
+assert(found_const_guard, "expected 'constant index out of range' guard")
 
--- Test 2: invalid arity (negative via 0xFF in high byte)
+-- Test 2: invalid opcode byte must fail at LOAD time.
+-- Corrupt a byte to an out-of-range opcode value (>= 75).
+local found_opcode_guard = false
+for pos = 1, #blob do
+    local patched = blob:sub(1, pos - 1) .. "\xFE" .. blob:sub(pos + 1)
+    local f, ferr = load(patched)
+    if not f and type(ferr) == "string" and ferr:find("bad binary format") then
+        found_opcode_guard = true
+        break
+    end
+end
+assert(found_opcode_guard, "expected 'bad binary format' for invalid opcode")
+
+-- Test 3: invalid arity (negative via 0xFF in high byte)
 -- The arity field is a 4-byte int after the 40-byte header + nameLen.
--- We verify that a corrupted arity raises instead of crashing.
--- (Position 48 in 'return 42' dump is the high byte of arity.)
 local pos48 = 48
 if pos48 <= #blob then
     local patched = blob:sub(1, pos48 - 1) .. "\xFF" .. blob:sub(pos48 + 1)
@@ -59,4 +70,37 @@ if pos48 <= #blob then
     end
 end
 
-print("test_hostile_bytecode: all assertions passed")
+-- Test 4: jump target out of range must fail at LOAD time.
+-- 'while true do end' compiles to a loop; corrupt its backward offset.
+local loop_blob = assert(string.dump(assert(load("while true do end"))))
+local found_jump_guard = false
+for pos = 1, #loop_blob do
+    local patched = loop_blob:sub(1, pos - 1) .. "\xFF\xFF" .. loop_blob:sub(pos + 2)
+    local f, ferr = load(patched)
+    if not f and type(ferr) == "string"
+       and (ferr:find("jump target") or ferr:find("loop target")) then
+        found_jump_guard = true
+        break
+    end
+end
+assert(found_jump_guard, "expected 'jump/loop target' guard")
+
+
+-- Test 5: absurd count fields must fail fast, not hang or allocate gigabytes.
+-- Corrupt the idCount field (high byte) to 0x6E000000.
+local hdr_blob = assert(string.dump(assert(load("for i=1,10 do local x = i*2 end return 42"))))
+-- Find idCount: parse header the same way the VM does.
+local pos = 41
+local nameLen = string.unpack("<I4", hdr_blob, pos); pos = pos + 4 + nameLen
+pos = pos + 4 + 4 + 1 + 4 + 4  -- arity, upvalueCount, varargs, lineDefined, lastLineDefined
+local snLen = string.unpack("<I4", hdr_blob, pos); pos = pos + 4 + snLen
+local codeSize = string.unpack("<I4", hdr_blob, pos); pos = pos + 4 + codeSize
+local linesSize = string.unpack("<I4", hdr_blob, pos); pos = pos + 4 + linesSize * 4
+-- pos now points at idCount
+local idCountPos = pos
+local bad = hdr_blob:sub(1, idCountPos + 2) .. "\x6E" .. hdr_blob:sub(idCountPos + 4)
+local f5, err5 = load(bad)
+assert(not f5 and type(err5) == "string" and err5:find("absurd"),
+       "expected 'absurd ... count' for corrupted idCount, got: " .. tostring(err5):sub(1, 60))
+
+print("test_hostile_bytecode: all assertions passed (with verifier)")

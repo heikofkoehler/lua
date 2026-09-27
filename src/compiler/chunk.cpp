@@ -588,12 +588,277 @@ static void readBytes(std::istream& is, char* dest, size_t size) {
     }
 }
 
+// Sanity bounds for deserialized counts. Corrupted bytecode can encode
+// absurd counts (e.g. 1.8B identifiers) that would cause huge allocations
+// or multi-minute loops before the truncation check fires. These limits
+// are far above any legitimate chunk.
+constexpr uint32_t MAX_CHUNK_NAME_LEN = 64 * 1024;
+constexpr uint32_t MAX_CODE_SIZE = 64 * 1024 * 1024;
+constexpr uint32_t MAX_LINES_SIZE = 64 * 1024 * 1024;
+constexpr uint32_t MAX_ID_COUNT = 1024 * 1024;
+constexpr uint32_t MAX_ID_LEN = 64 * 1024;
+constexpr uint32_t MAX_CONST_COUNT = 1024 * 1024;
+constexpr uint32_t MAX_LOCAL_COUNT = 1024 * 1024;
+
+static void checkCount(uint32_t value, uint32_t max, const char* what) {
+    if (value > max) {
+        throw std::runtime_error(std::string("bad binary format (absurd ") + what + ")");
+    }
+}
+
+
+// Bytecode verifier: validates hostile/corrupted bytecode at load time.
+// Checks opcode validity, operand bounds, constant indices, jump targets,
+// and upvalue indices. Throws std::runtime_error on any violation.
+namespace {
+
+// Operand sizes in bytes for each opcode, indexed by OpCode value.
+// Derived from opcode.hpp comments and verified against run_impl.cpp.
+const uint8_t kOperandSizes[] = {
+    1,  // OP_CONSTANT [index: u8]
+    3,  // OP_CONSTANT_LONG [index: u24]
+    0,  // OP_NIL
+    0,  // OP_TRUE
+    0,  // OP_FALSE
+    1,  // OP_GET_GLOBAL [name_index: u8]
+    1,  // OP_SET_GLOBAL [name_index: u8]
+    1,  // OP_GET_LOCAL [slot: u8]
+    1,  // OP_SET_LOCAL [slot: u8]
+    1,  // OP_GET_UPVALUE [index: u8]
+    1,  // OP_SET_UPVALUE [index: u8]
+    2,  // OP_GET_TABUP [upIndex: u8, constIndex: u8]
+    2,  // OP_SET_TABUP [upIndex: u8, constIndex: u8]
+    4,  // OP_GET_TABUP_LONG [upIndex: u8, constIndex: u24]
+    4,  // OP_SET_TABUP_LONG [upIndex: u8, constIndex: u24]
+    0,  // OP_CLOSE_UPVALUE
+    2,  // OP_TBC [slot: u8, nameIdx: u8]
+    1,  // OP_CLOSE [index: u8]
+    0,  // OP_ADD
+    0,  // OP_SUB
+    0,  // OP_MUL
+    0,  // OP_DIV
+    0,  // OP_IDIV
+    0,  // OP_MOD
+    0,  // OP_POW
+    0,  // OP_BAND
+    0,  // OP_BOR
+    0,  // OP_BXOR
+    0,  // OP_SHL
+    0,  // OP_SHR
+    0,  // OP_CONCAT
+    0,  // OP_NEG
+    0,  // OP_NOT
+    0,  // OP_BNOT
+    0,  // OP_LEN
+    0,  // OP_EQUAL
+    0,  // OP_LESS
+    0,  // OP_LESS_EQUAL
+    0,  // OP_GREATER
+    0,  // OP_GREATER_EQUAL
+    0,  // OP_POP
+    0,  // OP_DUP
+    0,  // OP_SWAP
+    1,  // OP_ROTATE [n: u8]
+    2,  // OP_JUMP [offset: u16]
+    2,  // OP_JUMP_IF_FALSE [offset: u16]
+    2,  // OP_LOOP [offset: u16]
+    0xFF,// OP_CLOSURE (variable: [index: u8] + 2 bytes per upvalue)
+    0xFF,// OP_CLOSURE_LONG (variable: [index: u24] + 2 bytes per upvalue)
+    2,  // OP_CALL [arg_count: u8, ret_count: u8]
+    2,  // OP_CALL_MULTI [fixed_arg_count: u8, ret_count: u8]
+    1,  // OP_TAILCALL [arg_count: u8]
+    1,  // OP_TAILCALL_MULTI [fixed_arg_count: u8]
+    1,  // OP_RETURN_VALUE [count: u8]
+    1,  // OP_RETURN_VALUE_MULTI [fixed_count: u8]
+    0,  // OP_NEW_TABLE
+    0,  // OP_GET_TABLE
+    0,  // OP_SET_TABLE
+    0,  // OP_SET_TABLE_MULTI
+    0,  // OP_IO_OPEN
+    0,  // OP_IO_WRITE
+    0,  // OP_IO_READ
+    0,  // OP_IO_CLOSE
+    1,  // OP_GET_VARARG [ret_count: u8]
+    0,  // OP_PACK_VARARG_TABLE
+    0,  // OP_GET_VARARG_ITEM
+    0,  // OP_GET_VARARG_COUNT
+    2,  // OP_DEF_GLOBAL [upvalue: u8, const_index: u8]
+    4,  // OP_DEF_GLOBAL_LONG [upvalue: u8, const_index: u24]
+    0,  // OP_DEF_GLOBAL_TABLE
+    2,  // OP_YIELD [args: u8, returns: u8]
+    2,  // OP_YIELD_MULTI [fixed_args: u8, returns: u8]
+    3,  // OP_FORPREP [base: u8, offset: u16]
+    3,  // OP_FORLOOP [base: u8, offset: u16]
+    0,  // OP_RETURN
+};
+
+uint32_t readU24(const std::vector<uint8_t>& code, size_t pos) {
+    return static_cast<uint32_t>(code[pos])
+         | (static_cast<uint32_t>(code[pos + 1]) << 8)
+         | (static_cast<uint32_t>(code[pos + 2]) << 16);
+}
+
+}  // namespace
+
+void Chunk::verify(int upvalueCount) const {
+    const auto& code = code_;
+    const size_t n = code.size();
+    const size_t numConsts = constants_.size();
+    const size_t numIds = identifiers_.size();
+
+    // Pass 1: decode instructions, check opcode/operand bounds, collect boundaries.
+    std::vector<char> isInstrStart(n + 1, 0);
+    isInstrStart[n] = 1;  // end-of-code is a valid jump target
+    size_t pos = 0;
+    while (pos < n) {
+        uint8_t opByte = code[pos];
+        if (opByte >= sizeof(kOperandSizes)) {
+            throw std::runtime_error("bad binary format (invalid opcode "
+                + std::to_string(opByte) + " at offset " + std::to_string(pos) + ")");
+        }
+        isInstrStart[pos] = 1;
+        uint8_t opSize = kOperandSizes[opByte];
+        OpCode op = static_cast<OpCode>(opByte);
+        size_t o = pos + 1;  // operand start
+        // OP_CLOSURE / OP_CLOSURE_LONG are variable-length: the constant index
+        // is followed by 2 bytes (isLocal, index) per upvalue of the target
+        // function. Resolve the target to compute the true instruction size.
+        if (op == OpCode::OP_CLOSURE || op == OpCode::OP_CLOSURE_LONG) {
+            bool isLong = (op == OpCode::OP_CLOSURE_LONG);
+
+            size_t idxSize = isLong ? 3 : 1;
+            if (o + idxSize > n)
+                throw std::runtime_error("bad binary format (truncated operands at offset "
+                    + std::to_string(pos) + ")");
+            uint32_t cidx = isLong ? readU24(code, o) : code[o];
+            if (cidx >= numConsts)
+                throw std::runtime_error("bad binary format (constant index out of range)");
+            const Value& cv = constants_[cidx];
+            if (!cv.isFunctionObject())
+                throw std::runtime_error("bad binary format (OP_CLOSURE target is not a function)");
+            FunctionObject* target = getFunction(cv.asFunctionIndex());
+            if (!target)
+                throw std::runtime_error("bad binary format (OP_CLOSURE function index out of range)");
+            size_t uvCount = static_cast<size_t>(target->upvalueCount());
+            size_t total = 1 + idxSize + 2 * uvCount;
+            if (pos + total > n)
+                throw std::runtime_error("bad binary format (truncated upvalue descriptors at offset "
+                    + std::to_string(pos) + ")");
+            // Validate parent-upvalue references (isLocal == 0).
+            for (size_t i = 0; i < uvCount; i++) {
+                uint8_t isLocal = code[o + idxSize + 2 * i];
+                uint8_t uvIdx = code[o + idxSize + 2 * i + 1];
+                if (isLocal > 1)
+                    throw std::runtime_error("bad binary format (invalid upvalue descriptor)");
+                if (!isLocal && static_cast<int>(uvIdx) >= upvalueCount)
+                    throw std::runtime_error("bad binary format (upvalue index out of range)");
+            }
+            isInstrStart[pos] = 1;
+            pos += total;
+            continue;
+        }
+        if (opSize != 0xFF && pos + 1 + opSize > n) {
+            throw std::runtime_error("bad binary format (truncated operands at offset "
+                + std::to_string(pos) + ")");
+        }
+
+
+        // Constant-index checks
+        auto checkConstU8 = [&](size_t at) {
+            if (code[at] >= numConsts)
+                throw std::runtime_error("bad binary format (constant index out of range)");
+        };
+        auto checkConstU24 = [&](size_t at) {
+            if (readU24(code, at) >= numConsts)
+                throw std::runtime_error("bad binary format (constant index out of range)");
+        };
+        auto checkIdU8 = [&](size_t at) {
+            if (code[at] >= numIds)
+                throw std::runtime_error("bad binary format (identifier index out of range)");
+        };
+        auto checkUvU8 = [&](size_t at) {
+            if (static_cast<int>(code[at]) >= upvalueCount)
+                throw std::runtime_error("bad binary format (upvalue index out of range)");
+        };
+
+        switch (op) {
+            case OpCode::OP_CONSTANT: checkConstU8(o); break;
+            case OpCode::OP_CONSTANT_LONG: checkConstU24(o); break;
+            case OpCode::OP_GET_GLOBAL: case OpCode::OP_SET_GLOBAL: checkIdU8(o); break;
+            case OpCode::OP_GET_UPVALUE: case OpCode::OP_SET_UPVALUE: checkUvU8(o); break;
+            case OpCode::OP_GET_TABUP: case OpCode::OP_SET_TABUP:
+                checkUvU8(o); checkConstU8(o + 1); break;
+            case OpCode::OP_GET_TABUP_LONG: case OpCode::OP_SET_TABUP_LONG:
+                checkUvU8(o); checkConstU24(o + 1); break;
+            case OpCode::OP_CLOSURE: checkConstU8(o); break;
+            case OpCode::OP_CLOSURE_LONG: checkConstU24(o); break;
+            case OpCode::OP_DEF_GLOBAL: checkUvU8(o); checkConstU8(o + 1); break;
+            case OpCode::OP_DEF_GLOBAL_LONG: checkUvU8(o); checkConstU24(o + 1); break;
+            default: break;
+        }
+        pos += 1 + opSize;
+    }
+
+    // Pass 2: jump targets must be in bounds and on instruction boundaries.
+    pos = 0;
+    while (pos < n) {
+        OpCode op = static_cast<OpCode>(code[pos]);
+        uint8_t opSize = kOperandSizes[static_cast<uint8_t>(op)];
+        size_t after;
+        if (op == OpCode::OP_CLOSURE || op == OpCode::OP_CLOSURE_LONG) {
+            // Variable length: recompute from the target function's upvalue count
+            // (already validated in pass 1).
+            bool isLong = (op == OpCode::OP_CLOSURE_LONG);
+            size_t idxSize = isLong ? 3 : 1;
+            uint32_t cidx = isLong ? readU24(code, pos + 1) : code[pos + 1];
+            FunctionObject* target = getFunction(constants_[cidx].asFunctionIndex());
+            size_t uvCount = static_cast<size_t>(target->upvalueCount());
+            after = pos + 1 + idxSize + 2 * uvCount;
+        } else {
+            after = pos + 1 + opSize;
+        }
+        if (op == OpCode::OP_JUMP || op == OpCode::OP_JUMP_IF_FALSE) {
+            uint16_t offset = static_cast<uint16_t>(code[pos + 1])
+                            | (static_cast<uint16_t>(code[pos + 2]) << 8);
+            size_t target = after + offset;
+            if (target > n || !isInstrStart[target])
+                throw std::runtime_error("bad binary format (jump target out of range)");
+        } else if (op == OpCode::OP_LOOP) {
+            uint16_t offset = static_cast<uint16_t>(code[pos + 1])
+                            | (static_cast<uint16_t>(code[pos + 2]) << 8);
+            if (offset > after)
+                throw std::runtime_error("bad binary format (loop target out of range)");
+            size_t target = after - offset;
+            if (!isInstrStart[target])
+                throw std::runtime_error("bad binary format (loop target misaligned)");
+        } else if (op == OpCode::OP_FORPREP) {
+            // Forward jump (ip += offset)
+            uint16_t offset = static_cast<uint16_t>(code[pos + 2])
+                            | (static_cast<uint16_t>(code[pos + 3]) << 8);
+            size_t target = after + offset;
+            if (target > n || !isInstrStart[target])
+                throw std::runtime_error("bad binary format (for-prep target out of range)");
+        } else if (op == OpCode::OP_FORLOOP) {
+            // Backward jump (ip -= offset), like OP_LOOP
+            uint16_t offset = static_cast<uint16_t>(code[pos + 2])
+                            | (static_cast<uint16_t>(code[pos + 3]) << 8);
+            if (offset > after)
+                throw std::runtime_error("bad binary format (for-loop target out of range)");
+            size_t target = after - offset;
+            if (!isInstrStart[target])
+                throw std::runtime_error("bad binary format (for-loop target misaligned)");
+        }
+        pos = after;
+    }
+}
+
 std::unique_ptr<Chunk> Chunk::deserialize(std::istream& is, const std::string& parentSource) {
     auto chunk = std::make_unique<Chunk>();
     
     // Source Name
     uint32_t nameLen = 0;
     readValue(is, nameLen);
+    checkCount(nameLen, MAX_CHUNK_NAME_LEN, "source name length");
     if (nameLen == 0) {
         chunk->sourceName_ = !parentSource.empty() ? parentSource : "=?";
     } else {
@@ -605,21 +870,25 @@ std::unique_ptr<Chunk> Chunk::deserialize(std::istream& is, const std::string& p
     // Bytecode
     uint32_t codeSize = 0;
     readValue(is, codeSize);
+    checkCount(codeSize, MAX_CODE_SIZE, "code size");
     chunk->code_.resize(codeSize);
     readBytes(is, reinterpret_cast<char*>(chunk->code_.data()), codeSize);
     
     // Lines
     uint32_t linesSize = 0;
     readValue(is, linesSize);
+    checkCount(linesSize, MAX_LINES_SIZE, "line info size");
     chunk->lines_.resize(linesSize);
     readBytes(is, reinterpret_cast<char*>(chunk->lines_.data()), linesSize * sizeof(int));
     
     // Identifiers
     uint32_t idCount = 0;
     readValue(is, idCount);
+    checkCount(idCount, MAX_ID_COUNT, "identifier count");
     for (uint32_t i = 0; i < idCount; i++) {
         uint32_t len = 0;
         readValue(is, len);
+        checkCount(len, MAX_ID_LEN, "identifier length");
         std::string id(len, '\0');
         readBytes(is, &id[0], len);
         chunk->identifiers_.push_back(id);
@@ -628,6 +897,7 @@ std::unique_ptr<Chunk> Chunk::deserialize(std::istream& is, const std::string& p
     // Constants
     uint32_t constCount = 0;
     readValue(is, constCount);
+    checkCount(constCount, MAX_CONST_COUNT, "constant count");
     for (uint32_t i = 0; i < constCount; i++) {
         chunk->constants_.push_back(Value::deserialize(is, chunk.get(), chunk->sourceName_));
     }
@@ -773,6 +1043,7 @@ std::unique_ptr<FunctionObject> FunctionObject::deserialize(std::istream& is, co
 
     uint32_t nameLen = 0;
     readValue(is, nameLen);
+    checkCount(nameLen, MAX_CHUNK_NAME_LEN, "function name length");
     std::string name(nameLen, '\0');
     readBytes(is, &name[0], nameLen);
     
@@ -799,6 +1070,7 @@ std::unique_ptr<FunctionObject> FunctionObject::deserialize(std::istream& is, co
     readValue(is, lastLineDefined);
     
     auto chunk = Chunk::deserialize(is, parentSource);
+    chunk->verify(upvalueCount);  // reject hostile/corrupted bytecode at load
     auto function = std::make_unique<FunctionObject>(name, arity, std::move(chunk), upvalueCount, hasVarargs);
     function->setLines(lineDefined, lastLineDefined);
     if (hasNamedVarargs) {
@@ -808,9 +1080,11 @@ std::unique_ptr<FunctionObject> FunctionObject::deserialize(std::istream& is, co
     // Local variable info
     uint32_t localCount = 0;
     readValue(is, localCount);
+    checkCount(localCount, MAX_LOCAL_COUNT, "local count");
     for (uint32_t i = 0; i < localCount; i++) {
         uint32_t lNameLen = 0;
         readValue(is, lNameLen);
+        checkCount(lNameLen, MAX_ID_LEN, "local name length");
         std::string lName(lNameLen, '\0');
         readBytes(is, &lName[0], lNameLen);
         size_t startPC = 0, endPC = 0;
@@ -824,9 +1098,11 @@ std::unique_ptr<FunctionObject> FunctionObject::deserialize(std::istream& is, co
     // Upvalue names
     uint32_t uvNameCount = 0;
     readValue(is, uvNameCount);
+    checkCount(uvNameCount, MAX_LOCAL_COUNT, "upvalue name count");
     for (uint32_t i = 0; i < uvNameCount; i++) {
         uint32_t uNameLen = 0;
         readValue(is, uNameLen);
+        checkCount(uNameLen, MAX_ID_LEN, "upvalue name length");
         std::string uName(uNameLen, '\0');
         readBytes(is, &uName[0], uNameLen);
         function->addUpvalueName(uName);

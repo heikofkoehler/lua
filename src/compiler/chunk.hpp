@@ -79,6 +79,11 @@ public:
     void serialize(std::ostream& os, const std::string& parentSource = "", bool strip = false) const;
     static std::unique_ptr<Chunk> deserialize(std::istream& is, const std::string& parentSource = "");
 
+    // Validate bytecode at load: opcode/operand bounds, constant/upvalue/
+    // identifier indices, and jump/loop targets. Throws std::runtime_error
+    // on hostile or corrupted bytecode.
+    void verify(int upvalueCount) const;
+
 private:
     std::vector<uint8_t> code_;        // Bytecode instructions
     std::vector<Value> constants_;     // Constant pool
