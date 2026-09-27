@@ -744,8 +744,22 @@ private:
             }
             case OpCode::OP_TAILCALL: {
                 uint8_t argc = byteAt(off + 1);
-                int funcReg = sp - argc - 1;
-                emitAB(ROpCode::ROP_TAILCALL, funcReg, argc + 1);
+                int funcReg;
+                // Handle dynamic SP (from previous multires)
+                if (sp == SP_DYNAMIC && dynBase >= 0) {
+                    funcReg = dynBase - argc - 1;
+                } else {
+                    funcReg = sp - argc - 1;
+                }
+                // Reimplementation: Convert TAILCALL to CALL + RETURN.
+                // TAILCALL has no fallthrough in the analysis, so the following
+                // RETURN_VALUE_MULTI is unreachable. Emit the RETURN directly.
+                // CALL with C=0 (multires): results at R(funcReg).
+                // RETURN with B=0 (multires): returns from R(funcReg).
+                // This implements proper tail-call semantics via regular call
+                // followed by immediate return of all results.
+                emitABC(ROpCode::ROP_CALL, funcReg, argc + 1, 0);
+                emitAB(ROpCode::ROP_RETURN, funcReg, 0);
                 break;
             }
             case OpCode::OP_TAILCALL_MULTI: {
