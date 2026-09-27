@@ -240,15 +240,6 @@ void VM::freeObject(GCObject* object) {
         case GCObject::Type::INT64: delete static_cast<Int64Object*>(object); break;
         case GCObject::Type::COROUTINE: {
             CoroutineObject* co = static_cast<CoroutineObject*>(object);
-            // Close all open upvalues before freeing the coroutine.
-            // Otherwise closures that capture the coroutine's locals would be
-            // left with dangling owner pointers (use-after-free).
-            for (UpvalueObject* uv : co->openUpvalues) {
-                if (uv && !uv->isClosed()) {
-                    uv->close(co->stack);
-                }
-            }
-            co->openUpvalues.clear();
             for (auto it = coroutines_.begin(); it != coroutines_.end(); ++it) {
                 if (*it == co) {
                     coroutines_.erase(it);

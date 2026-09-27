@@ -25,6 +25,8 @@ public:
           owner_(nullptr), stackIndex_(0), 
           closed_(value), isClosed_(true) {}
 
+    ~UpvalueObject() override;
+
     // Get the value (from owner's stack if open, from closed_ if closed)
     Value get(const std::vector<Value>& currentStack) const;
 

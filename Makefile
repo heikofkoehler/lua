@@ -23,7 +23,7 @@ test-lua55: build
 	@if [ ! -d "$(LUA_TEST_DIR)" ]; then \
 		curl -s $(LUA_TEST_URL) | tar xz; \
 	fi
-	@cp ./build/lua ./$(LUA_TEST_DIR)/
+	@rm -f ./$(LUA_TEST_DIR)/lua && cp ./build/lua ./$(LUA_TEST_DIR)/
 	@echo "--- Running Lua 5.5.0 Tests ---"
 	@cd $(LUA_TEST_DIR) && ./lua all.lua
 	@echo "--- Tests Completed Successfully ---"
