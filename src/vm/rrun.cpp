@@ -354,22 +354,20 @@ next_frame:
                         return false;
                     }
                     
-                    // If a new Lua frame was pushed, break to outer loop to execute it
-                    // (it may have rcode or not; outer loop handles dispatch)
+                    // If a new Lua frame was pushed, set its register destination
+                    // (for ROP_RETURN to know where to put results in caller)
                     if (currentCoroutine_->frames.size() > prevFrames) {
-                        // Copy results? No, callee hasn't run yet.
-                        // Break inner loop; outer loop will pick up new frame.
-                        // But outer loop expects rcode; if callee has no rcode, we need to return.
                         CallFrame& newFrame = currentCoroutine_->frames.back();
+                        // Destination is R(A) in the caller; store absolute stack index
+                        // Caller base = base (current frame's stackBase), dest = base + A
+                        newFrame.regDest = static_cast<int>(base + A);
+                        
+                        // Check if callee has rcode
                         FunctionObject* newFunc = newFrame.closure->function();
                         if (!newFunc->chunk()->hasRCode()) {
-                            // Callee has no register code; return to VM::run() for dispatch
-                            // Results will be on stack; caller needs to copy them to registers
-                            // For now, this is a limitation.
                             hadError_ = true;
                             return false;
                         }
-                        // New frame has rcode; break inner loop to execute it
                         goto next_frame;
                     }
                     
@@ -388,9 +386,35 @@ next_frame:
                 }
                 case ROpCode::ROP_TAILCALL: {
                     // return R(A)(R(A+1)..R(A+B-1))
-                    // TODO: tail call (reuse frame)
-                    hadError_ = true;
-                    return false;
+                    // For now: treat as regular call (no frame reuse optimization)
+                    // TODO: implement proper tail call (reuse frame)
+                    int argCount = B - 1;
+                    if (B == 0) {
+                        hadError_ = true;
+                        return false;
+                    }
+                    // Copy function and args to stack top
+                    Value funcVal = R[A];
+                    std::vector<Value> args;
+                    for (int i = 0; i < argCount; i++) {
+                        args.push_back(R[A + 1 + i]);
+                    }
+                    currentCoroutine_->stack.push_back(funcVal);
+                    for (auto& arg : args) {
+                        currentCoroutine_->stack.push_back(arg);
+                    }
+                    // Use tail call flag
+                    size_t prevFrames = currentCoroutine_->frames.size();
+                    if (!callValue(argCount, 0, true)) {  // 0 = multires, true = tailcall
+                        return false;
+                    }
+                    if (currentCoroutine_->frames.size() > prevFrames) {
+                        goto next_frame;
+                    }
+                    // C function tailcall; results on stack, need to return them
+                    // For simplicity, copy to R(A) and do RETURN
+                    // TODO: proper multires handling
+                    break;
                 }
                 case ROpCode::ROP_CLOSURE: {
                     // R(A) = closure(K[Bx]), followed by B pseudo-instructions
@@ -411,9 +435,22 @@ next_frame:
                 }
                 case ROpCode::ROP_VARARG: {
                     // R(A)..R(A+B-2) = varargs (B=1: no values)
-                    // TODO
-                    hadError_ = true;
-                    return false;
+                    // B = number of values + 1
+                    if (B == 1) {
+                        // No values to copy
+                        break;
+                    }
+                    int count = B - 1;
+                    // Copy from frame.varargs to registers
+                    // If fewer varargs than requested, fill with nil
+                    for (int i = 0; i < count; i++) {
+                        if (i < (int)frame.varargs.size()) {
+                            R[A + i] = frame.varargs[i];
+                        } else {
+                            R[A + i] = Value::nil();
+                        }
+                    }
+                    break;
                 }
                 case ROpCode::ROP_YIELD: {
                     // yield R(A)..R(A+B-2)
@@ -508,9 +545,49 @@ next_frame:
                 }
                 case ROpCode::ROP_RETURN: {
                     // R(A)..R(A+B-2) are return values (B=1: no values)
-                    // TODO: Implement return (pop frame, push results to caller)
-                    // For now, just return from VM
-                    return !hadError_;
+                    int retCount = (B == 0) ? 0 : (B - 1);  // B=0: multires (not supported), B=1: 0 values
+                    if (B == 0) {
+                        hadError_ = true;
+                        return false;
+                    }
+                    
+                    // Collect return values
+                    std::vector<Value> retVals;
+                    for (int i = 0; i < retCount; i++) {
+                        retVals.push_back(R[A + i]);
+                    }
+                    
+                    // Pop current frame
+                    // Save regDest before popping
+                    int dest = frame.regDest;
+                    size_t frameStackBase = frame.stackBase;
+                    
+                    // Close upvalues in this frame's window
+                    closeUpvalues(frameStackBase);
+                    
+                    currentCoroutine_->frames.pop_back();
+                    
+                    // If we've reached target, done
+                    if (currentCoroutine_->frames.size() <= targetFrameCount) {
+                        return !hadError_;
+                    }
+                    
+                    // Copy results to caller's destination
+                    if (dest >= 0) {
+                        // Register VM caller: copy to stack[dest]..
+                        for (int i = 0; i < retCount; i++) {
+                            currentCoroutine_->stack[dest + i] = retVals[i];
+                        }
+                        // TODO: handle retCount mismatch (caller expects different count)
+                    } else {
+                        // Stack VM caller: push results onto stack
+                        for (auto& v : retVals) {
+                            currentCoroutine_->stack.push_back(v);
+                        }
+                    }
+                    
+                    // Continue with caller frame
+                    goto next_frame;
                 }
                 default: {
                     // Unimplemented opcode
