@@ -607,16 +607,21 @@ next_frame:
                 case ROpCode::ROP_FORPREP: {
                     // Numeric for: R(A)=index, R(A+1)=limit, R(A+2)=step; pc += sBx
                     // R(A+3) is external (loop variable)
-                    // For now: simple number version
+                    // Setup: R(A) = init - step (so FORLOOP adds step first)
+                    // Jump to FORLOOP for first iteration check
                     Value init = R[A];
-                    Value limit = R[A+1];
+                    Value limitV = R[A+1];
                     Value step = R[A+2];
-                    if (!init.isNumber() || !limit.isNumber() || !step.isNumber()) {
+                    if (!init.isNumber() || !limitV.isNumber() || !step.isNumber()) {
                         hadError_ = true;
                         return false;
                     }
-                    // Adjust: R(A) = init - step (so FORLOOP adds step first)
-                    R[A] = Value::number(init.asNumber() - step.asNumber());
+                    // Preserve integer types
+                    if (init.isInteger() && step.isInteger()) {
+                        R[A] = makeInteger(init.asInteger() - step.asInteger());
+                    } else {
+                        R[A] = Value::number(init.asNumber() - step.asNumber());
+                    }
                     pc += sBx;
                     break;
                 }
@@ -627,14 +632,28 @@ next_frame:
                         hadError_ = true;
                         return false;
                     }
-                    double stepN = step.asNumber();
-                    double idx = R[A].asNumber() + stepN;
-                    R[A] = Value::number(idx);
-                    double limit = R[A+1].asNumber();
-                    bool cond = (stepN > 0) ? (idx <= limit) : (idx >= limit);
-                    if (cond) {
-                        R[A+3] = R[A];  // external copy
-                        pc += sBx;
+                    // Preserve integer types if possible
+                    bool isInt = R[A].isInteger() && step.isInteger() && R[A+1].isInteger();
+                    if (isInt) {
+                        int64_t idx = R[A].asInteger() + step.asInteger();
+                        R[A] = makeInteger(idx);
+                        int64_t limit = R[A+1].asInteger();
+                        int64_t stepN = step.asInteger();
+                        bool cond = (stepN > 0) ? (idx <= limit) : (idx >= limit);
+                        if (cond) {
+                            R[A+3] = R[A];
+                            pc += sBx;
+                        }
+                    } else {
+                        double stepN = step.asNumber();
+                        double idx = R[A].asNumber() + stepN;
+                        R[A] = Value::number(idx);
+                        double limit = R[A+1].asNumber();
+                        bool cond = (stepN > 0) ? (idx <= limit) : (idx >= limit);
+                        if (cond) {
+                            R[A+3] = R[A];
+                            pc += sBx;
+                        }
                     }
                     break;
                 }

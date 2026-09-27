@@ -381,12 +381,26 @@ private:
                 // For loops
                 case OpCode::OP_FORPREP: {
                     uint16_t offset = u16At(off + 2);
-                    size_t target = off + 4 + offset;
-                    targets.push_back(target);
+                    size_t exitTarget = off + 4 + offset;
+                    targets.push_back(exitTarget);
+                    // Find the matching FORLOOP for the register VM jump target
+                    // The FORLOOP is between FORPREP and exitTarget
+                    size_t scan = off + 4;
+                    while (scan < exitTarget) {
+                        OpCode sop = static_cast<OpCode>(code[scan]);
+                        if (sop == OpCode::OP_FORLOOP) {
+                            targets.push_back(scan);
+                            break;
+                        }
+                        size_t slen = chunk_->instructionLength(scan);
+                        if (slen == 0) break;
+                        scan += slen;
+                    }
                     // The stack VM pushes 2 values (step=1, nil) if stepDefault,
                     // else 1 value (nil).
                     bool stepDefault = (byteAt(off + 1) & 0x80) != 0;
                     afterSp = curSp + (stepDefault ? 2 : 1);
+                    // FORPREP jumps to the FORLOOP (not fallthrough).
                     hasFallthrough = false;
                     break;
                 }
@@ -850,14 +864,34 @@ private:
                 uint8_t rawBase = byteAt(off + 1);
                 uint8_t base = rawBase & 0x7F;
                 bool stepDefault = (rawBase & 0x80) != 0;
-                size_t target = off + 4 + u16At(off + 2);
+                size_t exitTarget = off + 4 + u16At(off + 2);
+                // Find the matching FORLOOP by scanning forward
+                // The FORLOOP is the loop end; FORPREP should jump to it for first check
+                const auto& ccode = chunk_->code();
+                size_t forLoopOff = 0;
+                size_t scan = off + 4;
+                while (scan < exitTarget) {
+                    OpCode sop = static_cast<OpCode>(ccode[scan]);
+                    if (sop == OpCode::OP_FORLOOP) {
+                        uint8_t loopBase = byteAt(scan + 1) & 0x7F;
+                        if (loopBase == base) {
+                            forLoopOff = scan;
+                            break;
+                        }
+                    }
+                    size_t slen = chunk_->instructionLength(scan);
+                    if (slen == 0) break;
+                    scan += slen;
+                }
+                // If found, jump to FORLOOP; otherwise use exit target (fallback)
+                size_t jumpTarget = forLoopOff ? forLoopOff : exitTarget;
                 if (stepDefault) {
                     // No step provided; the stack interpreter pushes 1.
                     // Emit it into R(base+2) explicitly.
                     int oneIdx = getOrAddIntConstant(1);
                     emitABx(ROpCode::ROP_LOADK, base + 2, oneIdx);
                 }
-                emitJump(ROpCode::ROP_FORPREP, base, target);
+                emitJump(ROpCode::ROP_FORPREP, base, jumpTarget);
                 useRegs(base, base + 4);
                 break;
             }
