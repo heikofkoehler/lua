@@ -191,40 +191,132 @@ next_frame:
                 }
                 case ROpCode::ROP_LEN: {
                     // R(A) = #R(B)
-                    // TODO: implement for strings, tables
-                    hadError_ = true;
-                    return false;
+                    Value b = R[B];
+                    if (b.isString()) {
+                        R[A] = Value::integer(static_cast<int64_t>(getStringValue(b).length()));
+                    } else if (b.isTable()) {
+                        Value mm = getMetamethod(b, "__len");
+                        if (!mm.isNil()) {
+                            // Call metamethod: result on stack top
+                            currentCoroutine_->stack.push_back(mm);
+                            currentCoroutine_->stack.push_back(b);
+                            if (!callValue(1, 2, false, "len")) return false;
+                            R[A] = pop();
+                        } else {
+                            R[A] = Value::integer(static_cast<int64_t>(b.asTableObj()->length()));
+                        }
+                    } else {
+                        Value mm = getMetamethod(b, "__len");
+                        if (!mm.isNil()) {
+                            currentCoroutine_->stack.push_back(mm);
+                            currentCoroutine_->stack.push_back(b);
+                            if (!callValue(1, 2, false, "len")) return false;
+                            R[A] = pop();
+                        } else {
+                            runtimeError("attempt to get length of a " + typeName(b) + " value");
+                            return false;
+                        }
+                    }
+                    break;
                 }
                 case ROpCode::ROP_BAND: {
-                    // TODO: integer bitwise ops
-                    hadError_ = true;
-                    return false;
+                    // R(A) = R(B) & R(C)
+                    Value b = R[B], c = R[C];
+                    int64_t ib, ic;
+                    if (toIntegerNoString(b, ib) && toIntegerNoString(c, ic)) {
+                        R[A] = makeInteger(ib & ic);
+                    } else if (!callBinaryMetamethod(b, c, "__band")) {
+                        if (hadError_) return false;
+                        runtimeError("attempt to perform bitwise operation on a non-integer value");
+                        return false;
+                    } else { R[A] = pop(); }
+                    break;
                 }
                 case ROpCode::ROP_BOR: {
-                    hadError_ = true;
-                    return false;
+                    Value b = R[B], c = R[C];
+                    int64_t ib, ic;
+                    if (toIntegerNoString(b, ib) && toIntegerNoString(c, ic)) {
+                        R[A] = makeInteger(ib | ic);
+                    } else if (!callBinaryMetamethod(b, c, "__bor")) {
+                        if (hadError_) return false;
+                        runtimeError("attempt to perform bitwise operation on a non-integer value");
+                        return false;
+                    } else { R[A] = pop(); }
+                    break;
                 }
                 case ROpCode::ROP_BXOR: {
-                    hadError_ = true;
-                    return false;
+                    Value b = R[B], c = R[C];
+                    int64_t ib, ic;
+                    if (toIntegerNoString(b, ib) && toIntegerNoString(c, ic)) {
+                        R[A] = makeInteger(ib ^ ic);
+                    } else if (!callBinaryMetamethod(b, c, "__bxor")) {
+                        if (hadError_) return false;
+                        runtimeError("attempt to perform bitwise operation on a non-integer value");
+                        return false;
+                    } else { R[A] = pop(); }
+                    break;
                 }
                 case ROpCode::ROP_SHL: {
-                    hadError_ = true;
-                    return false;
+                    Value b = R[B], c = R[C];
+                    int64_t ib, ic;
+                    if (toIntegerNoString(b, ib) && toIntegerNoString(c, ic)) {
+                        uint64_t shift = static_cast<uint64_t>(ic) & 63;
+                        R[A] = makeInteger(static_cast<int64_t>(static_cast<uint64_t>(ib) << shift));
+                    } else if (!callBinaryMetamethod(b, c, "__shl")) {
+                        if (hadError_) return false;
+                        runtimeError("attempt to perform bitwise operation on a non-integer value");
+                        return false;
+                    } else { R[A] = pop(); }
+                    break;
                 }
                 case ROpCode::ROP_SHR: {
-                    hadError_ = true;
-                    return false;
+                    Value b = R[B], c = R[C];
+                    int64_t ib, ic;
+                    if (toIntegerNoString(b, ib) && toIntegerNoString(c, ic)) {
+                        uint64_t shift = static_cast<uint64_t>(ic) & 63;
+                        R[A] = makeInteger(static_cast<int64_t>(static_cast<uint64_t>(ib) >> shift));
+                    } else if (!callBinaryMetamethod(b, c, "__shr")) {
+                        if (hadError_) return false;
+                        runtimeError("attempt to perform bitwise operation on a non-integer value");
+                        return false;
+                    } else { R[A] = pop(); }
+                    break;
                 }
                 case ROpCode::ROP_BNOT: {
-                    hadError_ = true;
-                    return false;
+                    // R(A) = ~R(B)
+                    Value b = R[B];
+                    int64_t ib;
+                    if (toIntegerNoString(b, ib)) {
+                        R[A] = makeInteger(~ib);
+                    } else {
+                        Value mm = getMetamethod(b, "__bnot");
+                        if (mm.isNil()) {
+                            runtimeError("attempt to perform bitwise operation on a non-integer value");
+                            return false;
+                        }
+                        currentCoroutine_->stack.push_back(mm);
+                        currentCoroutine_->stack.push_back(b);
+                        if (!callValue(1, 2, false, "bnot")) return false;
+                        R[A] = pop();
+                    }
+                    break;
                 }
                 case ROpCode::ROP_CONCAT: {
                     // R(A) = R(B) .. R(C)
-                    // TODO: implement string concatenation
-                    hadError_ = true;
-                    return false;
+                    Value b = R[B];
+                    Value c = R[C];
+                    if ((b.isString() || b.isNumber()) && (c.isString() || c.isNumber())) {
+                        R[A] = concat(b, c);
+                    } else if (!callBinaryMetamethod(b, c, "__concat")) {
+                        if (hadError_) return false;
+                        Value badVal = !(b.isString() || b.isNumber()) ? b : c;
+                        runtimeError("attempt to concatenate a " + typeName(badVal) + " value");
+                        return false;
+                    } else {
+                        // Metamethod succeeded; result is on stack top
+                        R[A] = pop();
+                    }
+                    break;
                 }
                 case ROpCode::ROP_NEWTABLE: {
                     // R(A) = new table (B = array hint, C = hash hint)
