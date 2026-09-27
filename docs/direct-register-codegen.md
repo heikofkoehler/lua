@@ -63,42 +63,42 @@ For each AST node:
 ## Implementation Plan
 
 ### Phase 1: Foundation
-- [ ] Create `rcodegen.hpp` / `rcodegen.cpp` with `RCodeGen` class
-- [ ] Register allocator (alloc/free, locals table)
-- [ ] Instruction emitter (wrappers around RInstruction)
-- [ ] Jump patching (forward/backward)
+- [x] Create `rcodegen.hpp` / `rcodegen.cpp` with `RCodeGen` class
+- [x] Register allocator (alloc/free, locals table)
+- [x] Instruction emitter (wrappers around RInstruction)
+- [x] Jump patching (forward/backward)
 
 ### Phase 2: Expressions
-- [ ] Literals (nil, boolean, number, string)
-- [ ] Unary ops (-, not, #, ~)
-- [ ] Binary ops (+, -, *, /, %, ^, .., ==, ~=, <, >, <=, >=, and, or)
-- [ ] Variable access (local, upvalue, global)
-- [ ] Table constructor
-- [ ] Table access (index)
+- [x] Literals (nil, boolean, number, string)
+- [x] Unary ops (-, not, #, ~)
+- [x] Binary ops (+, -, *, /, %, ^, .., ==, ~=, <, >, <=, >=, and, or)
+- [x] Variable access (local, upvalue, global)
+- [x] Table constructor
+- [x] Table access (index)
 
 ### Phase 3: Statements
-- [ ] Local declaration
-- [ ] Assignment
-- [ ] If/elseif/else
-- [ ] While loop
-- [ ] Repeat-until
-- [ ] Numeric for
-- [ ] Generic for
-- [ ] Return
-- [ ] Break
+- [x] Local declaration
+- [x] Assignment
+- [x] If/elseif/else
+- [x] While loop
+- [x] Repeat-until
+- [x] Numeric for
+- [x] Generic for
+- [x] Return
+- [x] Break
 
 ### Phase 4: Functions
-- [ ] Function definition (closure creation)
-- [ ] Parameters (including vararg ...)
-- [ ] Call (fixed and multires)
-- [ ] Tail calls
-- [ ] Upvalues
+- [x] Function definition (closure creation)
+- [x] Parameters (including vararg ...)
+- [x] Call (fixed and multires)
+- [x] Tail calls
+- [x] Upvalues
 
 ### Phase 5: Integration
-- [ ] Wire into `lua` binary (--register flag uses RCodeGen directly)
-- [ ] Delete `rtranslate.cpp` / `rtranslate.hpp`
-- [ ] Delete stack `codegen.cpp` (or keep for --nojit mode?)
-- [ ] Update tests
+- [x] Wire into `lua` binary (--register flag uses RCodeGen directly)
+- [x] Delete `rtranslate.cpp` / `rtranslate.hpp`
+- [ ] Delete stack `codegen.cpp` (or keep for --nojit mode?) — KEEP FOR NOW per recommendation
+- [x] Update tests (408/408 CTests pass)
 
 ## Open Questions
 
