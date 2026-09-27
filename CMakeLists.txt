@@ -396,11 +396,11 @@ if(BUILD_TESTING)
         endforeach()
     endif()
 
-    # Register VM variant (tests the register interpreter via --register)
+    # Register VM variant (tests the register interpreter via --vm=register)
     foreach(test_file ${LUA_TEST_FILES})
         get_filename_component(test_name ${test_file} NAME_WE)
         add_test(NAME ${test_name}_register
-                 COMMAND $<TARGET_FILE:lua> --register ${test_file}
+                 COMMAND $<TARGET_FILE:lua> --vm=register ${test_file}
                  WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}/tests)
         set_tests_properties(${test_name}_register PROPERTIES TIMEOUT 60)
     endforeach()

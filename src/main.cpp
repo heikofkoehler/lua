@@ -698,9 +698,6 @@ int main(int argc, char* argv[]) {
         } else if (arg == "-c" || arg == "--compile") {
             compileOnly = true;
             continue;
-        } else if (arg == "--register") {
-            useRegisterVM = true;
-            continue;
         } else if (arg.rfind("--vm=", 0) == 0) {
             std::string mode = arg.substr(5);
             if (mode == "register") {
