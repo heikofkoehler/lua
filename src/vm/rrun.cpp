@@ -10,6 +10,7 @@
 #include "value/value.hpp"
 #include "compiler/chunk.hpp"
 #include <cstdint>
+#include <cmath>
 
 bool VM::runRegister(size_t targetFrameCount) {
     while (true) {
@@ -131,9 +132,267 @@ bool VM::runRegister(size_t targetFrameCount) {
                     }
                     break;
                 }
+                case ROpCode::ROP_IDIV: {
+                    Value b = R[B];
+                    Value c = R[C];
+                    if (b.isNumber() && c.isNumber()) {
+                        double res = b.asNumber() / c.asNumber();
+                        // Floor division
+                        R[A] = Value::number(std::floor(res));
+                    } else {
+                        hadError_ = true;
+                        return false;
+                    }
+                    break;
+                }
+                case ROpCode::ROP_MOD: {
+                    Value b = R[B];
+                    Value c = R[C];
+                    if (b.isNumber() && c.isNumber()) {
+                        double bn = b.asNumber();
+                        double cn = c.asNumber();
+                        // Lua modulo: bn - floor(bn/cn)*cn
+                        R[A] = Value::number(bn - std::floor(bn/cn)*cn);
+                    } else {
+                        hadError_ = true;
+                        return false;
+                    }
+                    break;
+                }
+                case ROpCode::ROP_POW: {
+                    Value b = R[B];
+                    Value c = R[C];
+                    if (b.isNumber() && c.isNumber()) {
+                        R[A] = Value::number(std::pow(b.asNumber(), c.asNumber()));
+                    } else {
+                        hadError_ = true;
+                        return false;
+                    }
+                    break;
+                }
+                case ROpCode::ROP_NEG: {
+                    // R(A) = -R(B)
+                    Value b = R[B];
+                    if (b.isNumber()) {
+                        R[A] = Value::number(-b.asNumber());
+                    } else {
+                        hadError_ = true;
+                        return false;
+                    }
+                    break;
+                }
+                case ROpCode::ROP_NOT: {
+                    // R(A) = not R(B)
+                    Value b = R[B];
+                    bool truthy = !b.isNil() && !(b.isBool() && !b.asBool());
+                    R[A] = Value::boolean(!truthy);
+                    break;
+                }
+                case ROpCode::ROP_LEN: {
+                    // R(A) = #R(B)
+                    // TODO: implement for strings, tables
+                    hadError_ = true;
+                    return false;
+                }
+                case ROpCode::ROP_BAND: {
+                    // TODO: integer bitwise ops
+                    hadError_ = true;
+                    return false;
+                }
+                case ROpCode::ROP_BOR: {
+                    hadError_ = true;
+                    return false;
+                }
+                case ROpCode::ROP_BXOR: {
+                    hadError_ = true;
+                    return false;
+                }
+                case ROpCode::ROP_SHL: {
+                    hadError_ = true;
+                    return false;
+                }
+                case ROpCode::ROP_SHR: {
+                    hadError_ = true;
+                    return false;
+                }
+                case ROpCode::ROP_BNOT: {
+                    hadError_ = true;
+                    return false;
+                }
+                case ROpCode::ROP_CONCAT: {
+                    // R(A) = R(B) .. R(C)
+                    // TODO: implement string concatenation
+                    hadError_ = true;
+                    return false;
+                }
+                case ROpCode::ROP_NEWTABLE: {
+                    // R(A) = new table (B = array hint, C = hash hint)
+                    // TODO: create table object
+                    hadError_ = true;
+                    return false;
+                }
+                case ROpCode::ROP_GETTABLE: {
+                    // R(A) = R(B)[R(C)]
+                    // TODO: table lookup
+                    hadError_ = true;
+                    return false;
+                }
+                case ROpCode::ROP_SETTABLE: {
+                    // R(A)[R(B)] = R(C)
+                    // TODO: table set
+                    hadError_ = true;
+                    return false;
+                }
+                case ROpCode::ROP_SETTABLEMULTI: {
+                    // Multi-value table set
+                    // TODO
+                    hadError_ = true;
+                    return false;
+                }
+                case ROpCode::ROP_GETUPVAL: {
+                    // R(A) = Up[B]
+                    // TODO: upvalue access
+                    hadError_ = true;
+                    return false;
+                }
+                case ROpCode::ROP_SETUPVAL: {
+                    // Up[B] = R(A)
+                    // TODO
+                    hadError_ = true;
+                    return false;
+                }
+                case ROpCode::ROP_GETTABUP: {
+                    // R(A) = Up[B][K[C]]  (_ENV global lookup)
+                    // TODO
+                    hadError_ = true;
+                    return false;
+                }
+                case ROpCode::ROP_SETTABUP: {
+                    // Up[B][K[C]] = R(A)
+                    // TODO
+                    hadError_ = true;
+                    return false;
+                }
+                case ROpCode::ROP_DEFGLOBAL: {
+                    // Up[B][K[C]] = R(A), error if already defined
+                    // TODO
+                    hadError_ = true;
+                    return false;
+                }
+                case ROpCode::ROP_CALL: {
+                    // R(A)..R(A+C-2) = R(A)(R(A+1)..R(A+B-1))
+                    // B = arg count + 1 (0 = multires), C = ret count + 1 (0 = multires)
+                    // TODO: implement call with register window
+                    hadError_ = true;
+                    return false;
+                }
+                case ROpCode::ROP_TAILCALL: {
+                    // return R(A)(R(A+1)..R(A+B-1))
+                    // TODO: tail call (reuse frame)
+                    hadError_ = true;
+                    return false;
+                }
+                case ROpCode::ROP_CLOSURE: {
+                    // R(A) = closure(K[Bx]), followed by B pseudo-instructions
+                    // TODO: create closure, capture upvalues
+                    hadError_ = true;
+                    return false;
+                }
+                case ROpCode::ROP_VARARG: {
+                    // R(A)..R(A+B-2) = varargs (B=1: no values)
+                    // TODO
+                    hadError_ = true;
+                    return false;
+                }
+                case ROpCode::ROP_YIELD: {
+                    // yield R(A)..R(A+B-2)
+                    // TODO: coroutine yield
+                    hadError_ = true;
+                    return false;
+                }
+                case ROpCode::ROP_PACKVARARG: {
+                    // R(A) = table.pack(varargs)
+                    // TODO
+                    hadError_ = true;
+                    return false;
+                }
+                case ROpCode::ROP_VARARGITEM: {
+                    // R(A) = varargs[R(B)]
+                    // TODO
+                    hadError_ = true;
+                    return false;
+                }
+                case ROpCode::ROP_VARARGCOUNT: {
+                    // R(A) = #varargs
+                    // TODO
+                    hadError_ = true;
+                    return false;
+                }
+                case ROpCode::ROP_FORPREP: {
+                    // Numeric for: R(A)=index, R(A+1)=limit, R(A+2)=step; pc += sBx
+                    // TODO
+                    hadError_ = true;
+                    return false;
+                }
+                case ROpCode::ROP_FORLOOP: {
+                    // TODO
+                    hadError_ = true;
+                    return false;
+                }
+                case ROpCode::ROP_CLOSE: {
+                    // Close upvalues / to-be-closed variables with register >= A
+                    // TODO
+                    hadError_ = true;
+                    return false;
+                }
                 case ROpCode::ROP_JMP: {
                     // pc += sBx
                     pc += sBx;
+                    break;
+                }
+                case ROpCode::ROP_EQ: {
+                    // if ((R(B) == R(C)) != A) pc++
+                    // A=0: skip if false, A=1: skip if true
+                    Value b = R[B];
+                    Value c = R[C];
+                    bool eq = (b == c);  // Uses Value::operator==
+                    if (eq != (A != 0)) pc++;
+                    break;
+                }
+                case ROpCode::ROP_LT: {
+                    // if ((R(B) < R(C)) != A) pc++
+                    Value b = R[B];
+                    Value c = R[C];
+                    bool lt = false;
+                    if (b.isNumber() && c.isNumber()) {
+                        lt = b.asNumber() < c.asNumber();
+                    } else {
+                        // TODO: metamethod, string comparison
+                        hadError_ = true;
+                        return false;
+                    }
+                    if (lt != (A != 0)) pc++;
+                    break;
+                }
+                case ROpCode::ROP_LE: {
+                    // if ((R(B) <= R(C)) != A) pc++
+                    Value b = R[B];
+                    Value c = R[C];
+                    bool le = false;
+                    if (b.isNumber() && c.isNumber()) {
+                        le = b.asNumber() <= c.asNumber();
+                    } else {
+                        hadError_ = true;
+                        return false;
+                    }
+                    if (le != (A != 0)) pc++;
+                    break;
+                }
+                case ROpCode::ROP_TEST: {
+                    // if (truthy(R(A)) != C) pc++
+                    Value a = R[A];
+                    bool truthy = !a.isNil() && !(a.isBool() && !a.asBool());
+                    if (truthy != (C != 0)) pc++;
                     break;
                 }
                 case ROpCode::ROP_RETURN: {
