@@ -401,8 +401,51 @@ void RCodeGen::visitRepeatStmt(RepeatStmtNode* node) {
 }
 
 void RCodeGen::visitForStmt(ForStmtNode* node) {
-    (void)node;
-    // TODO: implement
+    // for i = start, end, step do body end
+    // Registers: R(A)=index, R(A+1)=limit, R(A+2)=step, R(A+3)=loop var
+    int base = nextReg_;
+    nextReg_ += 4;  // Reserve 4 registers
+
+    // Generate start, end, step
+    int s = genExpr(node->start());
+    emitAB(ROpCode::ROP_MOVE, base, s);
+    freeReg(s);
+    int e = genExpr(node->end());
+    emitAB(ROpCode::ROP_MOVE, base + 1, e);
+    freeReg(e);
+    if (node->step()) {
+        int st = genExpr(node->step());
+        emitAB(ROpCode::ROP_MOVE, base + 2, st);
+        freeReg(st);
+    } else {
+        // Default step = 1
+        Value one = Value::integer(1);
+        int c = addConstant(one);
+        emitABx(ROpCode::ROP_LOADK, base + 2, c);
+    }
+
+    // FORPREP: jumps to loop start
+    size_t prepPc = emitJump(ROpCode::ROP_FORPREP, base);
+
+    // Loop body: the loop variable is at base+3
+    size_t loopStart = code_.size();
+    pushScope();
+    scopes_.back().locals[node->varName()] = base + 3;
+
+    breakJumps_.push_back({});
+    genBlock(node->body());
+    for (size_t b : breakJumps_.back()) patchJump(b, code_.size());
+    breakJumps_.pop_back();
+
+    popScope();
+
+    // FORLOOP: steps and jumps back if not done
+    size_t loopPc = emitJump(ROpCode::ROP_FORLOOP, base);
+    patchJump(loopPc, loopStart);
+    patchJump(prepPc, code_.size());
+
+    // Free the 4 registers (they're dead after loop)
+    // Actually, keep nextReg_ as is for simplicity
 }
 
 void RCodeGen::visitForInStmt(ForInStmtNode* node) {
