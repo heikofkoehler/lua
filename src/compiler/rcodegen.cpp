@@ -259,9 +259,13 @@ void RCodeGen::visitIndexExpr(IndexExprNode* node) {
 }
 
 void RCodeGen::visitFunctionExpr(FunctionExprNode* node) {
-    (void)node;
-    // TODO: implement closure
-    exprReg_ = allocReg();
+    FunctionObject* child = compileFunction(node);
+    // Add to parent's function table
+    size_t funcIdx = func_->chunk()->addFunction(child);
+    int reg = allocReg();
+    emitABx(ROpCode::ROP_CLOSURE, reg, (int)funcIdx);
+    exprReg_ = reg;
+    // TODO: upvalues (currently assumes none)
 }
 
 void RCodeGen::visitGroupExpr(GroupExprNode* node) {
@@ -454,8 +458,51 @@ void RCodeGen::visitForInStmt(ForInStmtNode* node) {
 }
 
 void RCodeGen::visitFunctionDecl(FunctionDeclNode* node) {
-    (void)node;
-    // TODO: implement
+    // function foo(params) body end
+    // Equivalent to: foo = function(params) body end
+    // Create FunctionExprNode and compile it
+    auto funcExpr = std::make_unique<FunctionExprNode>(
+        node->params(), std::vector<std::unique_ptr<StmtNode>>(),
+        node->hasVarargs(), node->line(), node->varargName());
+    // Move body (need to clone since we don't own it)
+    // For simplicity, create a new FunctionExprNode with copied params
+    // Actually, let's just compile directly
+
+    // Create child function
+    auto childChunk = std::make_unique<Chunk>();
+    int nparams = (int)node->params().size();
+    FunctionObject* child = new FunctionObject(node->name(), nparams,
+        std::move(childChunk), 0, node->hasVarargs());
+
+    RCodeGen childGen;
+    childGen.func_ = child;
+    childGen.nextReg_ = nparams;
+    childGen.code_.clear();
+    childGen.pushScope();
+    for (int i = 0; i < nparams; ++i) {
+        childGen.scopes_.back().locals[node->params()[i]] = i;
+    }
+    childGen.genBlock(node->body());
+    childGen.emitAB(ROpCode::ROP_RETURN, 0, 1);
+    child->chunk()->setRCode(std::move(childGen.code_), childGen.nextReg_);
+
+    // Add to parent and store in variable
+    size_t funcIdx = func_->chunk()->addFunction(child);
+    int reg = allocReg();
+    emitABx(ROpCode::ROP_CLOSURE, reg, (int)funcIdx);
+
+    // Assign to name (local or global)
+    int local = findLocal(node->name());
+    if (local >= 0) {
+        emitAB(ROpCode::ROP_MOVE, local, reg);
+    } else {
+        // Global: _ENV[name] = reg
+        size_t strIdx = func_->chunk()->addString(node->name());
+        Value nameVal = Value::string(strIdx);
+        int c = addConstant(nameVal);
+        emitABC(ROpCode::ROP_SETTABUP, reg, 0, c);
+    }
+    freeReg(reg);
 }
 
 void RCodeGen::visitReturn(ReturnStmtNode* node) {
@@ -510,9 +557,34 @@ void RCodeGen::visitProgram(ProgramNode* node) {
 }
 
 FunctionObject* RCodeGen::compileFunction(FunctionExprNode* func) {
-    (void)func;
-    // TODO: implement
-    return nullptr;
+    // Create child function
+    auto childChunk = std::make_unique<Chunk>();
+    int nparams = (int)func->params().size();
+    FunctionObject* child = new FunctionObject("", nparams, std::move(childChunk), 0, func->hasVarargs());
+
+    // New codegen for child
+    RCodeGen childGen;
+    childGen.func_ = child;
+    childGen.nextReg_ = 0;
+    childGen.code_.clear();
+    childGen.pushScope();
+
+    // Params are in R(0)..R(nparams-1)
+    for (int i = 0; i < nparams; ++i) {
+        childGen.scopes_.back().locals[func->params()[i]] = i;
+    }
+    childGen.nextReg_ = nparams;
+
+    // Compile body
+    childGen.genBlock(func->body());
+
+    // Ensure return
+    childGen.emitAB(ROpCode::ROP_RETURN, 0, 1);
+
+    // Install code
+    child->chunk()->setRCode(std::move(childGen.code_), childGen.nextReg_);
+
+    return child;
 }
 
 FunctionObject* RCodeGen::compileFunction(FunctionDeclNode* func) {
