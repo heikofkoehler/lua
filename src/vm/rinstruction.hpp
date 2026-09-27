@@ -97,6 +97,21 @@ enum class ROpCode : uint8_t {
     // Close upvalues / to-be-closed variables with register >= A
     ROP_CLOSE,      // A
 
+    // Definition-checked global set (for OP_DEF_GLOBAL)
+    ROP_DEFGLOBAL,  // A B C    Up[B][K[C]] = R(A), error if already defined
+
+    // Vararg helpers (rare, for named varargs)
+    ROP_PACKVARARG,   // A      R(A) = table.pack(varargs with 'n')
+    ROP_VARARGITEM,   // A B    R(A) = varargs[R(B)] (or 'n' count if R(B)=="n")
+    ROP_VARARGCOUNT,  // A      R(A) = #varargs
+
+    // Coroutine yield: yield R(A)..R(A+B-2) plus multires if C=0
+    ROP_YIELD,      // A B C
+
+    // Multi-value table set: table=R(A), key_base=R(B),
+    // values are lastResultCount regs starting at R(B+1)
+    ROP_SETTABLEMULTI,  // A B
+
     ROP_COUNT  // Sentinel: number of opcodes
 };
 
@@ -196,6 +211,12 @@ inline const char* ropName(ROpCode op) {
         case ROpCode::ROP_FORPREP:  return "FORPREP";
         case ROpCode::ROP_FORLOOP:  return "FORLOOP";
         case ROpCode::ROP_CLOSE:    return "CLOSE";
+        case ROpCode::ROP_DEFGLOBAL: return "DEFGLOBAL";
+        case ROpCode::ROP_PACKVARARG: return "PACKVARARG";
+        case ROpCode::ROP_VARARGITEM: return "VARARGITEM";
+        case ROpCode::ROP_VARARGCOUNT: return "VARARGCOUNT";
+        case ROpCode::ROP_YIELD:    return "YIELD";
+        case ROpCode::ROP_SETTABLEMULTI: return "SETTABLEMULTI";
         default:                    return "UNKNOWN";
     }
 }
@@ -228,7 +249,11 @@ inline ROpFormat ropFormat(ROpCode op) {
         case ROpCode::ROP_SETUPVAL:
         case ROpCode::ROP_TAILCALL:
             return ROpFormat::AB;
+        case ROpCode::ROP_SETTABLEMULTI:
+            return ROpFormat::AB;
         case ROpCode::ROP_CLOSE:
+        case ROpCode::ROP_PACKVARARG:
+        case ROpCode::ROP_VARARGCOUNT:
             return ROpFormat::A;
         default:
             return ROpFormat::ABC;
