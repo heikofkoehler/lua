@@ -588,19 +588,7 @@ static void readBytes(std::istream& is, char* dest, size_t size) {
     }
 }
 
-// Sanity bounds for deserialized counts. Corrupted bytecode can encode
-// absurd counts (e.g. 1.8B identifiers) that would cause huge allocations
-// or multi-minute loops before the truncation check fires. These limits
-// are far above any legitimate chunk.
-constexpr uint32_t MAX_CHUNK_NAME_LEN = 64 * 1024;
-constexpr uint32_t MAX_CODE_SIZE = 64 * 1024 * 1024;
-constexpr uint32_t MAX_LINES_SIZE = 64 * 1024 * 1024;
-constexpr uint32_t MAX_ID_COUNT = 1024 * 1024;
-constexpr uint32_t MAX_ID_LEN = 64 * 1024;
-constexpr uint32_t MAX_CONST_COUNT = 1024 * 1024;
-constexpr uint32_t MAX_LOCAL_COUNT = 1024 * 1024;
-
-static void checkCount(uint32_t value, uint32_t max, const char* what) {
+void checkCount(uint32_t value, uint32_t max, const char* what) {
     if (value > max) {
         throw std::runtime_error(std::string("bad binary format (absurd ") + what + ")");
     }

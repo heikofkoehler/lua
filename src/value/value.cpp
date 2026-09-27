@@ -1,4 +1,5 @@
 #include "value/value.hpp"
+#include "compiler/chunk.hpp"
 #include "value/function.hpp"
 #include "value/string.hpp"
 #include "value/table.hpp"
@@ -324,6 +325,7 @@ Value Value::deserialize(std::istream& is, Chunk* chunk, const std::string& pare
             if (!is.read(reinterpret_cast<char*>(&len), sizeof(len)) || is.gcount() < static_cast<std::streamsize>(sizeof(len))) {
                 throw TruncatedError("bad binary format (truncated chunk)");
             }
+            checkCount(len, MAX_STRING_LEN, "string length");
             std::string s(len, '\0');
             if (len > 0 && (!is.read(&s[0], len) || is.gcount() < static_cast<std::streamsize>(len))) {
                 throw TruncatedError("bad binary format (truncated chunk)");

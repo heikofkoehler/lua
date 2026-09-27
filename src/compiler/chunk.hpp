@@ -105,5 +105,19 @@ private:
     size_t callInstruction(const char* name, size_t offset) const;
     size_t yieldInstruction(const char* name, size_t offset) const;
 };
+// Sanity bounds for deserialized counts. Corrupted bytecode can encode
+// absurd counts that would cause huge allocations or long loops before
+// the truncation check fires. These limits are far above any legitimate chunk.
+constexpr uint32_t MAX_CHUNK_NAME_LEN = 64 * 1024;
+constexpr uint32_t MAX_CODE_SIZE = 64 * 1024 * 1024;
+constexpr uint32_t MAX_LINES_SIZE = 64 * 1024 * 1024;
+constexpr uint32_t MAX_ID_COUNT = 1024 * 1024;
+constexpr uint32_t MAX_ID_LEN = 64 * 1024;
+constexpr uint32_t MAX_CONST_COUNT = 1024 * 1024;
+constexpr uint32_t MAX_LOCAL_COUNT = 1024 * 1024;
+constexpr uint32_t MAX_STRING_LEN = 16 * 1024 * 1024;
+
+void checkCount(uint32_t value, uint32_t max, const char* what);
+
 
 #endif // LUA_CHUNK_HPP
