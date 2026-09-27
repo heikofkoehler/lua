@@ -706,6 +706,10 @@ bool JITCompiler::assembleX64(FunctionObject* function, CodeHolder& code) {
                 uint8_t argCount = bytecode[++i];
                 a.mov(x86::qword_ptr(co_reg, offsetStack + 8), top_reg);
                 callHelperX64(a, (void*)VM::jitTailCall, vm_reg, 3, (uint32_t)argCount, (uint32_t)(i + 1));
+                // Reload top_reg: jitTailCall may have pushed results/popped args,
+                // so the stack top changed. Without this, frame_changed saves a
+                // stale top_reg, corrupting the caller's view of the stack.
+                a.mov(top_reg, x86::qword_ptr(co_reg, offsetStack + 8));
                 a.jmp(frame_changed);
                 break;
             }
@@ -713,6 +717,8 @@ bool JITCompiler::assembleX64(FunctionObject* function, CodeHolder& code) {
                 uint8_t fixedArgCount = bytecode[++i];
                 a.mov(x86::qword_ptr(co_reg, offsetStack + 8), top_reg);
                 callHelperX64(a, (void*)VM::jitTailCallMulti, vm_reg, 3, (uint32_t)fixedArgCount, (uint32_t)(i + 1));
+                // Same as OP_TAILCALL: reload top_reg after the call.
+                a.mov(top_reg, x86::qword_ptr(co_reg, offsetStack + 8));
                 a.jmp(frame_changed);
                 break;
             }
