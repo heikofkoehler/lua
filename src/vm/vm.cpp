@@ -5,6 +5,8 @@
 #include "compiler/lexer.hpp"
 #include "compiler/parser.hpp"
 #include "compiler/codegen.hpp"
+#include "compiler/rcodegen.hpp"
+#include "compiler/rtranslate.hpp"
 #include "value/string.hpp"
 #include "value/table.hpp"
 #include "value/closure.hpp"
@@ -1082,6 +1084,19 @@ FunctionObject* VM::compileSource(const std::string& source, const std::string& 
         auto program = parser.parse();
         if (!program) return nullptr;
 
+        if (useRegisterVM_) {
+            CodeGenerator codegen;
+            auto stackFunc = codegen.generate(program.get(), name);
+            RCodeGen rcodegen;
+            FunctionObject* rfunc = rcodegen.compile(program.get(), name);
+            if (!rfunc) return nullptr;
+            if (stackFunc) {
+                copyStackBytecode(rfunc, stackFunc.get());
+            }
+            registerFunction(rfunc);
+            return rfunc;
+        }
+
         CodeGenerator codegen;
         auto function = codegen.generate(program.get(), name);
         if (!function) return nullptr;
@@ -1144,6 +1159,10 @@ Value VM::peek(size_t distance) const {
 }
 
 uint8_t VM::readByte() {
+    if (currentFrame().ip >= currentFrame().chunk->code().size()) {
+        runtimeError("attempt to read past end of bytecode");
+        return 0;
+    }
     return currentFrame().chunk->at(currentFrame().ip++);
 }
 
@@ -2840,11 +2859,12 @@ void VM::callHook(const char* event, int line, int ftransfer, int ntransfer) {
         const Chunk* savedChunk;
         size_t interruptedFrameIdx;
         bool prevInterrupted;
+        size_t savedStackSize;
         HookGuard(CoroutineObject* c) 
             : co(c), prevInHook(c->inHook), prevStatus(c->status),
               savedLastResultCount(c->lastResultCount), savedChunk(c->chunk),
               interruptedFrameIdx(c->frames.empty() ? static_cast<size_t>(-1) : c->frames.size() - 1),
-              prevInterrupted(false) {
+              prevInterrupted(false), savedStackSize(c->stack.size()) {
             co->inHook = true;
             co->status = CoroutineObject::Status::RUNNING;
             if (interruptedFrameIdx < co->frames.size()) {
@@ -2859,6 +2879,9 @@ void VM::callHook(const char* event, int line, int ftransfer, int ntransfer) {
             co->chunk = savedChunk;
             if (interruptedFrameIdx < co->frames.size()) {
                 co->frames[interruptedFrameIdx].isInterruptedByHook = prevInterrupted;
+            }
+            if (co->stack.size() > savedStackSize) {
+                co->stack.resize(savedStackSize);
             }
         }
     } guard(currentCoroutine_);
@@ -3647,3 +3670,30 @@ bool VM::jitForLoopFallback(VM* vm, uint32_t base) {
     }
     return canContinue;
 }
+
+void VM::setUseRegisterVM(bool use) {
+    useRegisterVM_ = use;
+    if (use && stdlibInitialized_) {
+        initRequireScript();
+    }
+}
+
+bool VM::attachRegisterCode(FunctionObject* func) {
+    if (!func || !func->chunk()) return false;
+    if (!func->chunk()->hasRCode()) {
+        RTranslateResult r = translateToRegister(func);
+        if (!r.ok) {
+            return false;
+        }
+        func->chunk()->setRCode(std::move(r.code), r.maxRegisters);
+    }
+    Chunk* chunk = func->chunk();
+    for (size_t i = 0; i < chunk->numFunctions(); i++) {
+        FunctionObject* sub = chunk->getFunction(i);
+        if (sub && !attachRegisterCode(sub)) {
+            return false;
+        }
+    }
+    return true;
+}
+

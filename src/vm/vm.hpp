@@ -66,8 +66,10 @@ public:
     void reset();
 
     // Phase 3: Enable/disable register VM
-    void setUseRegisterVM(bool use) { useRegisterVM_ = use; }
+    void setUseRegisterVM(bool use);
     bool useRegisterVM() const { return useRegisterVM_; }
+    void initRequireScript();
+    bool attachRegisterCode(FunctionObject* func);
 
     void internConstants(const FunctionObject& function);
 
@@ -136,32 +138,40 @@ public:
     bool getTraceExecution() const { return traceExecution_; }
 
     // Public stack operations (for native functions to use)
-    // Inline fast paths: bounds checks are [[unlikely]] to fail in correct code.
+    // Inline fast paths: bounds checks are unlikely to fail in correct code.
     // Slow paths (overflow/underflow handling) are out-of-line in vm.cpp.
+#if defined(__GNUC__) || defined(__clang__)
+#define LUA_UNLIKELY(x) (__builtin_expect(!!(x), 0))
+#else
+#define LUA_UNLIKELY(x) (x)
+#endif
+
     inline void push(const Value& value) {
-        if (currentCoroutine_->stack.size() >= STACK_LIMIT) [[unlikely]] {
+        if (LUA_UNLIKELY(currentCoroutine_->stack.size() >= STACK_LIMIT)) {
             pushSlowPath(value);
             return;
         }
         currentCoroutine_->stack.push_back(value);
         // GC barrier for objects; integers/floats/nil/bool skip this.
-        if (value.isObj()) [[unlikely]] {
+        if (LUA_UNLIKELY(value.isObj())) {
             pushBarrier(value);
         }
     }
     inline Value pop() {
-        if (currentCoroutine_->stack.empty()) [[unlikely]] {
+        if (LUA_UNLIKELY(currentCoroutine_->stack.empty())) {
             return popSlowPath();
         }
         Value value = currentCoroutine_->stack.back();
         currentCoroutine_->stack.pop_back();
         return value;
     }
+#undef LUA_UNLIKELY
     Value peek(size_t distance = 0) const;
     void runtimeError(const std::string& message, int level = 1);
     void runtimeError(const Value& errorObj, int level = 1);
     void clearError() { hadError_ = false; isHandlingError_ = false; }
     std::string getVarInfo(size_t opIp, int operandIndex);
+    std::string getRVarInfo(size_t opIp, int reg);
     std::string getCallVarInfo(size_t opIp, int argCount);
 
     struct CallingFuncInfo {

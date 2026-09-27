@@ -965,8 +965,8 @@ void registerDebugLibrary(VM* vm, TableObject* debugTable) {
         if (what.find('L') != std::string::npos) {
             if (closure && !closure->isC()) {
                 TableObject* activelines = vm->createTable();
-                const auto& code = closure->function()->chunk()->code();
-                for (size_t ip = 0; ip < code.size(); ip++) {
+                size_t sz = closure->function()->chunk()->size();
+                for (size_t ip = 0; ip < sz; ip++) {
                     int line = closure->function()->chunk()->getLine(ip);
                     if (line > 0) {
                         activelines->set(Value::integer(line), Value::boolean(true));

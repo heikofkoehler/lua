@@ -43,6 +43,7 @@ public:
     // Returns the index of the function
     size_t addFunction(FunctionObject* func);
     FunctionObject* getFunction(size_t index) const;
+    size_t numFunctions() const { return functions_.size(); }
 
     // Add a string to the string pool (with interning)
     // Returns the index of the string
@@ -59,17 +60,23 @@ public:
     const std::vector<uint8_t>& code() const { return code_; }
     std::vector<uint8_t>& code() { return code_; }  // Non-const for patching jumps
     uint8_t at(size_t offset) const { return code_[offset]; }
-    size_t size() const { return code_.size(); }
+    size_t size() const { return hasRCode_ ? rcode_.size() : code_.size(); }
     
     // Register VM bytecode (Phase 3)
     const std::vector<uint32_t>& rcode() const { return rcode_; }
     std::vector<uint32_t>& rcode() { return rcode_; }
     bool hasRCode() const { return hasRCode_; }
-    void setRCode(std::vector<uint32_t>&& rc, int frameSize) { 
+    void setRCode(std::vector<uint32_t>&& rc, int frameSize, std::vector<int>&& lines = {}) { 
         rcode_ = std::move(rc); 
         hasRCode_ = true; 
         rFrameSize_ = frameSize;
+        if (!lines.empty()) {
+            rlines_ = std::move(lines);
+        }
     }
+    void setLines(std::vector<int>&& lines) { lines_ = std::move(lines); }
+    const std::vector<int>& lines() const { return lines_; }
+    const std::vector<int>& rlines() const { return rlines_; }
     int rFrameSize() const { return rFrameSize_; }
 
     const std::string& sourceName() const { return sourceName_; }
@@ -109,6 +116,7 @@ private:
     std::unordered_map<std::string, size_t> stringIndices_;  // For interning
     std::vector<int64_t> int64s_;      // 64-bit integers exceeding 48 bits
     std::vector<int> lines_;           // Line numbers (parallel to code_)
+    std::vector<int> rlines_;          // Line numbers (parallel to rcode_)
     std::string sourceName_ = "chunk"; // Name of source file or [string "chunk"]
 
     // Helper for disassembly
@@ -133,6 +141,6 @@ constexpr uint32_t MAX_LOCAL_COUNT = 1024 * 1024;
 constexpr uint32_t MAX_STRING_LEN = 16 * 1024 * 1024;
 
 void checkCount(uint32_t value, uint32_t max, const char* what);
-
+void copyStackBytecode(FunctionObject* rfunc, FunctionObject* sfunc);
 
 #endif // LUA_CHUNK_HPP

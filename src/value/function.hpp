@@ -33,6 +33,7 @@ public:
     int arity() const { return arity_; }
     Chunk* chunk() const { return chunk_.get(); }
     int upvalueCount() const { return upvalueCount_; }
+    void setUpvalueCount(int count) { upvalueCount_ = count; }
     bool hasVarargs() const { return hasVarargs_; }
     int lineDefined() const { return lineDefined_; }
     int lastLineDefined() const { return lastLineDefined_; }

@@ -1,5 +1,6 @@
 #include "vm/vm.hpp"
 #include "vm/jit.hpp"
+#include "vm/rinstruction.hpp"
 #include "value/string.hpp"
 #include "value/table.hpp"
 #include "value/closure.hpp"
@@ -332,6 +333,128 @@ std::string VM::getVarInfo(size_t opIp, int operandIndex) {
     return "";
 }
 
+std::string VM::getRVarInfo(size_t opIp, int reg) {
+    if (currentCoroutine_->frames.empty() || !currentFrame().closure || !currentFrame().chunk) {
+        return "";
+    }
+    const CallFrame& frame = currentFrame();
+    FunctionObject* func = frame.closure->function();
+    Chunk* chunk = func->chunk();
+    if (!chunk || !chunk->hasRCode() || reg < 0) return "";
+
+    const auto& rcode = chunk->rcode();
+    if (opIp >= rcode.size()) opIp = rcode.size() > 0 ? rcode.size() - 1 : 0;
+
+    struct RegInfo {
+        enum Source { UNKNOWN, LOCAL, GLOBAL, UPVALUE, FIELD, METHOD, CONST_STR } source = UNKNOWN;
+        std::string name;
+        bool isConstStr = false;
+        std::string constStr;
+    };
+
+    std::vector<RegInfo> regs(std::max(256, chunk->rFrameSize()));
+
+    // Check locals defined at opIp
+    for (const auto& l : func->localVars()) {
+        if (opIp >= l.startPC && (l.endPC == (size_t)-1 || opIp <= l.endPC)) {
+            if (l.slot >= 0 && static_cast<size_t>(l.slot) < regs.size()) {
+                regs[l.slot] = {RegInfo::LOCAL, l.name, false, ""};
+            }
+        }
+    }
+
+    for (size_t i = 0; i <= opIp && i < rcode.size(); i++) {
+        uint32_t instr = rcode[i];
+        ROpCode op = ropGetOp(instr);
+        uint8_t a = ropGetA(instr);
+        uint8_t b = ropGetB(instr);
+        uint8_t c = ropGetC(instr);
+        uint16_t bx = ropGetBx(instr);
+
+        if (i == opIp) break;
+
+        switch (op) {
+            case ROpCode::ROP_MOVE: {
+                if (a < regs.size() && b < regs.size()) {
+                    regs[a] = regs[b];
+                }
+                break;
+            }
+            case ROpCode::ROP_LOADK: {
+                if (a < regs.size()) {
+                    if (bx < chunk->constants().size() && chunk->constants()[bx].isString()) {
+                        regs[a] = {RegInfo::CONST_STR, "", true, getStringValue(chunk->constants()[bx])};
+                    } else {
+                        regs[a] = {RegInfo::UNKNOWN, "", false, ""};
+                    }
+                }
+                break;
+            }
+            case ROpCode::ROP_GETUPVAL: {
+                if (a < regs.size()) {
+                    std::string uname = func->getUpvalueName(b);
+                    regs[a] = {RegInfo::UPVALUE, uname, false, ""};
+                }
+                break;
+            }
+            case ROpCode::ROP_GETTABUP: {
+                if (a < regs.size()) {
+                    std::string kname;
+                    if (c < chunk->constants().size() && chunk->constants()[c].isString()) {
+                        kname = getStringValue(chunk->constants()[c]);
+                    }
+                    std::string upname = func->getUpvalueName(b);
+                    if (b == 0 || upname == "_ENV") {
+                        regs[a] = {RegInfo::GLOBAL, kname, false, ""};
+                    } else {
+                        regs[a] = {RegInfo::FIELD, kname, false, ""};
+                    }
+                }
+                break;
+            }
+            case ROpCode::ROP_GETTABLE: {
+                if (a < regs.size() && b < regs.size() && c < regs.size()) {
+                    const RegInfo& tbl = regs[b];
+                    const RegInfo& key = regs[c];
+                    if (tbl.source == RegInfo::LOCAL && tbl.name == "_ENV" && key.isConstStr) {
+                        regs[a] = {RegInfo::GLOBAL, key.constStr, false, ""};
+                    } else if (key.isConstStr) {
+                        regs[a] = {RegInfo::FIELD, key.constStr, false, ""};
+                    } else {
+                        regs[a] = {RegInfo::UNKNOWN, "", false, ""};
+                    }
+                }
+                break;
+            }
+            default:
+                break;
+        }
+
+        // Re-apply local names if this register is a local variable
+        for (const auto& l : func->localVars()) {
+            if (l.slot == static_cast<int>(a) && opIp >= l.startPC && (l.endPC == (size_t)-1 || opIp <= l.endPC)) {
+                regs[a] = {RegInfo::LOCAL, l.name, false, ""};
+            }
+        }
+    }
+
+    if (reg < static_cast<int>(regs.size())) {
+        const RegInfo& target = regs[reg];
+        if (target.source == RegInfo::GLOBAL && !target.name.empty()) {
+            return " (global '" + target.name + "')";
+        } else if (target.source == RegInfo::LOCAL && !target.name.empty()) {
+            return " (local '" + target.name + "')";
+        } else if (target.source == RegInfo::UPVALUE && !target.name.empty()) {
+            return " (upvalue '" + target.name + "')";
+        } else if (target.source == RegInfo::FIELD && !target.name.empty()) {
+            return " (field '" + target.name + "')";
+        } else if (target.source == RegInfo::METHOD && !target.name.empty()) {
+            return " (method '" + target.name + "')";
+        }
+    }
+    return "";
+}
+
 VM::CallingFuncInfo VM::getFrameFuncInfo(int frameIndex, CoroutineObject* co) {
     if (!co) co = currentCoroutine_;
     CallingFuncInfo info;
@@ -359,50 +482,136 @@ VM::CallingFuncInfo VM::getFrameFuncInfo(int frameIndex, CoroutineObject* co) {
         const CallFrame& callerFrame = co->frames[frameIndex - 1];
         if (!callerFrame.isC && callerFrame.closure && callerFrame.chunk) {
             const Chunk* chunk = callerFrame.chunk;
-            const auto& code = chunk->code();
-            size_t ip = callerFrame.ip;
-            if (ip > 0 && ip <= code.size()) {
-                size_t callIp = (size_t)-1;
-                int argCount = 0;
-                if (ip >= 3 && (code[ip - 3] == static_cast<uint8_t>(OpCode::OP_CALL) || 
-                                code[ip - 3] == static_cast<uint8_t>(OpCode::OP_CALL_MULTI))) {
-                    callIp = ip - 3;
-                    argCount = code[callIp + 1];
-                } else if (ip >= 2 && (code[ip - 2] == static_cast<uint8_t>(OpCode::OP_TAILCALL) || 
-                                       code[ip - 2] == static_cast<uint8_t>(OpCode::OP_TAILCALL_MULTI))) {
-                    callIp = ip - 2;
-                    argCount = code[callIp + 1];
+            if (chunk->hasRCode()) {
+                const auto& rcode = chunk->rcode();
+                const auto& constants = chunk->constants();
+                size_t ip = callerFrame.ip;
+                if (ip > 0 && ip <= rcode.size()) {
+                    size_t callIp = ip - 1;
+                    uint32_t callInstr = rcode[callIp];
+                    ROpCode op = ropGetOp(callInstr);
+                    if (op == ROpCode::ROP_CALL || op == ROpCode::ROP_TAILCALL) {
+                        uint8_t funcReg = ropGetA(callInstr);
+                        // Search backwards for the instruction defining funcReg
+                        for (int k = static_cast<int>(callIp) - 1; k >= 0 && k >= static_cast<int>(callIp) - 50; --k) {
+                            uint32_t prevInstr = rcode[k];
+                            ROpCode prevOp = ropGetOp(prevInstr);
+                            uint8_t prevA = ropGetA(prevInstr);
+                            if (prevA == funcReg) {
+                                while (prevOp == ROpCode::ROP_MOVE) {
+                                    uint8_t srcReg = ropGetB(prevInstr);
+                                    if (callerFrame.closure->function()) {
+                                        for (const auto& l : callerFrame.closure->function()->localVars()) {
+                                            if (l.slot == srcReg && l.startPC <= callIp && callIp <= l.endPC) {
+                                                info.name = l.name;
+                                                info.namewhat = "local";
+                                                return info;
+                                            }
+                                        }
+                                    }
+                                    // If srcReg wasn't directly a named local, trace backwards for srcReg definition
+                                    bool traced = false;
+                                    for (int m = k - 1; m >= 0 && m >= k - 50; --m) {
+                                        uint32_t stepInstr = rcode[m];
+                                        if (ropGetA(stepInstr) == srcReg) {
+                                            prevInstr = stepInstr;
+                                            prevOp = ropGetOp(stepInstr);
+                                            k = m;
+                                            traced = true;
+                                            break;
+                                        }
+                                    }
+                                    if (!traced) break;
+                                }
+                                if (prevOp == ROpCode::ROP_GETTABUP) {
+                                    uint8_t c = ropGetC(prevInstr);
+                                    if (c < constants.size() && constants[c].isString()) {
+                                        info.name = getStringValue(constants[c]);
+                                        info.namewhat = "global";
+                                        return info;
+                                    }
+                                } else if (prevOp == ROpCode::ROP_GETUPVAL) {
+                                    uint8_t uv = ropGetB(prevInstr);
+                                    if (callerFrame.closure->function()) {
+                                        info.name = callerFrame.closure->function()->getUpvalueName(uv);
+                                        info.namewhat = "upvalue";
+                                        return info;
+                                    }
+                                } else if (prevOp == ROpCode::ROP_GETTABLE) {
+                                    uint8_t keyReg = ropGetC(prevInstr);
+                                    for (int m = k - 1; m >= 0 && m >= k - 5; --m) {
+                                        uint32_t keyInstr = rcode[m];
+                                        if (ropGetA(keyInstr) == keyReg && ropGetOp(keyInstr) == ROpCode::ROP_LOADK) {
+                                            uint16_t bx = ropGetBx(keyInstr);
+                                            if (bx < constants.size() && constants[bx].isString()) {
+                                                info.name = getStringValue(constants[bx]);
+                                                info.namewhat = "field";
+                                                return info;
+                                            }
+                                        }
+                                    }
+                                }
+                                break;
+                            }
+                        }
+                        // Also check if funcReg is itself a local variable
+                        if (callerFrame.closure->function()) {
+                            for (const auto& l : callerFrame.closure->function()->localVars()) {
+                                if (l.slot == funcReg && l.startPC <= callIp && callIp <= l.endPC) {
+                                    info.name = l.name;
+                                    info.namewhat = "local";
+                                    return info;
+                                }
+                            }
+                        }
+                    }
                 }
-                if (callIp != (size_t)-1) {
-                    std::vector<AbstractVal> astack = simulateStack(this, callerFrame, callIp);
-                    if (astack.size() > static_cast<size_t>(argCount)) {
-                        const AbstractVal& target = astack[astack.size() - 1 - argCount];
-                        if (target.source == AbstractVal::GLOBAL && !target.name.empty()) {
-                            info.name = target.name;
-                            info.namewhat = "global";
-                            return info;
-                        } else if (target.source == AbstractVal::LOCAL && !target.name.empty()) {
-                            if (target.name == "(for iterator)" || target.name == "for iterator") {
-                                info.name = "for iterator";
-                                info.namewhat = "for iterator";
+            } else {
+                const auto& code = chunk->code();
+                size_t ip = callerFrame.ip;
+                if (ip > 0 && ip <= code.size()) {
+                    size_t callIp = (size_t)-1;
+                    int argCount = 0;
+                    if (ip >= 3 && (code[ip - 3] == static_cast<uint8_t>(OpCode::OP_CALL) || 
+                                    code[ip - 3] == static_cast<uint8_t>(OpCode::OP_CALL_MULTI))) {
+                        callIp = ip - 3;
+                        argCount = code[callIp + 1];
+                    } else if (ip >= 2 && (code[ip - 2] == static_cast<uint8_t>(OpCode::OP_TAILCALL) || 
+                                           code[ip - 2] == static_cast<uint8_t>(OpCode::OP_TAILCALL_MULTI))) {
+                        callIp = ip - 2;
+                        argCount = code[callIp + 1];
+                    }
+                    if (callIp != (size_t)-1) {
+                        std::vector<AbstractVal> astack = simulateStack(this, callerFrame, callIp);
+                        if (astack.size() > static_cast<size_t>(argCount)) {
+                            const AbstractVal& target = astack[astack.size() - 1 - argCount];
+                            if (target.source == AbstractVal::GLOBAL && !target.name.empty()) {
+                                info.name = target.name;
+                                info.namewhat = "global";
+                                return info;
+                            } else if (target.source == AbstractVal::LOCAL && !target.name.empty()) {
+                                if (target.name == "(for iterator)" || target.name == "for iterator") {
+                                    info.name = "for iterator";
+                                    info.namewhat = "for iterator";
+                                    return info;
+                                }
+                                info.name = target.name;
+                                info.namewhat = "local";
+                                return info;
+                            } else if (target.source == AbstractVal::UPVALUE && !target.name.empty()) {
+                                info.name = target.name;
+                                info.namewhat = "upvalue";
+                                return info;
+                            } else if (target.source == AbstractVal::FIELD && !target.name.empty()) {
+                                info.name = target.name;
+                                info.namewhat = "field";
+                                return info;
+                            } else if (target.source == AbstractVal::METHOD && !target.name.empty()) {
+                                info.name = target.name;
+                                info.namewhat = "method";
+                                info.isMethod = true;
                                 return info;
                             }
-                            info.name = target.name;
-                            info.namewhat = "local";
-                            return info;
-                        } else if (target.source == AbstractVal::UPVALUE && !target.name.empty()) {
-                            info.name = target.name;
-                            info.namewhat = "upvalue";
-                            return info;
-                        } else if (target.source == AbstractVal::FIELD && !target.name.empty()) {
-                            info.name = target.name;
-                            info.namewhat = "field";
-                            return info;
-                        } else if (target.source == AbstractVal::METHOD && !target.name.empty()) {
-                            info.name = target.name;
-                            info.namewhat = "method";
-                            info.isMethod = true;
-                            return info;
                         }
                     }
                 }
@@ -418,6 +627,14 @@ VM::CallingFuncInfo VM::getFrameFuncInfo(int frameIndex, CoroutineObject* co) {
         }
         if (!cname.empty()) {
             info.name = cname;
+            info.namewhat = "global";
+            return info;
+        }
+    }
+    if (!frame.isC && frame.closure) {
+        std::string gname = findGlobalFuncName(Value::closure(frame.closure));
+        if (!gname.empty()) {
+            info.name = gname;
             info.namewhat = "global";
             return info;
         }
@@ -443,6 +660,13 @@ bool VM::run(size_t targetFrameCount) {
         if (!currentCoroutine_->frames.empty()) {
             CallFrame& frame = currentCoroutine_->frames.back();
             FunctionObject* func = frame.closure->function();
+            if (!func->chunk()->hasRCode()) {
+                if (func->chunk()->code().empty()) {
+                    runtimeError("attempt to execute empty function");
+                    return false;
+                }
+                attachRegisterCode(func);
+            }
             if (func->chunk()->hasRCode()) {
                 return runRegister(targetFrameCount);
             }

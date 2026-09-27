@@ -97,6 +97,12 @@ int64_t Chunk::getInt64(size_t index) const {
 }
 
 int Chunk::getLine(size_t offset) const {
+    if (hasRCode_ && !rlines_.empty()) {
+        if (offset >= rlines_.size()) {
+            return -1;
+        }
+        return rlines_[offset];
+    }
     if (offset >= lines_.size()) {
         return -1;
     }
@@ -1086,4 +1092,15 @@ std::unique_ptr<FunctionObject> FunctionObject::deserialize(std::istream& is, co
     }
 
     return function;
+}
+
+void copyStackBytecode(FunctionObject* rfunc, FunctionObject* sfunc) {
+    if (!rfunc || !sfunc || !rfunc->chunk() || !sfunc->chunk()) return;
+    rfunc->chunk()->code() = sfunc->chunk()->code();
+    rfunc->chunk()->setLines(std::vector<int>(sfunc->chunk()->lines()));
+    size_t rcount = rfunc->chunk()->numFunctions();
+    size_t scount = sfunc->chunk()->numFunctions();
+    for (size_t i = 0; i < rcount && i < scount; i++) {
+        copyStackBytecode(rfunc->chunk()->getFunction(i), sfunc->chunk()->getFunction(i));
+    }
 }

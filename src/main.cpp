@@ -146,28 +146,6 @@ enum class RunStatus {
 };
 
 // Internal run implementation that returns status and error
-// Helper: translate function and all sub-functions to register bytecode
-static bool attachRegisterCode(FunctionObject* func) {
-    RTranslateResult r = translateToRegister(func);
-    if (!r.ok) {
-        return false;
-    }
-    func->chunk()->setRCode(std::move(r.code), r.maxRegisters);
-    
-    // Recurse into sub-functions
-    Chunk* chunk = func->chunk();
-    for (size_t i = 0; i < chunk->constants().size(); i++) {
-        const Value& c = chunk->constants()[i];
-        if (c.isFunction()) {
-            FunctionObject* sub = chunk->getFunction(c.asFunctionIndex());
-            if (sub && !attachRegisterCode(sub)) {
-                return false;
-            }
-        }
-    }
-    return true;
-}
-
 RunStatus runInternal(const std::string& source, VM& vm, const std::string& name, std::string& outError, const std::vector<Value>& args = {}, bool useRegisterVM = false) {
     try {
         Lexer lexer(source);
@@ -183,11 +161,16 @@ RunStatus runInternal(const std::string& source, VM& vm, const std::string& name
 
         if (useRegisterVM) {
             // Direct register compilation: AST -> ROP_* (no translator)
+            CodeGenerator codegen;
+            auto stackFunc = codegen.generate(program.get(), name);
             RCodeGen rcodegen;
-            FunctionObject* rfunc = rcodegen.compile(program.get());
+            FunctionObject* rfunc = rcodegen.compile(program.get(), name);
             if (!rfunc) {
                 outError = "Failed to compile to register bytecode";
                 return RunStatus::COMPILE_ERROR;
+            }
+            if (stackFunc) {
+                copyStackBytecode(rfunc, stackFunc.get());
             }
             function.reset(rfunc);
             funcPtr = function.get();
@@ -303,6 +286,9 @@ int runBytecode(const std::string& path, VM& vm) {
         vm.setSourceName("@" + path);
 
         FunctionObject* funcPtr = function.get();
+        if (vm.useRegisterVM()) {
+            vm.attachRegisterCode(funcPtr);
+        }
         vm.registerFunction(function.release());
 
         if (!vm.run(*funcPtr)) {
@@ -364,6 +350,9 @@ int runFile(const std::string& path, VM& vm, const char* progname = "lua", const
                 return 1;
             }
             FunctionObject* funcPtr = function.get();
+            if (useRegisterVM) {
+                vm.attachRegisterCode(funcPtr);
+            }
             vm.registerFunction(function.release());
             return vm.run(*funcPtr, args) ? 0 : 1;
         } else {
@@ -782,6 +771,7 @@ int main(int argc, char* argv[]) {
     vm.setupSigintHandler();
     vm.setJitEnabled(jitEnabled);
     vm.setWarnEnabled(warnings);
+    vm.setUseRegisterVM(useRegisterVM);
 
     if (ignoreEnv) {
         vm.setGlobal("__IGNORE_ENV__", Value::boolean(true));
@@ -824,11 +814,11 @@ int main(int argc, char* argv[]) {
                 name = lib;
             }
             std::string cmd = "_G['" + global + "'] = require('" + name + "')";
-            if (!run(cmd, vm, "=(command line)", false, progname)) {
+            if (!run(cmd, vm, "=(command line)", false, progname, {}, useRegisterVM)) {
                 return 1;
             }
         } else if (act.type == OptionAction::EXEC) {
-            if (!run(act.arg, vm, "=[string \"(command line)\"]", false, progname)) {
+            if (!run(act.arg, vm, "=[string \"(command line)\"]", false, progname, {}, useRegisterVM)) {
                 return 1;
             }
         }
@@ -868,11 +858,14 @@ int main(int argc, char* argv[]) {
                 result = 1;
             } else {
                 FunctionObject* funcPtr = function.get();
+                if (useRegisterVM) {
+                    vm.attachRegisterCode(funcPtr);
+                }
                 vm.registerFunction(function.release());
                 result = vm.run(*funcPtr, scriptArgs) ? 0 : 1;
             }
         } else {
-            result = run(source, vm, "=[string \"stdin\"]", false, progname, scriptArgs) ? 0 : 1;
+            result = run(source, vm, "=[string \"stdin\"]", false, progname, scriptArgs, useRegisterVM) ? 0 : 1;
         }
     } else if (!scriptPath.empty()) {
         if (compileOnly) {

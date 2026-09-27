@@ -9,8 +9,33 @@
 #include "value/function.hpp"
 #include "value/value.hpp"
 #include "compiler/chunk.hpp"
+#include "compiler/rtranslate.hpp"
 #include <cstdint>
 #include <cmath>
+
+namespace {
+constexpr int MAX_TAG_LOOP = 2000;
+
+static inline int64_t lua_shift_left(int64_t x, int64_t y) {
+    if (y < 0) {
+        if (y <= -64) return 0;
+        return static_cast<int64_t>(static_cast<uint64_t>(x) >> (-y));
+    } else {
+        if (y >= 64) return 0;
+        return static_cast<int64_t>(static_cast<uint64_t>(x) << y);
+    }
+}
+
+static inline int64_t lua_shift_right(int64_t x, int64_t y) {
+    if (y < 0) {
+        if (y <= -64) return 0;
+        return static_cast<int64_t>(static_cast<uint64_t>(x) << (-y));
+    } else {
+        if (y >= 64) return 0;
+        return static_cast<int64_t>(static_cast<uint64_t>(x) >> y);
+    }
+}
+}
 
 bool VM::runRegister(size_t targetFrameCount) {
     while (true) {
@@ -32,31 +57,144 @@ next_frame:
         Chunk* chunk = func->chunk();
         
         if (!chunk->hasRCode()) {
-            // No register code; fall back to stack VM (should not happen in register mode)
-            hadError_ = true;
-            return false;
+            if (chunk->code().empty()) {
+                runtimeError("attempt to execute empty function");
+                return false;
+            }
+            auto res = translateToRegister(func);
+            if (res.ok) {
+                chunk->setRCode(std::move(res.code), res.maxRegisters);
+            } else {
+                if (!run(currentCoroutine_->frames.size() - 1)) {
+                    return false;
+                }
+                goto next_frame;
+            }
         }
         
         const std::vector<uint32_t>& code = chunk->rcode();
         const std::vector<Value>& constants = chunk->constants();
-        
         // Register window: R[i] = stack[frame.stackBase + i]
-        // Ensure the stack has enough space for the registers
         size_t base = frame.stackBase;
-        // The translator computes maxRegisters; we need to ensure stack size
-        // For now, assume the frame was set up with enough space
-        
+        size_t needed = base + chunk->rFrameSize();
+        if (currentCoroutine_->stack.size() < needed) {
+            currentCoroutine_->stack.resize(needed, Value::nil());
+        }
+
+        if (frame.yieldDest >= 0) {
+            // We just resumed into this frame from a yield!
+            int dest = frame.yieldDest;
+            frame.yieldDest = -1;
+            size_t pushed = currentCoroutine_->lastResultCount;
+            std::vector<Value> res;
+            for (size_t i = 0; i < pushed && !currentCoroutine_->stack.empty(); i++) {
+                res.push_back(currentCoroutine_->stack.back());
+                currentCoroutine_->stack.pop_back();
+            }
+            std::reverse(res.begin(), res.end());
+            for (size_t i = 0; i < res.size(); i++) {
+                currentCoroutine_->stack[dest + i] = res[i];
+            }
+            frame.resultCount = res.size();
+            frame.topReg = (dest >= static_cast<int>(base) ? static_cast<size_t>(dest - base) : 0) + res.size();
+        }
+
         Value* R = currentCoroutine_->stack.data() + base;
         size_t pc = frame.ip;  // Restore pc from frame (0 for new frames)
         
         // TODO: Get frame size from translator result (maxRegisters)
         // For now, use a large enough value
         
+        auto dispatchBinaryMM = [&](uint8_t destReg, const Value& v1, const Value& v2, const char* method, const char* opDesc, int explicitBadReg = -1) -> int {
+            frame.ip = pc;
+            size_t prevFrames = currentCoroutine_->frames.size();
+            if (!callBinaryMetamethod(v1, v2, method)) {
+                if (!hadError_) {
+                    int badReg = explicitBadReg;
+                    if (std::string(opDesc) == "perform bitwise operation on" && v1.isNumber() && v2.isNumber()) {
+                        if (badReg < 0 && pc > 0) {
+                            int64_t dummy;
+                            bool ok1 = toIntegerNoString(v1, dummy);
+                            badReg = !ok1 ? (int)ropGetB(code[pc - 1]) : (int)ropGetC(code[pc - 1]);
+                        }
+                        runtimeError("number" + getRVarInfo(pc - 1, badReg) + " has no integer representation");
+                    } else {
+                        if (badReg < 0 && pc > 0) {
+                            badReg = !coerceToNumber(const_cast<Value&>(v1)) ? (int)ropGetB(code[pc - 1]) : (int)ropGetC(code[pc - 1]);
+                        }
+                        Value badVal = !coerceToNumber(const_cast<Value&>(v1)) ? v1 : v2;
+                        runtimeError(std::string("attempt to ") + opDesc + " a " + typeName(badVal) + " value" + getRVarInfo(pc - 1, badReg));
+                    }
+                }
+                return -1;
+            }
+            if (currentCoroutine_->frames.size() > prevFrames) {
+                CallFrame& newFrame = currentCoroutine_->frames.back();
+                newFrame.regDest = static_cast<int>(base + destReg);
+                if (!newFrame.closure->function()->chunk()->hasRCode()) {
+                    hadError_ = true;
+                    return -1;
+                }
+                return 1;
+            }
+            R = currentCoroutine_->stack.data() + base;
+            R[destReg] = pop();
+            return 0;
+        };
+
         while (pc < code.size()) {
+            if (stdlibInitialized_ && !currentCoroutine_->inHook && currentCoroutine_->hookMask != 0) {
+                bool triggerCount = false;
+                bool triggerLine = false;
+                int currentLine = -1;
+
+                if (currentCoroutine_->hookMask & CoroutineObject::MASK_COUNT) {
+                    if (--currentCoroutine_->hookCount <= 0) {
+                        triggerCount = true;
+                        currentCoroutine_->hookCount = currentCoroutine_->baseHookCount;
+                    }
+                }
+
+                if (currentCoroutine_->hookMask & CoroutineObject::MASK_LINE) {
+                    if (!currentCoroutine_->frames.empty()) {
+                        CallFrame& curFrame = currentFrame();
+                        if (curFrame.chunk) {
+                            currentLine = curFrame.chunk->getLine(pc);
+                            if (currentLine > 0) {
+                                if (curFrame.lastLine == -1 ||
+                                    pc < curFrame.lastIp ||
+                                    currentLine != curFrame.lastLine) {
+                                    triggerLine = true;
+                                    curFrame.lastLine = currentLine;
+                                }
+                            } else {
+                                if (curFrame.lastLine == -1 || pc < curFrame.lastIp) {
+                                    triggerLine = true;
+                                    curFrame.lastLine = -2;
+                                }
+                            }
+                            curFrame.lastIp = pc;
+                        }
+                    }
+                }
+
+                if (triggerCount) {
+                    frame.ip = pc;
+                    callHook("count");
+                    if (hadError_) return false;
+                    R = currentCoroutine_->stack.data() + base;
+                }
+                
+                if (triggerLine) {
+                    frame.ip = pc;
+                    callHook("line", currentLine);
+                    if (hadError_) return false;
+                    R = currentCoroutine_->stack.data() + base;
+                }
+            }
+
             uint32_t instr = code[pc++];
             ROpCode op = ropGetOp(instr);
-            // Debug: print PC and opcode
-            // fprintf(stderr, "PC=%zu op=%d (%s)\n", pc-1, (int)op, ropToString(op));
             uint8_t A = ropGetA(instr);
             uint8_t B = ropGetB(instr);
             uint8_t C = ropGetC(instr);
@@ -89,102 +227,115 @@ next_frame:
                 }
                 case ROpCode::ROP_ADD: {
                     // R(A) = R(B) + R(C)
-                    Value b = R[B];
-                    Value c = R[C];
+                    Value b = R[B], c = R[C];
                     if (b.isInteger() && c.isInteger()) {
-                        R[A] = makeInteger(b.asInteger() + c.asInteger());
-                    } else if (b.isNumber() && c.isNumber()) {
-                        R[A] = Value::number(b.asNumber() + c.asNumber());
+                        R[A] = makeInteger(static_cast<int64_t>(static_cast<uint64_t>(b.asInteger()) + static_cast<uint64_t>(c.asInteger())));
                     } else {
-                        // TODO: call metamethod
-                        hadError_ = true;
-                        return false;
+                        Value ca = b, cb = c;
+                        if (coerceToNumber(ca) && coerceToNumber(cb)) {
+                            R[A] = add(ca, cb);
+                        } else {
+                            int r = dispatchBinaryMM(A, b, c, "__add", "perform arithmetic on");
+                            if (r < 0) return false;
+                            if (r > 0) goto next_frame;
+                        }
                     }
                     break;
                 }
                 case ROpCode::ROP_SUB: {
-                    Value b = R[B];
-                    Value c = R[C];
+                    Value b = R[B], c = R[C];
                     if (b.isInteger() && c.isInteger()) {
-                        R[A] = makeInteger(b.asInteger() - c.asInteger());
-                    } else if (b.isNumber() && c.isNumber()) {
-                        R[A] = Value::number(b.asNumber() - c.asNumber());
+                        R[A] = makeInteger(static_cast<int64_t>(static_cast<uint64_t>(b.asInteger()) - static_cast<uint64_t>(c.asInteger())));
                     } else {
-                        hadError_ = true;
-                        return false;
+                        Value ca = b, cb = c;
+                        if (coerceToNumber(ca) && coerceToNumber(cb)) {
+                            R[A] = subtract(ca, cb);
+                        } else {
+                            int r = dispatchBinaryMM(A, b, c, "__sub", "perform arithmetic on");
+                            if (r < 0) return false;
+                            if (r > 0) goto next_frame;
+                        }
                     }
                     break;
                 }
                 case ROpCode::ROP_MUL: {
-                    Value b = R[B];
-                    Value c = R[C];
+                    Value b = R[B], c = R[C];
                     if (b.isInteger() && c.isInteger()) {
-                        R[A] = makeInteger(b.asInteger() * c.asInteger());
-                    } else if (b.isNumber() && c.isNumber()) {
-                        R[A] = Value::number(b.asNumber() * c.asNumber());
+                        R[A] = makeInteger(static_cast<int64_t>(static_cast<uint64_t>(b.asInteger()) * static_cast<uint64_t>(c.asInteger())));
                     } else {
-                        hadError_ = true;
-                        return false;
+                        Value ca = b, cb = c;
+                        if (coerceToNumber(ca) && coerceToNumber(cb)) {
+                            R[A] = multiply(ca, cb);
+                        } else {
+                            int r = dispatchBinaryMM(A, b, c, "__mul", "perform arithmetic on");
+                            if (r < 0) return false;
+                            if (r > 0) goto next_frame;
+                        }
                     }
                     break;
                 }
                 case ROpCode::ROP_DIV: {
-                    Value b = R[B];
-                    Value c = R[C];
-                    if (b.isNumber() && c.isNumber()) {
-                        R[A] = Value::number(b.asNumber() / c.asNumber());
+                    Value b = R[B], c = R[C];
+                    Value ca = b, cb = c;
+                    if (coerceToNumber(ca) && coerceToNumber(cb)) {
+                        R[A] = divide(ca, cb);
                     } else {
-                        hadError_ = true;
-                        return false;
+                        int r = dispatchBinaryMM(A, b, c, "__div", "perform arithmetic on");
+                        if (r < 0) return false;
+                        if (r > 0) goto next_frame;
                     }
                     break;
                 }
                 case ROpCode::ROP_IDIV: {
-                    Value b = R[B];
-                    Value c = R[C];
-                    if (b.isNumber() && c.isNumber()) {
-                        double res = b.asNumber() / c.asNumber();
-                        // Floor division
-                        R[A] = Value::number(std::floor(res));
+                    Value b = R[B], c = R[C];
+                    Value ca = b, cb = c;
+                    if (coerceToNumber(ca) && coerceToNumber(cb)) {
+                        R[A] = integerDivide(ca, cb);
                     } else {
-                        hadError_ = true;
-                        return false;
+                        int r = dispatchBinaryMM(A, b, c, "__idiv", "perform arithmetic on");
+                        if (r < 0) return false;
+                        if (r > 0) goto next_frame;
                     }
                     break;
                 }
                 case ROpCode::ROP_MOD: {
-                    Value b = R[B];
-                    Value c = R[C];
-                    if (b.isNumber() && c.isNumber()) {
-                        double bn = b.asNumber();
-                        double cn = c.asNumber();
-                        // Lua modulo: bn - floor(bn/cn)*cn
-                        R[A] = Value::number(bn - std::floor(bn/cn)*cn);
+                    Value b = R[B], c = R[C];
+                    Value ca = b, cb = c;
+                    if (coerceToNumber(ca) && coerceToNumber(cb)) {
+                        R[A] = modulo(ca, cb);
                     } else {
-                        hadError_ = true;
-                        return false;
+                        int r = dispatchBinaryMM(A, b, c, "__mod", "perform arithmetic on");
+                        if (r < 0) return false;
+                        if (r > 0) goto next_frame;
                     }
                     break;
                 }
                 case ROpCode::ROP_POW: {
-                    Value b = R[B];
-                    Value c = R[C];
-                    if (b.isNumber() && c.isNumber()) {
-                        R[A] = Value::number(std::pow(b.asNumber(), c.asNumber()));
+                    Value b = R[B], c = R[C];
+                    Value ca = b, cb = c;
+                    if (coerceToNumber(ca) && coerceToNumber(cb)) {
+                        R[A] = power(ca, cb);
                     } else {
-                        hadError_ = true;
-                        return false;
+                        int r = dispatchBinaryMM(A, b, c, "__pow", "perform arithmetic on");
+                        if (r < 0) return false;
+                        if (r > 0) goto next_frame;
                     }
                     break;
                 }
                 case ROpCode::ROP_NEG: {
                     // R(A) = -R(B)
                     Value b = R[B];
-                    if (b.isNumber()) {
-                        R[A] = Value::number(-b.asNumber());
+                    if (b.isInteger()) {
+                        R[A] = makeInteger(static_cast<int64_t>(-static_cast<uint64_t>(b.asInteger())));
                     } else {
-                        hadError_ = true;
-                        return false;
+                        Value ca = b;
+                        if (coerceToNumber(ca)) {
+                            R[A] = negate(ca);
+                        } else {
+                            int r = dispatchBinaryMM(A, b, b, "__unm", "perform arithmetic on", B);
+                            if (r < 0) return false;
+                            if (r > 0) goto next_frame;
+                        }
                     }
                     break;
                 }
@@ -200,28 +351,30 @@ next_frame:
                     Value b = R[B];
                     if (b.isString()) {
                         R[A] = Value::integer(static_cast<int64_t>(getStringValue(b).length()));
-                    } else if (b.isTable()) {
-                        Value mm = getMetamethod(b, "__len");
-                        if (!mm.isNil()) {
-                            // Call metamethod: result on stack top
-                            currentCoroutine_->stack.push_back(mm);
-                            currentCoroutine_->stack.push_back(b);
-                            if (!callValue(1, 2, false, "len")) return false;
-                            R[A] = pop();
-                        } else {
-                            R[A] = Value::integer(static_cast<int64_t>(b.asTableObj()->length()));
-                        }
+                    } else if (b.isTable() && getMetamethod(b, "__len").isNil()) {
+                        R[A] = Value::integer(static_cast<int64_t>(b.asTableObj()->length()));
                     } else {
                         Value mm = getMetamethod(b, "__len");
-                        if (!mm.isNil()) {
-                            currentCoroutine_->stack.push_back(mm);
-                            currentCoroutine_->stack.push_back(b);
-                            if (!callValue(1, 2, false, "len")) return false;
-                            R[A] = pop();
-                        } else {
+                        if (mm.isNil()) {
                             runtimeError("attempt to get length of a " + typeName(b) + " value");
                             return false;
                         }
+                        push(mm);
+                        push(b);
+                        frame.ip = pc;
+                        size_t prevFrames = currentCoroutine_->frames.size();
+                        if (!callValue(1, 2, false, "len")) return false;
+                        if (currentCoroutine_->frames.size() > prevFrames) {
+                            CallFrame& newFrame = currentCoroutine_->frames.back();
+                            newFrame.regDest = static_cast<int>(base + A);
+                            if (!newFrame.closure->function()->chunk()->hasRCode()) {
+                                hadError_ = true;
+                                return false;
+                            }
+                            goto next_frame;
+                        }
+                        R = currentCoroutine_->stack.data() + base;
+                        R[A] = pop();
                     }
                     break;
                 }
@@ -231,11 +384,11 @@ next_frame:
                     int64_t ib, ic;
                     if (toIntegerNoString(b, ib) && toIntegerNoString(c, ic)) {
                         R[A] = makeInteger(ib & ic);
-                    } else if (!callBinaryMetamethod(b, c, "__band")) {
-                        if (hadError_) return false;
-                        runtimeError("attempt to perform bitwise operation on a non-integer value");
-                        return false;
-                    } else { R[A] = pop(); }
+                    } else {
+                        int r = dispatchBinaryMM(A, b, c, "__band", "perform bitwise operation on");
+                        if (r < 0) return false;
+                        if (r > 0) goto next_frame;
+                    }
                     break;
                 }
                 case ROpCode::ROP_BOR: {
@@ -243,11 +396,11 @@ next_frame:
                     int64_t ib, ic;
                     if (toIntegerNoString(b, ib) && toIntegerNoString(c, ic)) {
                         R[A] = makeInteger(ib | ic);
-                    } else if (!callBinaryMetamethod(b, c, "__bor")) {
-                        if (hadError_) return false;
-                        runtimeError("attempt to perform bitwise operation on a non-integer value");
-                        return false;
-                    } else { R[A] = pop(); }
+                    } else {
+                        int r = dispatchBinaryMM(A, b, c, "__bor", "perform bitwise operation on");
+                        if (r < 0) return false;
+                        if (r > 0) goto next_frame;
+                    }
                     break;
                 }
                 case ROpCode::ROP_BXOR: {
@@ -255,37 +408,35 @@ next_frame:
                     int64_t ib, ic;
                     if (toIntegerNoString(b, ib) && toIntegerNoString(c, ic)) {
                         R[A] = makeInteger(ib ^ ic);
-                    } else if (!callBinaryMetamethod(b, c, "__bxor")) {
-                        if (hadError_) return false;
-                        runtimeError("attempt to perform bitwise operation on a non-integer value");
-                        return false;
-                    } else { R[A] = pop(); }
+                    } else {
+                        int r = dispatchBinaryMM(A, b, c, "__bxor", "perform bitwise operation on");
+                        if (r < 0) return false;
+                        if (r > 0) goto next_frame;
+                    }
                     break;
                 }
                 case ROpCode::ROP_SHL: {
                     Value b = R[B], c = R[C];
                     int64_t ib, ic;
                     if (toIntegerNoString(b, ib) && toIntegerNoString(c, ic)) {
-                        uint64_t shift = static_cast<uint64_t>(ic) & 63;
-                        R[A] = makeInteger(static_cast<int64_t>(static_cast<uint64_t>(ib) << shift));
-                    } else if (!callBinaryMetamethod(b, c, "__shl")) {
-                        if (hadError_) return false;
-                        runtimeError("attempt to perform bitwise operation on a non-integer value");
-                        return false;
-                    } else { R[A] = pop(); }
+                        R[A] = makeInteger(lua_shift_left(ib, ic));
+                    } else {
+                        int r = dispatchBinaryMM(A, b, c, "__shl", "perform bitwise operation on");
+                        if (r < 0) return false;
+                        if (r > 0) goto next_frame;
+                    }
                     break;
                 }
                 case ROpCode::ROP_SHR: {
                     Value b = R[B], c = R[C];
                     int64_t ib, ic;
                     if (toIntegerNoString(b, ib) && toIntegerNoString(c, ic)) {
-                        uint64_t shift = static_cast<uint64_t>(ic) & 63;
-                        R[A] = makeInteger(static_cast<int64_t>(static_cast<uint64_t>(ib) >> shift));
-                    } else if (!callBinaryMetamethod(b, c, "__shr")) {
-                        if (hadError_) return false;
-                        runtimeError("attempt to perform bitwise operation on a non-integer value");
-                        return false;
-                    } else { R[A] = pop(); }
+                        R[A] = makeInteger(lua_shift_right(ib, ic));
+                    } else {
+                        int r = dispatchBinaryMM(A, b, c, "__shr", "perform bitwise operation on");
+                        if (r < 0) return false;
+                        if (r > 0) goto next_frame;
+                    }
                     break;
                 }
                 case ROpCode::ROP_BNOT: {
@@ -295,15 +446,9 @@ next_frame:
                     if (toIntegerNoString(b, ib)) {
                         R[A] = makeInteger(~ib);
                     } else {
-                        Value mm = getMetamethod(b, "__bnot");
-                        if (mm.isNil()) {
-                            runtimeError("attempt to perform bitwise operation on a non-integer value");
-                            return false;
-                        }
-                        currentCoroutine_->stack.push_back(mm);
-                        currentCoroutine_->stack.push_back(b);
-                        if (!callValue(1, 2, false, "bnot")) return false;
-                        R[A] = pop();
+                        int r = dispatchBinaryMM(A, b, b, "__bnot", "perform bitwise operation on", B);
+                        if (r < 0) return false;
+                        if (r > 0) goto next_frame;
                     }
                     break;
                 }
@@ -313,14 +458,10 @@ next_frame:
                     Value c = R[C];
                     if ((b.isString() || b.isNumber()) && (c.isString() || c.isNumber())) {
                         R[A] = concat(b, c);
-                    } else if (!callBinaryMetamethod(b, c, "__concat")) {
-                        if (hadError_) return false;
-                        Value badVal = !(b.isString() || b.isNumber()) ? b : c;
-                        runtimeError("attempt to concatenate a " + typeName(badVal) + " value");
-                        return false;
                     } else {
-                        // Metamethod succeeded; result is on stack top
-                        R[A] = pop();
+                        int r = dispatchBinaryMM(A, b, c, "__concat", "concatenate");
+                        if (r < 0) return false;
+                        if (r > 0) goto next_frame;
                     }
                     break;
                 }
@@ -334,14 +475,67 @@ next_frame:
                     // R(A) = R(B)[R(C)]
                     Value tableVal = R[B];
                     Value key = R[C];
-                    // Use the same logic as OP_GET_TABLE (simplified for now)
-                    if (tableVal.isTable()) {
-                        TableObject* table = tableVal.asTableObj();
-                        Value result = table->get(key);
-                        R[A] = result;
-                    } else {
-                        // TODO: metamethod __index
-                        hadError_ = true;
+                    Value t = tableVal;
+                    bool done = false;
+                    for (int loop = 0; loop < MAX_TAG_LOOP; loop++) {
+                        if (t.isTable()) {
+                            TableObject* table = t.asTableObj();
+                            Value result = table->get(key);
+                            if (!result.isNil() || table->getMetatable().isNil()) {
+                                R[A] = result;
+                                done = true;
+                                break;
+                            }
+                        }
+
+                        if (key.isString()) {
+                            Value mm = getMetamethod(t, getStringValue(key));
+                            if (!mm.isNil()) {
+                                R[A] = mm;
+                                done = true;
+                                break;
+                            }
+                        }
+
+                        Value indexMethod = getMetamethod(t, "__index");
+                        if (indexMethod.isNil()) {
+                            if (!t.isTable()) {
+                                runtimeError("attempt to index a " + typeName(t) + " value" + (loop == 0 ? getRVarInfo(pc - 1, B) : ""));
+                                return false;
+                            }
+                            R[A] = Value::nil();
+                            done = true;
+                            break;
+                        } else if (indexMethod.isFunction()) {
+                            push(indexMethod);
+                            push(t);
+                            push(key);
+                            frame.ip = pc;
+                            size_t prevFrames = currentCoroutine_->frames.size();
+                            if (!callValue(2, 2, false, "index")) {
+                                return false;
+                            }
+                            if (currentCoroutine_->frames.size() > prevFrames) {
+                                CallFrame& newFrame = currentCoroutine_->frames.back();
+                                newFrame.regDest = static_cast<int>(base + A);
+                                if (!newFrame.closure->function()->chunk()->hasRCode()) {
+                                    hadError_ = true;
+                                    return false;
+                                }
+                                goto next_frame;
+                            }
+                            R = currentCoroutine_->stack.data() + base;
+                            R[A] = pop();
+                            done = true;
+                            break;
+                        } else if (indexMethod.isTable()) {
+                            t = indexMethod;
+                        } else {
+                            t = indexMethod;
+                        }
+                    }
+                    if (!done) {
+                        runtimeError("'__index' chain too long; possible loop");
                         return false;
                     }
                     break;
@@ -351,21 +545,97 @@ next_frame:
                     Value tableVal = R[A];
                     Value key = R[B];
                     Value val = R[C];
-                    if (tableVal.isTable()) {
-                        TableObject* table = tableVal.asTableObj();
-                        table->set(key, val);
-                    } else {
-                        // TODO: metamethod __newindex
-                        hadError_ = true;
+                    Value t = tableVal;
+                    bool done = false;
+                    for (int loop = 0; loop < MAX_TAG_LOOP; loop++) {
+                        if (t.isTable()) {
+                            TableObject* table = t.asTableObj();
+                            if (table->getMetatable().isNil() || table->has(key)) {
+                                if (key.isNil()) {
+                                    runtimeError("table index is nil");
+                                    return false;
+                                }
+                                if (key.isFloat() && std::isnan(key.asNumber())) {
+                                    runtimeError("table index is NaN");
+                                    return false;
+                                }
+                                table->set(key, val);
+                                if (val.isObj()) {
+                                    writeBarrier(table, val.asObj());
+                                }
+                                done = true;
+                                break;
+                            }
+                        }
+
+                        Value newindexMethod = getMetamethod(t, "__newindex");
+                        if (newindexMethod.isNil()) {
+                            if (!t.isTable()) {
+                                runtimeError("attempt to index a " + typeName(t) + " value" + (loop == 0 ? getRVarInfo(pc - 1, A) : ""));
+                                return false;
+                            }
+                            if (key.isNil()) {
+                                runtimeError("table index is nil");
+                                return false;
+                            }
+                            if (key.isFloat() && std::isnan(key.asNumber())) {
+                                runtimeError("table index is NaN");
+                                return false;
+                            }
+                            TableObject* table = t.asTableObj();
+                            table->set(key, val);
+                            if (val.isObj()) {
+                                writeBarrier(table, val.asObj());
+                            }
+                            done = true;
+                            break;
+                        } else if (newindexMethod.isFunction()) {
+                            push(newindexMethod);
+                            push(t);
+                            push(key);
+                            push(val);
+                            frame.ip = pc;
+                            size_t prevFrames = currentCoroutine_->frames.size();
+                            if (!callValue(3, 1, false, "newindex")) {
+                                return false;
+                            }
+                            if (currentCoroutine_->frames.size() > prevFrames) {
+                                CallFrame& newFrame = currentCoroutine_->frames.back();
+                                newFrame.regDest = -1;
+                                if (!newFrame.closure->function()->chunk()->hasRCode()) {
+                                    hadError_ = true;
+                                    return false;
+                                }
+                                goto next_frame;
+                            }
+                            done = true;
+                            break;
+                        } else if (newindexMethod.isTable()) {
+                            t = newindexMethod;
+                        } else {
+                            t = newindexMethod;
+                        }
+                    }
+                    if (!done) {
+                        runtimeError("'__newindex' chain too long; possible loop");
                         return false;
                     }
                     break;
                 }
                 case ROpCode::ROP_SETTABLEMULTI: {
-                    // Multi-value table set
-                    // TODO
-                    hadError_ = true;
-                    return false;
+                    // Multi-value table set: R(A)[R(B) + i] = R(B + 1 + i)
+                    Value tblVal = R[A];
+                    if (!tblVal.isTable()) {
+                        runtimeError("attempt to index a " + typeName(tblVal) + " value");
+                        return false;
+                    }
+                    TableObject* tbl = tblVal.asTableObj();
+                    int64_t keyBase = R[B].isInteger() ? R[B].asInteger() : (R[B].isNumber() ? static_cast<int64_t>(R[B].asNumber()) : 1);
+                    size_t count = frame.resultCount;
+                    for (size_t i = 0; i < count; i++) {
+                        tbl->set(Value::integer(keyBase + static_cast<int64_t>(i)), R[B + 1 + i]);
+                    }
+                    break;
                 }
                 case ROpCode::ROP_GETUPVAL: {
                     // R(A) = Up[B]
@@ -427,11 +697,11 @@ next_frame:
                     R = currentCoroutine_->stack.data() + base;
                     bool isMultiArg = (B == 0);
                     bool isMultiRet = (C == 0);
-                    // For multires args: read count from frame.resultCount (set by previous call)
-                    // Args are the resultCount values starting at R(A+1)
-                    int argCount = isMultiArg ? static_cast<int>(frame.resultCount) : (B - 1);
+                    // For multires args: read count from topReg
+                    int argCount = isMultiArg ? std::max(0, static_cast<int>(frame.topReg - (A + 1))) : (B - 1);
                     // For multires returns: use 0 to signal "all results" to callValue
-                    int retCount = isMultiRet ? 0 : (C - 1);
+                    // callValue expects C: 0 = all results, C (>0) = C-1 results (so C is wanted + 1).
+                    int callRetParam = C;
                     
                     // Copy function and args to stack top for callValue
                     // R(A) is function, R(A+1)..R(A+argCount) are args
@@ -454,8 +724,13 @@ next_frame:
                     frame.ip = pc;
                     
                     size_t prevFrames = currentCoroutine_->frames.size();
-                    if (!callValue(argCount, retCount)) {
+                    if (!callValue(argCount, callRetParam)) {
                         return false;
+                    }
+                    
+                    if (currentCoroutine_->status == CoroutineObject::Status::SUSPENDED) {
+                        frame.yieldDest = static_cast<int>(base + A);
+                        return true;
                     }
                     
                     // If a new Lua frame was pushed, set its register destination
@@ -469,8 +744,24 @@ next_frame:
                         // Check if callee has rcode
                         FunctionObject* newFunc = newFrame.closure->function();
                         if (!newFunc->chunk()->hasRCode()) {
-                            hadError_ = true;
-                            return false;
+                            if (newFunc->chunk()->code().empty()) {
+                                runtimeError("attempt to execute empty function");
+                                return false;
+                            }
+                            auto res = translateToRegister(newFunc);
+                            if (res.ok) {
+                                newFunc->chunk()->setRCode(std::move(res.code), res.maxRegisters);
+                            } else {
+                                if (!run(currentCoroutine_->frames.size() - 1)) {
+                                    return false;
+                                }
+                                R = currentCoroutine_->stack.data() + base;
+                                break;
+                            }
+                        }
+                        if (currentCoroutine_->hookMask & CoroutineObject::MASK_CALL) {
+                            callHook("call");
+                            if (hadError_) return false;
                         }
                         goto next_frame;
                     }
@@ -479,11 +770,12 @@ next_frame:
                     // Copy results back to R(A)..
                     // Re-establish R after potential stack reallocation
                     R = currentCoroutine_->stack.data() + base;
-                    int actualRetCount = retCount;
+                    int actualRetCount = isMultiRet ? static_cast<int>(currentCoroutine_->stack.size() - stackBaseBefore) : (C - 1);
+                    if (actualRetCount < 0) actualRetCount = 0;
                     if (isMultiRet) {
-                        // Multires: count results from stack
-                        actualRetCount = static_cast<int>(currentCoroutine_->stack.size() - stackBaseBefore);
                         currentCoroutine_->lastResultCount = static_cast<size_t>(actualRetCount);
+                        frame.resultCount = static_cast<size_t>(actualRetCount);
+                        frame.topReg = A + actualRetCount;
                     }
                     size_t stackSize = currentCoroutine_->stack.size();
                     for (int i = 0; i < actualRetCount; i++) {
@@ -492,6 +784,10 @@ next_frame:
                     // Pop results from stack
                     for (int i = 0; i < actualRetCount; i++) {
                         currentCoroutine_->stack.pop_back();
+                    }
+                    // Clear dead argument registers to avoid pinning objects for GC
+                    for (int i = actualRetCount; i <= argCount; i++) {
+                        R[A + i] = Value::nil();
                     }
                     break;
                 }
@@ -564,15 +860,26 @@ next_frame:
                     break;
                 }
                 case ROpCode::ROP_VARARG: {
-                    // R(A)..R(A+B-2) = varargs (B=1: no values)
-                    // B = number of values + 1
+                    // R(A)..R(A+B-2) = varargs (B=1: no values, B=0: multires)
                     if (B == 1) {
-                        // No values to copy
+                        break;
+                    }
+                    if (B == 0) {
+                        int count = static_cast<int>(frame.varargs.size());
+                        size_t needed = base + A + count;
+                        if (currentCoroutine_->stack.size() < needed) {
+                            currentCoroutine_->stack.resize(needed, Value::nil());
+                        }
+                        R = currentCoroutine_->stack.data() + base;
+                        for (int i = 0; i < count; i++) {
+                            R[A + i] = frame.varargs[i];
+                        }
+                        frame.topReg = A + count;
+                        frame.resultCount = static_cast<size_t>(count);
+                        currentCoroutine_->lastResultCount = static_cast<size_t>(count);
                         break;
                     }
                     int count = B - 1;
-                    // Copy from frame.varargs to registers
-                    // If fewer varargs than requested, fill with nil
                     for (int i = 0; i < count; i++) {
                         if (i < (int)frame.varargs.size()) {
                             R[A + i] = frame.varargs[i];
@@ -583,28 +890,60 @@ next_frame:
                     break;
                 }
                 case ROpCode::ROP_YIELD: {
-                    // yield R(A)..R(A+B-2)
-                    // TODO: coroutine yield
-                    hadError_ = true;
-                    return false;
+                    if (!currentCoroutine_->caller || currentCoroutine_ == mainCoroutine_) {
+                        runtimeError("attempt to yield from outside a coroutine");
+                        return false;
+                    }
+                    if (currentCoroutine_->nonYieldableCount > 0 || currentCoroutine_->isClosing) {
+                        runtimeError("attempt to yield across a C-call boundary");
+                        return false;
+                    }
+                    int yieldCount = (B == 0) ? std::max(0, static_cast<int>(frame.topReg - A)) : (B - 1);
+                    currentCoroutine_->yieldedValues.clear();
+                    for (int i = 0; i < yieldCount; i++) {
+                        currentCoroutine_->yieldedValues.push_back(R[A + i]);
+                    }
+                    if (currentCoroutine_->hookMask & CoroutineObject::MASK_CALL) {
+                        callHook("call");
+                    }
+                    currentCoroutine_->status = CoroutineObject::Status::SUSPENDED;
+                    currentCoroutine_->yieldCount = yieldCount;
+                    currentCoroutine_->retCount = C;
+                    if (currentCoroutine_->hookMask & CoroutineObject::MASK_RET) {
+                        callHook("return");
+                    }
+                    frame.yieldDest = static_cast<int>(base + A);
+                    frame.ip = pc;
+                    return true;
                 }
                 case ROpCode::ROP_PACKVARARG: {
-                    // R(A) = table.pack(varargs)
-                    // TODO
-                    hadError_ = true;
-                    return false;
+                    TableObject* tbl = createTable();
+                    for (size_t i = 0; i < frame.varargs.size(); i++) {
+                        tbl->set(Value::integer(static_cast<int64_t>(i + 1)), frame.varargs[i]);
+                    }
+                    tbl->set("n", Value::integer(static_cast<int64_t>(frame.varargs.size())));
+                    R[A] = Value::table(tbl);
+                    break;
                 }
                 case ROpCode::ROP_VARARGITEM: {
-                    // R(A) = varargs[R(B)]
-                    // TODO
-                    hadError_ = true;
-                    return false;
+                    Value key = R[B];
+                    if (key.isStringEqual("n")) {
+                        R[A] = Value::integer(static_cast<int64_t>(frame.varargs.size()));
+                    } else if (key.isInteger()) {
+                        int64_t idx = key.asInteger();
+                        if (idx >= 1 && static_cast<size_t>(idx) <= frame.varargs.size()) {
+                            R[A] = frame.varargs[idx - 1];
+                        } else {
+                            R[A] = Value::nil();
+                        }
+                    } else {
+                        R[A] = Value::nil();
+                    }
+                    break;
                 }
                 case ROpCode::ROP_VARARGCOUNT: {
-                    // R(A) = #varargs
-                    // TODO
-                    hadError_ = true;
-                    return false;
+                    R[A] = Value::integer(static_cast<int64_t>(frame.varargs.size()));
+                    break;
                 }
                 case ROpCode::ROP_FORPREP: {
                     // Numeric for: R(A)=index, R(A+1)=limit, R(A+2)=step; pc += sBx
@@ -659,6 +998,20 @@ next_frame:
                     }
                     break;
                 }
+                case ROpCode::ROP_TBC: {
+                    size_t index = base + A;
+                    Value val = currentCoroutine_->stack[index];
+                    if (!val.isFalsey()) {
+                        Value mm = getMetamethod(val, "__close");
+                        if (mm.isNil()) {
+                            std::string varName = getStringValue(getConstant(Bx));
+                            runtimeError("variable '" + varName + "' got a non-closable value");
+                            break;
+                        }
+                    }
+                    currentCoroutine_->tbcVariables.push_back(index);
+                    break;
+                }
                 case ROpCode::ROP_CLOSE: {
                     // Close upvalues / to-be-closed variables with register >= A
                     // For now: close upvalues with stackIndex >= base + A
@@ -677,6 +1030,25 @@ next_frame:
                     Value b = R[B];
                     Value c = R[C];
                     bool eq = (b == c);  // Uses Value::operator==
+                    if (!eq && b.isTable() && c.isTable()) {
+                        Value mm1 = getMetamethod(b, "__eq");
+                        Value mm2 = getMetamethod(c, "__eq");
+                        if (!mm1.isNil() && mm1 == mm2) {
+                            push(mm1);
+                            push(b);
+                            push(c);
+                            frame.ip = pc;
+                            size_t prevFrames = currentCoroutine_->frames.size();
+                            if (callValue(2, 2, false, "eq")) {
+                                if (currentCoroutine_->frames.size() > prevFrames) {
+                                    if (!runRegister(prevFrames)) return false;
+                                }
+                                Value res = pop();
+                                eq = !res.isFalsey();
+                            }
+                        }
+                    }
+                    R = currentCoroutine_->stack.data() + base;
                     if (eq != (A != 0)) pc++;
                     break;
                 }
@@ -686,12 +1058,39 @@ next_frame:
                     Value c = R[C];
                     bool lt = false;
                     if (b.isNumber() && c.isNumber()) {
-                        lt = b.asNumber() < c.asNumber();
+                        lt = less(b, c).asBool();
+                    } else if (b.isString() && c.isString()) {
+                        lt = getStringValue(b) < getStringValue(c);
                     } else {
-                        // TODO: metamethod, string comparison
-                        hadError_ = true;
-                        return false;
+                        Value mm = getMetamethod(b, "__lt");
+                        if (mm.isNil()) mm = getMetamethod(c, "__lt");
+                        if (!mm.isNil()) {
+                            push(mm);
+                            push(b);
+                            push(c);
+                            frame.ip = pc;
+                            size_t prevFrames = currentCoroutine_->frames.size();
+                            if (callValue(2, 2, false, "lt")) {
+                                if (currentCoroutine_->frames.size() > prevFrames) {
+                                    if (!runRegister(prevFrames)) return false;
+                                }
+                                Value res = pop();
+                                lt = !res.isFalsey();
+                            } else {
+                                return false;
+                            }
+                        } else {
+                            std::string ta = typeName(b);
+                            std::string tb = typeName(c);
+                            if (ta == tb) {
+                                runtimeError("attempt to compare two " + ta + " values");
+                            } else {
+                                runtimeError("attempt to compare " + ta + " with " + tb);
+                            }
+                            return false;
+                        }
                     }
+                    R = currentCoroutine_->stack.data() + base;
                     if (lt != (A != 0)) pc++;
                     break;
                 }
@@ -701,11 +1100,58 @@ next_frame:
                     Value c = R[C];
                     bool le = false;
                     if (b.isNumber() && c.isNumber()) {
-                        le = b.asNumber() <= c.asNumber();
+                        le = lessEqual(b, c).asBool();
+                    } else if (b.isString() && c.isString()) {
+                        le = getStringValue(b) <= getStringValue(c);
                     } else {
-                        hadError_ = true;
-                        return false;
+                        Value mm = getMetamethod(b, "__le");
+                        if (mm.isNil()) mm = getMetamethod(c, "__le");
+                        if (!mm.isNil()) {
+                            push(mm);
+                            push(b);
+                            push(c);
+                            frame.ip = pc;
+                            size_t prevFrames = currentCoroutine_->frames.size();
+                            if (callValue(2, 2, false, "le")) {
+                                if (currentCoroutine_->frames.size() > prevFrames) {
+                                    if (!runRegister(prevFrames)) return false;
+                                }
+                                Value res = pop();
+                                le = !res.isFalsey();
+                            } else {
+                                return false;
+                            }
+                        } else {
+                            Value mmlt = getMetamethod(c, "__lt");
+                            if (mmlt.isNil()) mmlt = getMetamethod(b, "__lt");
+                            if (!mmlt.isNil()) {
+                                push(mmlt);
+                                push(c);
+                                push(b);
+                                frame.ip = pc;
+                                size_t prevFrames = currentCoroutine_->frames.size();
+                                if (callValue(2, 2, false, "lt")) {
+                                    if (currentCoroutine_->frames.size() > prevFrames) {
+                                        if (!runRegister(prevFrames)) return false;
+                                    }
+                                    Value res = pop();
+                                    le = res.isFalsey();
+                                } else {
+                                    return false;
+                                }
+                            } else {
+                                std::string ta = typeName(b);
+                                std::string tb = typeName(c);
+                                if (ta == tb) {
+                                    runtimeError("attempt to compare two " + ta + " values");
+                                } else {
+                                    runtimeError("attempt to compare " + ta + " with " + tb);
+                                }
+                                return false;
+                            }
+                        }
                     }
+                    R = currentCoroutine_->stack.data() + base;
                     if (le != (A != 0)) pc++;
                     break;
                 }
@@ -720,7 +1166,7 @@ next_frame:
                     // R(A)..R(A+B-2) are return values (B=1: no values, B=0: multires)
                     // For multires (B=0), read count from frame.resultCount (set by previous CALL)
                     bool isMultiRet = (B == 0);
-                    int retCount = isMultiRet ? static_cast<int>(frame.resultCount) : (B - 1);
+                    int retCount = isMultiRet ? std::max(0, static_cast<int>(frame.topReg - A)) : (B - 1);
                     
                     // Collect return values
                     // Re-establish R in case stack reallocated
@@ -733,30 +1179,59 @@ next_frame:
                     // Pop current frame
                     // Save regDest before popping
                     int dest = frame.regDest;
+                    uint8_t cRetCount = frame.retCount;
                     size_t frameStackBase = frame.stackBase;
                     
                     // Close upvalues in this frame's window
                     closeUpvalues(frameStackBase);
+
+                    if (currentCoroutine_->hookMask & CoroutineObject::MASK_RET) {
+                        callHook("return", -1, 0, static_cast<int>(retVals.size()));
+                        if (hadError_) return false;
+                    }
                     
                     currentCoroutine_->frames.pop_back();
                     
-                    // If we've reached target, done
-                    if (currentCoroutine_->frames.size() <= targetFrameCount) {
-                        return !hadError_;
+                    // Adjust retVals according to caller's expected return count if not multires
+                    if (cRetCount > 0) {
+                        size_t expected = static_cast<size_t>(cRetCount - 1);
+                        if (retVals.size() > expected) {
+                            retVals.resize(expected);
+                        } else {
+                            while (retVals.size() < expected) {
+                                retVals.push_back(Value::nil());
+                            }
+                        }
                     }
-                    
-                    // Copy results to caller's destination
+                    int actualRetCount = static_cast<int>(retVals.size());
+
+                    // Copy results to caller's destination or stack
                     if (dest >= 0) {
-                        // Register VM caller: copy to stack[dest]..
-                        for (int i = 0; i < retCount; i++) {
+                        if (currentCoroutine_->stack.size() < static_cast<size_t>(dest + actualRetCount)) {
+                            currentCoroutine_->stack.resize(dest + actualRetCount, Value::nil());
+                        }
+                        for (int i = 0; i < actualRetCount; i++) {
                             currentCoroutine_->stack[dest + i] = retVals[i];
                         }
-                        // TODO: handle retCount mismatch (caller expects different count)
                     } else {
-                        // Stack VM caller: push results onto stack
-                        for (auto& v : retVals) {
-                            currentCoroutine_->stack.push_back(v);
+                        // Stack VM caller or coroutine return:
+                        if (currentCoroutine_->frames.empty()) {
+                            currentCoroutine_->stack = std::move(retVals);
+                            if (currentCoroutine_->caller && currentCoroutine_ != mainCoroutine_) {
+                                currentCoroutine_->status = CoroutineObject::Status::DEAD;
+                            }
+                        } else {
+                            currentCoroutine_->stack.resize(frameStackBase > 0 ? frameStackBase - 1 : 0);
+                            for (auto& v : retVals) {
+                                currentCoroutine_->stack.push_back(v);
+                            }
                         }
+                    }
+                    
+                    // If we've reached target, done
+                    if (currentCoroutine_->frames.size() <= targetFrameCount) {
+                        currentCoroutine_->lastResultCount = static_cast<size_t>(actualRetCount);
+                        return !hadError_;
                     }
                     
                     // Shrink stack to caller's window end to prevent unbounded growth
@@ -765,20 +1240,25 @@ next_frame:
                         CallFrame& caller = currentCoroutine_->frames.back();
                         FunctionObject* callerFunc = caller.closure->function();
                         if (callerFunc->chunk()->hasRCode()) {
-                            size_t callerEnd = caller.stackBase + callerFunc->chunk()->rFrameSize();
+                            size_t callerEnd = std::max(caller.stackBase + callerFunc->chunk()->rFrameSize(),
+                                                        static_cast<size_t>(dest >= 0 ? dest + actualRetCount : 0));
                             if (currentCoroutine_->stack.size() > callerEnd) {
                                 currentCoroutine_->stack.resize(callerEnd);
                             }
                         }
                     }
                     
-                    // Set resultCount in caller's frame for multires callers
+                    // Set resultCount and topReg in caller's frame for multires callers
                     // The caller will read this when it does a multires operation
                     if (!currentCoroutine_->frames.empty()) {
-                        currentCoroutine_->frames.back().resultCount = static_cast<size_t>(retCount);
+                        CallFrame& caller = currentCoroutine_->frames.back();
+                        caller.resultCount = static_cast<size_t>(actualRetCount);
+                        if (dest >= 0 && dest >= static_cast<int>(caller.stackBase)) {
+                            caller.topReg = static_cast<size_t>(dest - caller.stackBase) + actualRetCount;
+                        }
                     }
                     // Also set coroutine-level for backward compatibility (C calls, etc.)
-                    currentCoroutine_->lastResultCount = static_cast<size_t>(retCount);
+                    currentCoroutine_->lastResultCount = static_cast<size_t>(actualRetCount);
                     
                     // Continue with caller frame
                     goto next_frame;

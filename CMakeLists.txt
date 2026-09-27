@@ -153,6 +153,8 @@ endif()
 
 if(USE_JIT)
     target_link_libraries(luac PRIVATE asmjit::asmjit)
+    target_link_libraries(rtranslate_test PRIVATE asmjit::asmjit)
+    target_link_libraries(rsp_diff PRIVATE asmjit::asmjit)
 endif()
 
 target_include_directories(luac PRIVATE ${CMAKE_SOURCE_DIR}/src ${CMAKE_SOURCE_DIR}/include)

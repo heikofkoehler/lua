@@ -112,6 +112,9 @@ enum class ROpCode : uint8_t {
     // values are lastResultCount regs starting at R(B+1)
     ROP_SETTABLEMULTI,  // A B
 
+    // Mark R(A) to-be-closed with varname K[Bx]
+    ROP_TBC,            // A Bx
+
     ROP_COUNT  // Sentinel: number of opcodes
 };
 
@@ -217,6 +220,7 @@ inline const char* ropName(ROpCode op) {
         case ROpCode::ROP_VARARGCOUNT: return "VARARGCOUNT";
         case ROpCode::ROP_YIELD:    return "YIELD";
         case ROpCode::ROP_SETTABLEMULTI: return "SETTABLEMULTI";
+        case ROpCode::ROP_TBC:      return "TBC";
         default:                    return "UNKNOWN";
     }
 }
@@ -234,6 +238,7 @@ inline ROpFormat ropFormat(ROpCode op) {
     switch (op) {
         case ROpCode::ROP_LOADK:
         case ROpCode::ROP_CLOSURE:
+        case ROpCode::ROP_TBC:
             return ROpFormat::ABx;
         case ROpCode::ROP_JMP:
         case ROpCode::ROP_FORPREP:

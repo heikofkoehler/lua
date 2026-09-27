@@ -2,6 +2,7 @@
 #include "compiler/lexer.hpp"
 #include "compiler/parser.hpp"
 #include "compiler/codegen.hpp"
+#include "compiler/rcodegen.hpp"
 #include "value/function.hpp"
 #include "value/closure.hpp"
 #include "value/table.hpp"
@@ -807,6 +808,9 @@ bool native_loadfile(VM* vm, int argCount) {
                 return true;
             }
             FunctionObject* funcPtr = function.get();
+            if (vm->useRegisterVM()) {
+                vm->attachRegisterCode(funcPtr);
+            }
             vm->registerFunction(function.release());
             vm->setSourceName(sourceName);
             vm->internConstants(*funcPtr);
@@ -848,15 +852,35 @@ bool native_loadfile(VM* vm, int argCount) {
             return true;
         }
 
-        CodeGenerator codegen;
-        auto function = codegen.generate(program.get(), sourceName);
-        if (!function) {
-            for (int i = 0; i < argCount; i++) vm->pop();
-            vm->push(Value::nil());
-            StringObject* errStr = vm->internString("Code generation error in " + (hasPath ? path : "stdin"));
-            vm->push(Value::runtimeString(errStr));
-            vm->currentCoroutine()->lastResultCount = 2;
-            return true;
+        std::unique_ptr<FunctionObject> function;
+        if (vm->useRegisterVM()) {
+            CodeGenerator codegen;
+            auto stackFunc = codegen.generate(program.get(), sourceName);
+            RCodeGen rcodegen;
+            FunctionObject* rfunc = rcodegen.compile(program.get(), sourceName);
+            if (!rfunc) {
+                for (int i = 0; i < argCount; i++) vm->pop();
+                vm->push(Value::nil());
+                StringObject* errStr = vm->internString("Code generation error in " + (hasPath ? path : "stdin"));
+                vm->push(Value::runtimeString(errStr));
+                vm->currentCoroutine()->lastResultCount = 2;
+                return true;
+            }
+            if (stackFunc) {
+                copyStackBytecode(rfunc, stackFunc.get());
+            }
+            function.reset(rfunc);
+        } else {
+            CodeGenerator codegen;
+            function = codegen.generate(program.get(), sourceName);
+            if (!function) {
+                for (int i = 0; i < argCount; i++) vm->pop();
+                vm->push(Value::nil());
+                StringObject* errStr = vm->internString("Code generation error in " + (hasPath ? path : "stdin"));
+                vm->push(Value::runtimeString(errStr));
+                vm->currentCoroutine()->lastResultCount = 2;
+                return true;
+            }
         }
 
         FunctionObject* funcPtr = function.get();
@@ -1048,6 +1072,9 @@ bool native_load(VM* vm, int argCount) {
                 return true;
             }
             FunctionObject* funcPtr = function.get();
+            if (vm->useRegisterVM()) {
+                vm->attachRegisterCode(funcPtr);
+            }
             vm->registerFunction(function.release());
             vm->setSourceName(sourceName);
             vm->internConstants(*funcPtr);
@@ -1088,14 +1115,33 @@ bool native_load(VM* vm, int argCount) {
             return true;
         }
 
-        CodeGenerator codegen;
-        auto function = codegen.generate(program.get(), sourceName);
-        if (!function) {
-            for(int i=0; i<argCount; i++) vm->pop();
-            vm->push(Value::nil());
-            vm->push(Value::runtimeString(vm->internString("code generation error")));
-            vm->currentCoroutine()->lastResultCount = 2;
-            return true;
+        std::unique_ptr<FunctionObject> function;
+        if (vm->useRegisterVM()) {
+            CodeGenerator codegen;
+            auto stackFunc = codegen.generate(program.get(), sourceName);
+            RCodeGen rcodegen;
+            FunctionObject* rfunc = rcodegen.compile(program.get(), sourceName);
+            if (!rfunc) {
+                for(int i=0; i<argCount; i++) vm->pop();
+                vm->push(Value::nil());
+                vm->push(Value::runtimeString(vm->internString("code generation error")));
+                vm->currentCoroutine()->lastResultCount = 2;
+                return true;
+            }
+            if (stackFunc) {
+                copyStackBytecode(rfunc, stackFunc.get());
+            }
+            function.reset(rfunc);
+        } else {
+            CodeGenerator codegen;
+            function = codegen.generate(program.get(), sourceName);
+            if (!function) {
+                for(int i=0; i<argCount; i++) vm->pop();
+                vm->push(Value::nil());
+                vm->push(Value::runtimeString(vm->internString("code generation error")));
+                vm->currentCoroutine()->lastResultCount = 2;
+                return true;
+            }
         }
 
         FunctionObject* funcPtr = function.get();
@@ -1485,6 +1531,10 @@ void registerBaseLibrary(VM* vm) {
     TableObject* searchers = vm->createTable();
     package->set("searchers", Value::table(searchers));
 
+    vm->initRequireScript();
+}
+
+void VM::initRequireScript() {
     const char* requireScript = 
         "local _PACKAGE = package\n"
         "_PACKAGE.searchers[1] = function(modname)\n"
@@ -1542,5 +1592,5 @@ void registerBaseLibrary(VM* vm) {
         "    error(\"module '\" .. modname .. \"' not found:\" .. errors, 0)\n"
         "end\n";
 
-    vm->runSource(requireScript, "require_init");
+    runSource(requireScript, "require_init");
 }
