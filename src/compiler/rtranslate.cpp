@@ -131,27 +131,62 @@ private:
         std::unordered_map<size_t, int> sp;
         std::unordered_map<size_t, int> dynBase;
         std::vector<size_t> worklist;
+        std::unordered_map<size_t, bool> inWorklist;
 
         int arity = func_->arity();
         sp[0] = arity;
         worklist.push_back(0);
+        inWorklist[0] = true;
 
-        auto propagate = [&](size_t src, size_t target, int targetSp, int targetDynBase) {
+        // Lattice join: if values differ, result is SP_DYNAMIC (top).
+        // Returns true if the stored value changed.
+        auto joinPropagate = [&](size_t target, int newSp, int newDynBase) -> bool {
             auto it = sp.find(target);
             if (it == sp.end()) {
-                sp[target] = targetSp;
-                if (targetSp == SP_DYNAMIC) dynBase[target] = targetDynBase;
-                worklist.push_back(target);
-            } else if (it->second != targetSp && targetSp != SP_DYNAMIC &&
-                       it->second != SP_DYNAMIC) {
-                fail("inconsistent stack depth at offset " + std::to_string(target) +
-                     " (existing=" + std::to_string(it->second) +
-                     ", new=" + std::to_string(targetSp) +
-                     ") from src " + std::to_string(src));
-            } else if (targetSp == SP_DYNAMIC && it->second == SP_DYNAMIC) {
-                // Both dynamic; bases should match (or keep existing)
-                if (dynBase[target] != targetDynBase) {
-                    // Allow: keep first recorded base (should be same in valid code)
+                sp[target] = newSp;
+                if (newSp == SP_DYNAMIC) dynBase[target] = newDynBase;
+                return true;
+            }
+            int oldSp = it->second;
+            if (oldSp == newSp) {
+                // Same value; merge dynamic bases if both dynamic
+                if (newSp == SP_DYNAMIC) {
+                    int oldBase = dynBase[target];
+                    // If bases differ and neither is -1, keep -1 (unknown)
+                    // If one is -1, keep the other (more precise)
+                    if (oldBase != newDynBase) {
+                        if (oldBase == -1) dynBase[target] = newDynBase;
+                        // else if newDynBase == -1, keep oldBase
+                        // else both valid but differ: set to -1
+                        else if (newDynBase != -1) dynBase[target] = -1;
+                    }
+                }
+                return false;
+            }
+            // Different values: join to SP_DYNAMIC (top of lattice)
+            if (oldSp != SP_DYNAMIC && newSp != SP_DYNAMIC) {
+                // Both concrete but differ: join to DYNAMIC with unknown base
+                sp[target] = SP_DYNAMIC;
+                dynBase[target] = -1;
+                return true;
+            } else if (oldSp != SP_DYNAMIC && newSp == SP_DYNAMIC) {
+                // Old concrete, new dynamic: result is DYNAMIC with new's base
+                sp[target] = SP_DYNAMIC;
+                dynBase[target] = newDynBase;
+                return true;
+            } else {
+                // Old is DYNAMIC, new is concrete: keep DYNAMIC with old base
+                // (do not change)
+                return false;
+            }
+        };
+
+        auto propagate = [&](size_t src, size_t target, int targetSp, int targetDynBase) {
+            (void)src; // src only used for error messages in old code
+            if (joinPropagate(target, targetSp, targetDynBase)) {
+                if (!inWorklist[target]) {
+                    worklist.push_back(target);
+                    inWorklist[target] = true;
                 }
             }
         };
@@ -159,6 +194,7 @@ private:
         while (!worklist.empty()) {
             size_t off = worklist.back();
             worklist.pop_back();
+            inWorklist[off] = false;
             int curSp = sp[off];
             int curDynBase = (curSp == SP_DYNAMIC) ? dynBase[off] : -1;
 
@@ -360,6 +396,27 @@ private:
                     return false;
             }
 
+            // Preserve DYNAMIC: if curSp was DYNAMIC and this instruction
+            // didn't explicitly transition to static (via a MULTI op that
+            // computes a static SP from the base), keep afterSp as DYNAMIC.
+            // The MULTI ops (CALL_MULTI, SET_TABLE_MULTI, etc.) set afterSp
+            // explicitly; for all others, DYNAMIC in -> DYNAMIC out.
+            if (curSp == SP_DYNAMIC && afterSp != SP_DYNAMIC) {
+                // Check if this was an explicit transition via dynBase
+                // (SET_TABLE_MULTI, etc. set afterSp from base).
+                // If afterSp was computed as curSp +/- N, it will be wrong
+                // (e.g., -1 + 1 = 0). Reset to DYNAMIC.
+                // We detect explicit transitions by checking if the op is
+                // one of the MULTI ops that handles DYNAMIC.
+                bool isExplicitTransition =
+                    (op == OpCode::OP_SET_TABLE_MULTI ||
+                     op == OpCode::OP_RETURN_VALUE_MULTI ||
+                     op == OpCode::OP_CALL_MULTI);
+                if (!isExplicitTransition) {
+                    afterSp = SP_DYNAMIC;
+                }
+            }
+
             if (hasFallthrough) {
                 size_t next = off + len;
                 int nextDynBase = -1;
@@ -464,16 +521,39 @@ private:
                 break;
             case OpCode::OP_GET_TABUP_LONG: {
                 uint32_t k = u24At(off + 2);
-                // K index may exceed 255; use Bx form via a separate path.
-                // For now, require k < 256 (codegen interns globals early).
-                if (k >= 256) { fail("GETTABUP_LONG constant too large"); break; }
-                emitABC(ROpCode::ROP_GETTABUP, sp, byteAt(off + 1), (int)k);
+                int upIdx = byteAt(off + 1);
+                if (k >= 256) {
+                    // Large constant: load key into temp reg, then do table lookup.
+                    // R(A) = Up[B][K[large]]
+                    //   => R(tmp1) = K[large]; R(tmp2) = Up[B]; R(A) = R(tmp2)[R(tmp1)]
+                    int tmpKey = sp + 1;
+                    int tmpTab = sp + 2;
+                    useReg(tmpKey);
+                    useReg(tmpTab);
+                    emitABx(ROpCode::ROP_LOADK, tmpKey, (int)k);
+                    emitABC(ROpCode::ROP_GETUPVAL, tmpTab, upIdx, 0);
+                    emitABC(ROpCode::ROP_GETTABLE, sp, tmpTab, tmpKey);
+                } else {
+                    emitABC(ROpCode::ROP_GETTABUP, sp, upIdx, (int)k);
+                }
                 break;
             }
             case OpCode::OP_SET_TABUP_LONG: {
                 uint32_t k = u24At(off + 2);
-                if (k >= 256) { fail("SETTABUP_LONG constant too large"); break; }
-                emitABC(ROpCode::ROP_SETTABUP, sp - 1, byteAt(off + 1), (int)k);
+                int upIdx = byteAt(off + 1);
+                if (k >= 256) {
+                    // Large constant: Up[B][K[large]] = R(sp-1)
+                    //   => R(tmp1) = K[large]; R(tmp2) = Up[B]; R(tmp2)[R(tmp1)] = R(sp-1)
+                    int tmpKey = sp + 1;
+                    int tmpTab = sp + 2;
+                    useReg(tmpKey);
+                    useReg(tmpTab);
+                    emitABx(ROpCode::ROP_LOADK, tmpKey, (int)k);
+                    emitABC(ROpCode::ROP_GETUPVAL, tmpTab, upIdx, 0);
+                    emitABC(ROpCode::ROP_SETTABLE, tmpTab, tmpKey, sp - 1);
+                } else {
+                    emitABC(ROpCode::ROP_SETTABUP, sp - 1, upIdx, (int)k);
+                }
                 break;
             }
             case OpCode::OP_CLOSE_UPVALUE:
@@ -713,16 +793,26 @@ private:
                 break;
             case OpCode::OP_DEF_GLOBAL_LONG: {
                 uint32_t k = u24At(off + 2);
-                if (k >= 256) { fail("DEF_GLOBAL_LONG constant too large"); break; }
-                emitABC(ROpCode::ROP_DEFGLOBAL, sp-1, byteAt(off+1), (int)k);
+                int upIdx = byteAt(off + 1);
+                if (k >= 256) {
+                    // Large constant: Up[B][K[large]] = R(sp-1)
+                    int tmpKey = sp + 1;
+                    int tmpTab = sp + 2;
+                    useReg(tmpKey);
+                    useReg(tmpTab);
+                    emitABx(ROpCode::ROP_LOADK, tmpKey, (int)k);
+                    emitABC(ROpCode::ROP_GETUPVAL, tmpTab, upIdx, 0);
+                    emitABC(ROpCode::ROP_SETTABLE, tmpTab, tmpKey, sp - 1);
+                } else {
+                    emitABC(ROpCode::ROP_DEFGLOBAL, sp-1, upIdx, (int)k);
+                }
                 break;
             }
             case OpCode::OP_DEF_GLOBAL_TABLE: {
-                // Stack: [value, env_table, key] -> pop all, set env[key]=value with check.
-                // Lower to: DEFGLOBAL with table in R(sp-2)... but DEFGLOBAL uses upvalue.
-                // This variant has explicit table. Add handling: emit DEFGLOBAL with
-                // a flag? For now, fail — check if it's actually emitted.
-                fail("OP_DEF_GLOBAL_TABLE not yet supported");
+                // Stack: [value, env_table, key] -> env_table[key] = value
+                // R(sp-3)=value, R(sp-2)=table, R(sp-1)=key
+                // Note: skips the "already defined" check; SETTABLE is used.
+                emitABC(ROpCode::ROP_SETTABLE, sp - 2, sp - 1, sp - 3);
                 break;
             }
 
