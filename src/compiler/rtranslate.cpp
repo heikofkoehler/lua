@@ -136,7 +136,7 @@ private:
         sp[0] = arity;
         worklist.push_back(0);
 
-        auto propagate = [&](size_t target, int targetSp, int targetDynBase) {
+        auto propagate = [&](size_t src, size_t target, int targetSp, int targetDynBase) {
             auto it = sp.find(target);
             if (it == sp.end()) {
                 sp[target] = targetSp;
@@ -146,7 +146,8 @@ private:
                        it->second != SP_DYNAMIC) {
                 fail("inconsistent stack depth at offset " + std::to_string(target) +
                      " (existing=" + std::to_string(it->second) +
-                     ", new=" + std::to_string(targetSp) + ")");
+                     ", new=" + std::to_string(targetSp) +
+                     ") from src " + std::to_string(src));
             } else if (targetSp == SP_DYNAMIC && it->second == SP_DYNAMIC) {
                 // Both dynamic; bases should match (or keep existing)
                 if (dynBase[target] != targetDynBase) {
@@ -267,6 +268,7 @@ private:
                 case OpCode::OP_LOOP: {
                     uint16_t offset = u16At(off + 1);
                     targets.push_back(off + 3 - offset);
+                    hasFallthrough = false;
                     break;
                 }
                 // Calls (static or dynamic)
@@ -369,7 +371,7 @@ private:
                         nextDynBase = curDynBase;
                     }
                 }
-                propagate(next, afterSp, nextDynBase);
+                propagate(off, next, afterSp, nextDynBase);
                 if (!error_.empty()) return false;
             }
             for (size_t t : targets) {
@@ -377,7 +379,7 @@ private:
                 if (afterSp == SP_DYNAMIC) {
                     targetDynBase = (curSp == SP_DYNAMIC) ? curDynBase : -1;
                 }
-                propagate(t, afterSp, targetDynBase);
+                propagate(off, t, afterSp, targetDynBase);
                 if (!error_.empty()) return false;
             }
         }
