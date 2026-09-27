@@ -2,7 +2,6 @@
 #include "compiler/lexer.hpp"
 #include "compiler/parser.hpp"
 #include "compiler/codegen.hpp"
-#include "compiler/rtranslate.hpp"
 #include "compiler/rcodegen.hpp"
 #include "lsp/server.hpp"
 #include "vm/vm.hpp"
@@ -286,9 +285,7 @@ int runBytecode(const std::string& path, VM& vm) {
         vm.setSourceName("@" + path);
 
         FunctionObject* funcPtr = function.get();
-        if (vm.useRegisterVM()) {
-            vm.attachRegisterCode(funcPtr);
-        }
+        // Note: --register with bytecode files runs on stack VM (translator removed)
         vm.registerFunction(function.release());
 
         if (!vm.run(*funcPtr)) {
@@ -350,9 +347,7 @@ int runFile(const std::string& path, VM& vm, const char* progname = "lua", const
                 return 1;
             }
             FunctionObject* funcPtr = function.get();
-            if (useRegisterVM) {
-                vm.attachRegisterCode(funcPtr);
-            }
+            // Note: --register with bytecode files runs on stack VM (translator removed)
             vm.registerFunction(function.release());
             return vm.run(*funcPtr, args) ? 0 : 1;
         } else {
@@ -858,9 +853,7 @@ int main(int argc, char* argv[]) {
                 result = 1;
             } else {
                 FunctionObject* funcPtr = function.get();
-                if (useRegisterVM) {
-                    vm.attachRegisterCode(funcPtr);
-                }
+                // Note: --register with bytecode files runs on stack VM (translator removed)
                 vm.registerFunction(function.release());
                 result = vm.run(*funcPtr, scriptArgs) ? 0 : 1;
             }

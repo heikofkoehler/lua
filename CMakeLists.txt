@@ -85,7 +85,6 @@ set(SOURCES
     src/compiler/parser.cpp
     src/compiler/chunk.cpp
     src/compiler/codegen.cpp
-    src/compiler/rtranslate.cpp
     src/compiler/rcodegen.cpp
     src/vm/vm.cpp
     src/vm/run_impl.cpp
@@ -139,11 +138,6 @@ set_target_properties(lua PROPERTIES
 
 # Create luac executable
 add_executable(luac src/luac.cpp ${CORE_SOURCES})
-add_executable(rtranslate_test src/rtranslate_test.cpp ${CORE_SOURCES})
-target_include_directories(rtranslate_test PRIVATE ${CMAKE_SOURCE_DIR}/src ${CMAKE_SOURCE_DIR}/include)
-
-add_executable(rsp_diff src/rsp_diff.cpp ${CORE_SOURCES})
-target_include_directories(rsp_diff PRIVATE ${CMAKE_SOURCE_DIR}/src ${CMAKE_SOURCE_DIR}/include)
 
 if(MSVC)
     target_compile_options(luac PRIVATE /W4 /WX)
@@ -153,8 +147,6 @@ endif()
 
 if(USE_JIT)
     target_link_libraries(luac PRIVATE asmjit::asmjit)
-    target_link_libraries(rtranslate_test PRIVATE asmjit::asmjit)
-    target_link_libraries(rsp_diff PRIVATE asmjit::asmjit)
 endif()
 
 target_include_directories(luac PRIVATE ${CMAKE_SOURCE_DIR}/src ${CMAKE_SOURCE_DIR}/include)

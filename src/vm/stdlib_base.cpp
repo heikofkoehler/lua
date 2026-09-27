@@ -808,9 +808,7 @@ bool native_loadfile(VM* vm, int argCount) {
                 return true;
             }
             FunctionObject* funcPtr = function.get();
-            if (vm->useRegisterVM()) {
-                vm->attachRegisterCode(funcPtr);
-            }
+            // Note: translator removed; binary chunks run on stack VM
             vm->registerFunction(function.release());
             vm->setSourceName(sourceName);
             vm->internConstants(*funcPtr);
@@ -1072,9 +1070,7 @@ bool native_load(VM* vm, int argCount) {
                 return true;
             }
             FunctionObject* funcPtr = function.get();
-            if (vm->useRegisterVM()) {
-                vm->attachRegisterCode(funcPtr);
-            }
+            // Note: translator removed; binary chunks run on stack VM
             vm->registerFunction(function.release());
             vm->setSourceName(sourceName);
             vm->internConstants(*funcPtr);

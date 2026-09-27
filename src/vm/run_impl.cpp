@@ -665,7 +665,7 @@ bool VM::run(size_t targetFrameCount) {
                     runtimeError("attempt to execute empty function");
                     return false;
                 }
-                attachRegisterCode(func);
+                // Translator removed: no register code available, fall through to stack VM
             }
             if (func->chunk()->hasRCode()) {
                 return runRegister(targetFrameCount);

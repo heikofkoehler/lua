@@ -9,7 +9,6 @@
 #include "value/function.hpp"
 #include "value/value.hpp"
 #include "compiler/chunk.hpp"
-#include "compiler/rtranslate.hpp"
 #include <cstdint>
 #include <cmath>
 
@@ -61,15 +60,11 @@ next_frame:
                 runtimeError("attempt to execute empty function");
                 return false;
             }
-            auto res = translateToRegister(func);
-            if (res.ok) {
-                chunk->setRCode(std::move(res.code), res.maxRegisters);
-            } else {
-                if (!run(currentCoroutine_->frames.size() - 1)) {
-                    return false;
-                }
-                goto next_frame;
+            // No register code available and translator removed; fall back to stack VM
+            if (!run(currentCoroutine_->frames.size() - 1)) {
+                return false;
             }
+            goto next_frame;
         }
         
         const std::vector<uint32_t>& code = chunk->rcode();
@@ -748,16 +743,49 @@ next_frame:
                                 runtimeError("attempt to execute empty function");
                                 return false;
                             }
-                            auto res = translateToRegister(newFunc);
-                            if (res.ok) {
-                                newFunc->chunk()->setRCode(std::move(res.code), res.maxRegisters);
-                            } else {
-                                if (!run(currentCoroutine_->frames.size() - 1)) {
-                                    return false;
-                                }
-                                R = currentCoroutine_->stack.data() + base;
-                                break;
+                            // No register code available and translator removed; fall back to stack VM
+                            // The stack VM's run() will execute the callee and leave results on stack top.
+                            // We need to copy them to R[A] like the C function path does.
+                            size_t stackSizeBeforeCall = currentCoroutine_->stack.size();
+                            if (!run(currentCoroutine_->frames.size() - 1)) {
+                                return false;
                             }
+                            R = currentCoroutine_->stack.data() + base;
+                            // Copy results from stack top to R[A]
+                            // For non-multires, we want C-1 results. For multires, take all.
+                            int wanted = isMultiRet ? -1 : (C - 1);
+                            size_t stackSizeAfter = currentCoroutine_->stack.size();
+                            int actualRetCount;
+                            if (wanted < 0) {
+                                // Multires: all values pushed since before the call
+                                actualRetCount = static_cast<int>(stackSizeAfter - stackSizeBeforeCall);
+                                if (actualRetCount < 0) actualRetCount = 0;
+                                currentCoroutine_->lastResultCount = static_cast<size_t>(actualRetCount);
+                                frame.resultCount = static_cast<size_t>(actualRetCount);
+                                frame.topReg = A + actualRetCount;
+                            } else {
+                                actualRetCount = wanted;
+                            }
+                            // Copy from stack top
+                            for (int i = 0; i < actualRetCount; i++) {
+                                size_t idx = stackSizeAfter - actualRetCount + i;
+                                if (idx < currentCoroutine_->stack.size()) {
+                                    R[A + i] = currentCoroutine_->stack[idx];
+                                } else {
+                                    R[A + i] = Value::nil();
+                                }
+                            }
+                            // Pop results from stack
+                            for (int i = 0; i < actualRetCount; i++) {
+                                if (!currentCoroutine_->stack.empty()) {
+                                    currentCoroutine_->stack.pop_back();
+                                }
+                            }
+                            // Clear dead arg registers
+                            for (int i = actualRetCount; i <= argCount; i++) {
+                                R[A + i] = Value::nil();
+                            }
+                            break;
                         }
                         if (currentCoroutine_->hookMask & CoroutineObject::MASK_CALL) {
                             callHook("call");

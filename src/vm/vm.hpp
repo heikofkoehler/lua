@@ -69,7 +69,6 @@ public:
     void setUseRegisterVM(bool use);
     bool useRegisterVM() const { return useRegisterVM_; }
     void initRequireScript();
-    bool attachRegisterCode(FunctionObject* func);
 
     void internConstants(const FunctionObject& function);
 

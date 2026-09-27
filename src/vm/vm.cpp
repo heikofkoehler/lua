@@ -6,7 +6,6 @@
 #include "compiler/parser.hpp"
 #include "compiler/codegen.hpp"
 #include "compiler/rcodegen.hpp"
-#include "compiler/rtranslate.hpp"
 #include "value/string.hpp"
 #include "value/table.hpp"
 #include "value/closure.hpp"
@@ -3676,24 +3675,5 @@ void VM::setUseRegisterVM(bool use) {
     if (use && stdlibInitialized_) {
         initRequireScript();
     }
-}
-
-bool VM::attachRegisterCode(FunctionObject* func) {
-    if (!func || !func->chunk()) return false;
-    if (!func->chunk()->hasRCode()) {
-        RTranslateResult r = translateToRegister(func);
-        if (!r.ok) {
-            return false;
-        }
-        func->chunk()->setRCode(std::move(r.code), r.maxRegisters);
-    }
-    Chunk* chunk = func->chunk();
-    for (size_t i = 0; i < chunk->numFunctions(); i++) {
-        FunctionObject* sub = chunk->getFunction(i);
-        if (sub && !attachRegisterCode(sub)) {
-            return false;
-        }
-    }
-    return true;
 }
 
