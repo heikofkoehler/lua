@@ -764,11 +764,11 @@ private:
             }
             case OpCode::OP_RETURN_VALUE_MULTI: {
                 uint8_t fixed = byteAt(off + 1);
-                // Values: R(sp-fixed)..R(sp-1) + multires (lastResultCount)
-                emitABC(ROpCode::ROP_RETURN, sp - fixed, fixed + 1, 0);
+                // Values: R(sp-fixed)..R(sp-1) + multires (frame.resultCount)
+                // B=0 signals multires (VM checks B==0)
+                // For now, fixed must be 0 (multires only); fixed>0 needs side table
+                emitAB(ROpCode::ROP_RETURN, sp - fixed, 0);
                 multiCallFixed_[out_.size() - 1] = fixed;
-                // Mark as multires return via C=0 and fixed count in side table.
-                // Interpreter: return fixed regs + lastResultCount values.
                 break;
             }
             case OpCode::OP_RETURN:

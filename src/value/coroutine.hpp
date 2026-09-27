@@ -18,6 +18,7 @@ struct CallFrame {
     size_t stackBase;           // Where this frame's locals start on value stack
     uint8_t retCount;           // Number of return values expected (0 = all, 1+ = that many)
     int regDest = -1;           // Register VM: destination register in caller (-1 = stack VM)
+    size_t resultCount = 0;     // Register VM: number of results from last multires call
     std::vector<Value> varargs; // Varargs passed to this function
     bool isPcall = false;       // TRUE if this frame is a pcall boundary
     bool isHook = false;        // TRUE if this frame is a debug hook

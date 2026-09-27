@@ -55,6 +55,8 @@ next_frame:
         while (pc < code.size()) {
             uint32_t instr = code[pc++];
             ROpCode op = ropGetOp(instr);
+            // Debug: print PC and opcode
+            // fprintf(stderr, "PC=%zu op=%d (%s)\n", pc-1, (int)op, ropToString(op));
             uint8_t A = ropGetA(instr);
             uint8_t B = ropGetB(instr);
             uint8_t C = ropGetC(instr);
@@ -425,9 +427,9 @@ next_frame:
                     R = currentCoroutine_->stack.data() + base;
                     bool isMultiArg = (B == 0);
                     bool isMultiRet = (C == 0);
-                    // For multires args: fixed=0 for now (TODO: side table for fixed count)
-                    // Args are the lastResultCount values starting at R(A+1)
-                    int argCount = isMultiArg ? static_cast<int>(currentCoroutine_->lastResultCount) : (B - 1);
+                    // For multires args: read count from frame.resultCount (set by previous call)
+                    // Args are the resultCount values starting at R(A+1)
+                    int argCount = isMultiArg ? static_cast<int>(frame.resultCount) : (B - 1);
                     // For multires returns: use 0 to signal "all results" to callValue
                     int retCount = isMultiRet ? 0 : (C - 1);
                     
@@ -716,8 +718,9 @@ next_frame:
                 }
                 case ROpCode::ROP_RETURN: {
                     // R(A)..R(A+B-2) are return values (B=1: no values, B=0: multires)
+                    // For multires (B=0), read count from frame.resultCount (set by previous CALL)
                     bool isMultiRet = (B == 0);
-                    int retCount = isMultiRet ? static_cast<int>(currentCoroutine_->lastResultCount) : (B - 1);
+                    int retCount = isMultiRet ? static_cast<int>(frame.resultCount) : (B - 1);
                     
                     // Collect return values
                     // Re-establish R in case stack reallocated
@@ -769,7 +772,12 @@ next_frame:
                         }
                     }
                     
-                    // Set lastResultCount for multires callers
+                    // Set resultCount in caller's frame for multires callers
+                    // The caller will read this when it does a multires operation
+                    if (!currentCoroutine_->frames.empty()) {
+                        currentCoroutine_->frames.back().resultCount = static_cast<size_t>(retCount);
+                    }
+                    // Also set coroutine-level for backward compatibility (C calls, etc.)
                     currentCoroutine_->lastResultCount = static_cast<size_t>(retCount);
                     
                     // Continue with caller frame
