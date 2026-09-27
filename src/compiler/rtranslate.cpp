@@ -314,8 +314,15 @@ private:
                     if (retcEnc == 0) {
                         // Multires: dynamic
                         afterSp = SP_DYNAMIC;
-                        // Record base: if already dynamic, use existing base
-                        int base = (curSp == SP_DYNAMIC) ? curDynBase : curSp;
+                        // Record base: the func register (where results start)
+                        // If already dynamic, use existing base
+                        int base;
+                        if (curSp == SP_DYNAMIC) {
+                            base = curDynBase;
+                        } else {
+                            int funcReg = curSp - argc - 1;
+                            base = funcReg;
+                        }
                         dynBase[off + len] = base;
                     } else {
                         // Encoded as retCount+1; 1 means 0 values
@@ -703,7 +710,14 @@ private:
             case OpCode::OP_CALL_MULTI: {
                 uint8_t fixed = byteAt(off + 1);
                 uint8_t retc = byteAt(off + 2);
-                int funcReg = sp - fixed - 1;
+                int funcReg;
+                if (sp == SP_DYNAMIC && dynBase >= 0) {
+                    // SP is dynamic; func is at dynBase - fixed - 1
+                    // dynBase is where the multires results start
+                    funcReg = dynBase - fixed - 1;
+                } else {
+                    funcReg = sp - fixed - 1;
+                }
                 // B=0 signals "fixed args + multires last arg".
                 // The interpreter uses lastResultCount for the multires part.
                 emitABC(ROpCode::ROP_CALL, funcReg, 0, retc);
@@ -719,7 +733,12 @@ private:
             }
             case OpCode::OP_TAILCALL_MULTI: {
                 uint8_t fixed = byteAt(off + 1);
-                int funcReg = sp - fixed - 1;
+                int funcReg;
+                if (sp == SP_DYNAMIC && dynBase >= 0) {
+                    funcReg = dynBase - fixed - 1;
+                } else {
+                    funcReg = sp - fixed - 1;
+                }
                 emitAB(ROpCode::ROP_TAILCALL, funcReg, 0);
                 multiCallFixed_[out_.size() - 1] = fixed;
                 break;

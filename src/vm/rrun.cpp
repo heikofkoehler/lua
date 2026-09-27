@@ -417,14 +417,15 @@ next_frame:
                 case ROpCode::ROP_CALL: {
                     // R(A)..R(A+C-2) = R(A)(R(A+1)..R(A+B-1))
                     // B = arg count + 1 (0 = multires), C = ret count + 1 (0 = multires)
-                    // For now: only support fixed arg/ret counts, no multires
-                    int argCount = B - 1;
-                    int retCount = C - 1;
-                    if (B == 0 || C == 0) {
-                        // Multires not yet supported
-                        hadError_ = true;
-                        return false;
-                    }
+                    // Re-establish R in case stack reallocated during previous call
+                    R = currentCoroutine_->stack.data() + base;
+                    bool isMultiArg = (B == 0);
+                    bool isMultiRet = (C == 0);
+                    // For multires args: fixed=0 for now (TODO: side table for fixed count)
+                    // Args are the lastResultCount values starting at R(A+1)
+                    int argCount = isMultiArg ? static_cast<int>(currentCoroutine_->lastResultCount) : (B - 1);
+                    // For multires returns: use 0 to signal "all results" to callValue
+                    int retCount = isMultiRet ? 0 : (C - 1);
                     
                     // Copy function and args to stack top for callValue
                     // R(A) is function, R(A+1)..R(A+argCount) are args
@@ -436,6 +437,8 @@ next_frame:
                     }
                     
                     // Push function and args onto stack
+                    // Record base for multires result counting
+                    size_t stackBaseBefore = currentCoroutine_->stack.size();
                     currentCoroutine_->stack.push_back(funcVal);
                     for (auto& arg : args) {
                         currentCoroutine_->stack.push_back(arg);
@@ -468,13 +471,20 @@ next_frame:
                     
                     // No new frame (C function); results are on stack top
                     // Copy results back to R(A)..
-                    // retCount results are on stack top
+                    // Re-establish R after potential stack reallocation
+                    R = currentCoroutine_->stack.data() + base;
+                    int actualRetCount = retCount;
+                    if (isMultiRet) {
+                        // Multires: count results from stack
+                        actualRetCount = static_cast<int>(currentCoroutine_->stack.size() - stackBaseBefore);
+                        currentCoroutine_->lastResultCount = static_cast<size_t>(actualRetCount);
+                    }
                     size_t stackSize = currentCoroutine_->stack.size();
-                    for (int i = 0; i < retCount; i++) {
-                        R[A + i] = currentCoroutine_->stack[stackSize - retCount + i];
+                    for (int i = 0; i < actualRetCount; i++) {
+                        R[A + i] = currentCoroutine_->stack[stackSize - actualRetCount + i];
                     }
                     // Pop results from stack
-                    for (int i = 0; i < retCount; i++) {
+                    for (int i = 0; i < actualRetCount; i++) {
                         currentCoroutine_->stack.pop_back();
                     }
                     break;
@@ -734,6 +744,9 @@ next_frame:
                             }
                         }
                     }
+                    
+                    // Set lastResultCount for multires callers
+                    currentCoroutine_->lastResultCount = static_cast<size_t>(retCount);
                     
                     // Continue with caller frame
                     goto next_frame;
