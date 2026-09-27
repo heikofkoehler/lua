@@ -701,6 +701,17 @@ int main(int argc, char* argv[]) {
         } else if (arg == "--register") {
             useRegisterVM = true;
             continue;
+        } else if (arg.rfind("--vm=", 0) == 0) {
+            std::string mode = arg.substr(5);
+            if (mode == "register") {
+                useRegisterVM = true;
+            } else if (mode == "stack") {
+                useRegisterVM = false;
+            } else {
+                std::cerr << "Unknown VM mode: " << mode << " (expected 'register' or 'stack')" << std::endl;
+                return 1;
+            }
+            continue;
         } else if (arg == "-b" || arg == "--bytecode") {
             isBytecode = true;
             continue;
