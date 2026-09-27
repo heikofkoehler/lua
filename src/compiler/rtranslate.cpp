@@ -344,6 +344,7 @@ private:
                     // else 1 value (nil).
                     bool stepDefault = (byteAt(off + 1) & 0x80) != 0;
                     afterSp = curSp + (stepDefault ? 2 : 1);
+                    hasFallthrough = false;
                     break;
                 }
                 case OpCode::OP_FORLOOP: {
