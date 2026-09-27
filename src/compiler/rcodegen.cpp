@@ -243,8 +243,15 @@ void RCodeGen::visitExprStmt(ExprStmtNode* node) {
 }
 
 void RCodeGen::visitAssignmentStmt(AssignmentStmtNode* node) {
-    (void)node;
-    // TODO: implement
+    int val = genExpr(node->value());
+    int local = findLocal(node->name());
+    if (local >= 0) {
+        emitAB(ROpCode::ROP_MOVE, local, val);
+    } else {
+        // Global: TODO - use SETTABUP with _ENV
+        // For now, treat as error
+    }
+    freeReg(val);
 }
 
 void RCodeGen::visitIndexAssignmentStmt(IndexAssignmentStmtNode* node) {
@@ -253,8 +260,16 @@ void RCodeGen::visitIndexAssignmentStmt(IndexAssignmentStmtNode* node) {
 }
 
 void RCodeGen::visitLocalDeclStmt(LocalDeclStmtNode* node) {
-    (void)node;
-    // TODO: implement
+    int reg = allocLocal(node->name());
+    if (node->initializer()) {
+        int val = genExpr(node->initializer());
+        if (val != reg) {
+            emitAB(ROpCode::ROP_MOVE, reg, val);
+            freeReg(val);
+        }
+    } else {
+        emitAB(ROpCode::ROP_LOADNIL, reg, 1);
+    }
 }
 
 void RCodeGen::visitMultipleLocalDeclStmt(MultipleLocalDeclStmtNode* node) {
@@ -308,8 +323,27 @@ void RCodeGen::visitFunctionDecl(FunctionDeclNode* node) {
 }
 
 void RCodeGen::visitReturn(ReturnStmtNode* node) {
-    (void)node;
-    // TODO: implement
+    const auto& values = node->values();
+    if (values.empty()) {
+        emitAB(ROpCode::ROP_RETURN, 0, 1);  // return 0 values
+    } else if (values.size() == 1) {
+        int val = genExpr(values[0].get());
+        emitABC(ROpCode::ROP_RETURN, val, 2, 0);  // return 1 value
+        // Don't free: function is exiting
+    } else {
+        // Multiple values: place in consecutive registers
+        int base = allocReg();
+        // Ensure consecutive: alloc N-1 more
+        for (size_t i = 1; i < values.size(); ++i) allocReg();
+        for (size_t i = 0; i < values.size(); ++i) {
+            int val = genExpr(values[i].get());
+            if (val != base + (int)i) {
+                emitAB(ROpCode::ROP_MOVE, base + (int)i, val);
+                freeReg(val);
+            }
+        }
+        emitABC(ROpCode::ROP_RETURN, base, (int)values.size() + 1, 0);
+    }
 }
 
 void RCodeGen::visitBreak(BreakStmtNode* node) {
