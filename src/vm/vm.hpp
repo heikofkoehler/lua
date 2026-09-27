@@ -131,8 +131,27 @@ public:
     bool getTraceExecution() const { return traceExecution_; }
 
     // Public stack operations (for native functions to use)
-    void push(const Value& value);
-    Value pop();
+    // Inline fast paths: bounds checks are [[unlikely]] to fail in correct code.
+    // Slow paths (overflow/underflow handling) are out-of-line in vm.cpp.
+    inline void push(const Value& value) {
+        if (currentCoroutine_->stack.size() >= STACK_LIMIT) [[unlikely]] {
+            pushSlowPath(value);
+            return;
+        }
+        currentCoroutine_->stack.push_back(value);
+        // GC barrier for objects; integers/floats/nil/bool skip this.
+        if (value.isObj()) [[unlikely]] {
+            pushBarrier(value);
+        }
+    }
+    inline Value pop() {
+        if (currentCoroutine_->stack.empty()) [[unlikely]] {
+            return popSlowPath();
+        }
+        Value value = currentCoroutine_->stack.back();
+        currentCoroutine_->stack.pop_back();
+        return value;
+    }
     Value peek(size_t distance = 0) const;
     void runtimeError(const std::string& message, int level = 1);
     void runtimeError(const Value& errorObj, int level = 1);
@@ -311,6 +330,11 @@ public:
     bool isHandlingError() const { return isHandlingError_; }
 
 private:
+    // Slow paths for inline push/pop (out-of-line in vm.cpp)
+    void pushSlowPath(const Value& value);
+    void pushBarrier(const Value& value);
+    Value popSlowPath();
+
     lua_State* currentL_ = nullptr;
     // GC-aware object allocation helper
     template<typename T, typename... Args>

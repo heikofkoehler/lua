@@ -1097,7 +1097,9 @@ FunctionObject* VM::compileSource(const std::string& source, const std::string& 
     }
 }
 
-void VM::push(const Value& value) {
+// Slow path for inline push(): handles stack overflow.
+// Called when stack.size() >= STACK_LIMIT (unlikely in correct code).
+void VM::pushSlowPath(const Value& value) {
     if (currentCoroutine_->stack.size() >= STACK_MAX) {
         hadError_ = true;
         lastErrorMessage_ = "error in error handling";
@@ -1108,28 +1110,29 @@ void VM::push(const Value& value) {
         runtimeError("stack overflow");
         return;
     }
+    // Reached when handling error: STACK_LIMIT <= size < STACK_MAX, allow push.
     currentCoroutine_->stack.push_back(value);
-    // GC barrier: the stack is a plain std::vector, not a GC-tracked field.
-    // If the GC is currently marking, a newly pushed object must be marked
-    // immediately (it won't be seen by an already-completed stack scan).
-    // Otherwise, use the backward barrier for the old-to-young case.
     if (value.isObj()) {
-        if (gcState_ == GCState::MARK) {
-            markValue(value);
-        } else {
-            writeBarrierBackward(currentCoroutine_, value.asObj());
-        }
+        pushBarrier(value);
     }
 }
 
-Value VM::pop() {
-    if (currentCoroutine_->stack.empty()) {
-        runtimeError("Stack underflow");
-        return Value::nil();
+// GC barrier for push(): out-of-line slow path.
+// The stack is a plain std::vector, not a GC-tracked field.
+// If GC is marking, a newly pushed object must be marked immediately.
+// Otherwise, use the backward barrier for the old-to-young case.
+void VM::pushBarrier(const Value& value) {
+    if (gcState_ == GCState::MARK) {
+        markValue(value);
+    } else {
+        writeBarrierBackward(currentCoroutine_, value.asObj());
     }
-    Value value = currentCoroutine_->stack.back();
-    currentCoroutine_->stack.pop_back();
-    return value;
+}
+
+// Slow path for inline pop(): handles stack underflow.
+Value VM::popSlowPath() {
+    runtimeError("Stack underflow");
+    return Value::nil();
 }
 
 Value VM::peek(size_t distance) const {
