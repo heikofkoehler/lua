@@ -246,9 +246,9 @@ private:
                     afterSp = curSp;
                     break;
                 case OpCode::OP_CLOSE: {
-                    uint8_t slot = byteAt(off + 1);
-                    // Only shrinks, never grows
-                    afterSp = (curSp > (int)slot) ? slot : curSp;
+                    // OP_CLOSE closes upvalues but does not change stack depth.
+                    // The locals remain on the stack; only their upvalues are closed.
+                    afterSp = curSp;
                     break;
                 }
                 // Jumps
