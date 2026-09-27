@@ -630,6 +630,19 @@ next_frame:
                         }
                     }
                     
+                    // Shrink stack to caller's window end to prevent unbounded growth
+                    // Caller is now on top of frames
+                    if (!currentCoroutine_->frames.empty()) {
+                        CallFrame& caller = currentCoroutine_->frames.back();
+                        FunctionObject* callerFunc = caller.closure->function();
+                        if (callerFunc->chunk()->hasRCode()) {
+                            size_t callerEnd = caller.stackBase + callerFunc->chunk()->rFrameSize();
+                            if (currentCoroutine_->stack.size() > callerEnd) {
+                                currentCoroutine_->stack.resize(callerEnd);
+                            }
+                        }
+                    }
+                    
                     // Continue with caller frame
                     goto next_frame;
                 }
