@@ -329,13 +329,70 @@ void RCodeGen::visitMultipleGlobalDeclStmt(MultipleGlobalDeclStmtNode* node) {
 }
 
 void RCodeGen::visitIfStmt(IfStmtNode* node) {
-    (void)node;
-    // TODO: implement
+    // if cond then A else B end
+    //   TEST cond, 0  ; if truthy, skip JMP
+    //   JMP else
+    //   A
+    //   JMP end
+    // else:
+    //   B
+    // end:
+    std::vector<size_t> endJumps;
+
+    // Main if
+    int cond = genExpr(node->condition());
+    emitAB(ROpCode::ROP_TEST, cond, 0);  // if truthy, skip next
+    freeReg(cond);
+    size_t elseJump = emitJump(ROpCode::ROP_JMP, 0);
+    genBlock(node->thenBranch());
+    endJumps.push_back(emitJump(ROpCode::ROP_JMP, 0));
+
+    // Elseif branches
+    for (const auto& eib : node->elseIfBranches()) {
+        patchJump(elseJump, code_.size());
+        int c = genExpr(eib.condition.get());
+        emitAB(ROpCode::ROP_TEST, c, 0);
+        freeReg(c);
+        elseJump = emitJump(ROpCode::ROP_JMP, 0);
+        genBlock(eib.body);
+        endJumps.push_back(emitJump(ROpCode::ROP_JMP, 0));
+    }
+
+    // Else branch
+    patchJump(elseJump, code_.size());
+    genBlock(node->elseBranch());
+
+    // End
+    for (size_t j : endJumps) patchJump(j, code_.size());
 }
 
 void RCodeGen::visitWhileStmt(WhileStmtNode* node) {
-    (void)node;
-    // TODO: implement
+    // while cond do body end
+    // loop:
+    //   TEST cond, 0
+    //   JMP end
+    //   body
+    //   JMP loop
+    // end:
+    size_t loopStart = code_.size();
+    int cond = genExpr(node->condition());
+    emitAB(ROpCode::ROP_TEST, cond, 0);
+    freeReg(cond);
+    size_t endJump = emitJump(ROpCode::ROP_JMP, 0);
+
+    // Push break context
+    breakJumps_.push_back({});
+
+    genBlock(node->body());
+
+    emitJump(ROpCode::ROP_JMP, 0);  // Will patch to loopStart
+    patchJump(code_.size() - 1, loopStart);
+
+    patchJump(endJump, code_.size());
+
+    // Patch breaks
+    for (size_t b : breakJumps_.back()) patchJump(b, code_.size());
+    breakJumps_.pop_back();
 }
 
 void RCodeGen::visitRepeatStmt(RepeatStmtNode* node) {
@@ -384,7 +441,9 @@ void RCodeGen::visitReturn(ReturnStmtNode* node) {
 
 void RCodeGen::visitBreak(BreakStmtNode* node) {
     (void)node;
-    // TODO: implement
+    if (!breakJumps_.empty()) {
+        breakJumps_.back().push_back(emitJump(ROpCode::ROP_JMP, 0));
+    }
 }
 
 void RCodeGen::visitGoto(GotoStmtNode* node) {
