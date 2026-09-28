@@ -220,11 +220,15 @@ void RCodeGen::popScope() {
         // Clear dead local registers to prevent GC from seeing stale references.
         // This is surgical: only clear the specific registers for locals in this
         // scope, not the entire range, to avoid breaking live temporaries.
+        // Use line 0 so cleanup doesn't affect debug line hooks.
         if (s.baseReg > 0) {
+            int savedLine = currentLine_;
+            setLine(0);
             for (const auto& pair : s.locals) {
                 int reg = pair.second.reg;
                 emitAB(ROpCode::ROP_LOADNIL, reg, 0);
             }
+            setLine(savedLine);
         }
         if (func_) {
             auto& lvars = const_cast<std::vector<LocalVarInfo>&>(func_->localVars());
