@@ -1180,6 +1180,10 @@ void RCodeGen::visitRepeatStmt(RepeatStmtNode* node) {
     size_t jmp = emitJump(ROpCode::ROP_JMP, 0);
     patchJump(jmp, loopStart);
 
+    // Set line before popScope so cleanup gets the end line
+    if (node->endLine() > 0) {
+        setLine(node->endLine());
+    }
     popScope();
 
     for (size_t b : breakJumps_.back()) patchJump(b, code_.size());
@@ -1299,10 +1303,13 @@ void RCodeGen::visitForInStmt(ForInStmtNode* node) {
     for (size_t b : breakJumps_.back()) patchJump(b, code_.size());
     breakJumps_.pop_back();
 
-    popScope();
+    // Set line BEFORE popScope so cleanup instructions get the end line,
+    // not the body line. This ensures the debug hook fires for the correct
+    // line when breaking out of the loop.
     if (node->endLine() > 0) {
         setLine(node->endLine());
     }
+    popScope();
 }
 
 void RCodeGen::visitFunctionDecl(FunctionDeclNode* node) {
