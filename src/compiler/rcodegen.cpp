@@ -117,13 +117,11 @@ void RCodeGen::resetTemps(int base) {
     // Clear stale temporary registers to prevent GC from seeing dead references.
     // This is critical for weak tables: a temp holding a dead object will
     // keep it alive if not cleared.
-    // Use line 0 so these cleanup instructions don't affect debug line hooks.
-    int savedLine = currentLine_;
-    setLine(0);
+    // Use the current line (not line 0): cleanup on the same line doesn't
+    // trigger hooks (same line, forward pc), and preserves lastLine tracking.
     for (int r = base; r < nextReg_; ++r) {
         emitAB(ROpCode::ROP_LOADNIL, r, 0);
     }
-    setLine(savedLine);
     nextReg_ = base;
     freeRegs_.clear();
     reservedCounts_.clear();
@@ -220,15 +218,12 @@ void RCodeGen::popScope() {
         // Clear dead local registers to prevent GC from seeing stale references.
         // This is surgical: only clear the specific registers for locals in this
         // scope, not the entire range, to avoid breaking live temporaries.
-        // Use line 0 so cleanup doesn't affect debug line hooks.
+        // Use current line: same-line cleanup doesn't trigger hooks.
         if (s.baseReg > 0) {
-            int savedLine = currentLine_;
-            setLine(0);
             for (const auto& pair : s.locals) {
                 int reg = pair.second.reg;
                 emitAB(ROpCode::ROP_LOADNIL, reg, 0);
             }
-            setLine(savedLine);
         }
         if (func_) {
             auto& lvars = const_cast<std::vector<LocalVarInfo>&>(func_->localVars());
@@ -1206,6 +1201,7 @@ void RCodeGen::visitRepeatStmt(RepeatStmtNode* node) {
 
 void RCodeGen::visitForStmt(ForStmtNode* node) {
     setLine(node->line());
+    size_t setupStart = code_.size();
     int base = nextReg_;
     nextReg_ += 3;  // Reserve 3 registers: index, limit, step
     maxReg_ = std::max(maxReg_, nextReg_);
@@ -1227,6 +1223,13 @@ void RCodeGen::visitForStmt(ForStmtNode* node) {
 
     size_t prepPc = emitJump(ROpCode::ROP_FORPREP, base);
 
+    // Setup (LOADKs, FORPREP) uses line 0: invisible to hooks.
+    // Body cleanup uses real line (see resetTemps/popScope).
+    for (size_t i = setupStart; i <= prepPc && i < lines_.size(); ++i) {
+        lines_[i] = 0;
+    }
+
+    setLine(node->line());
     size_t loopStart = code_.size();
     pushScope();
     int loopVar = allocLocal(node->varName());
@@ -1237,7 +1240,8 @@ void RCodeGen::visitForStmt(ForStmtNode* node) {
 
     popScope();
 
-    setLine(node->line());
+    // FORLOOP uses line 0: loop control, not body. Invisible to hooks.
+    setLine(0);
     size_t loopPc = emitJump(ROpCode::ROP_FORLOOP, base);
     patchJump(loopPc, loopStart);
     patchJump(prepPc, loopPc);

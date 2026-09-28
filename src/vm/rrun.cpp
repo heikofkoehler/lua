@@ -163,10 +163,8 @@ next_frame:
                                     curFrame.lastLine = currentLine;
                                 }
                             } else {
-                                if (curFrame.lastLine == -1 || pc < curFrame.lastIp) {
-                                    triggerLine = true;
-                                    curFrame.lastLine = -2;
-                                }
+                                // Line 0 = no line info. Never trigger a hook.
+                                // Do not update lastLine; preserve last real line.
                             }
                             curFrame.lastIp = pc;
                         }
