@@ -207,6 +207,15 @@ void RCodeGen::popScope() {
         if (s.hasClose && s.minCloseReg >= 0) {
             emitAB(ROpCode::ROP_CLOSE, s.minCloseReg, 0);
         }
+        // Clear dead local registers to prevent GC from seeing stale references.
+        // This is surgical: only clear the specific registers for locals in this
+        // scope, not the entire range, to avoid breaking live temporaries.
+        if (s.baseReg > 0) {
+            for (const auto& pair : s.locals) {
+                int reg = pair.second.reg;
+                emitAB(ROpCode::ROP_LOADNIL, reg, 0);
+            }
+        }
         if (func_) {
             auto& lvars = const_cast<std::vector<LocalVarInfo>&>(func_->localVars());
             for (auto& lv : lvars) {
