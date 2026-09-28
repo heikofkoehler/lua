@@ -407,6 +407,9 @@ FunctionObject* RCodeGen::compileFunctionBody(
     }
 
     childGen.genBlock(body);
+    // Ensure the final RETURN is attributed to the function's end line,
+    // so debug.getinfo().activelines includes the last line.
+    childGen.setLine(lastLineDefined);
     childGen.emitAB(ROpCode::ROP_RETURN, 0, 1);
 
     int nup = static_cast<int>(childGen.upvalues_.size());
