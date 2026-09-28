@@ -557,11 +557,12 @@ std::unique_ptr<StmtNode> Parser::repeatStatement() {
     }
 
     consume(TokenType::UNTIL, "'until' expected (to close 'repeat' at line " + std::to_string(line) + ")");
+    int untilLine = previous_.line;
 
     // Parse condition
     auto condition = expression();
 
-    return std::make_unique<RepeatStmtNode>(std::move(body), std::move(condition), line);
+    return std::make_unique<RepeatStmtNode>(std::move(body), std::move(condition), line, untilLine);
 }
 
 std::unique_ptr<StmtNode> Parser::forStatement() {

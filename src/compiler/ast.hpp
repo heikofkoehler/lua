@@ -506,8 +506,11 @@ class RepeatStmtNode : public StmtNode {
 public:
     RepeatStmtNode(std::vector<std::unique_ptr<StmtNode>> body,
                    std::unique_ptr<ExprNode> condition,
-                   int line)
-        : StmtNode(line), body_(std::move(body)), condition_(std::move(condition)) {}
+                   int line, int endLine = 0)
+        : StmtNode(line), body_(std::move(body)), condition_(std::move(condition)),
+          endLine_(endLine ? endLine : line) {}
+    void setEndLine(int line) { endLine_ = line; }
+    int endLine() const { return endLine_; }
 
     void accept(ASTVisitor& visitor) override;
 
@@ -517,6 +520,7 @@ public:
 private:
     std::vector<std::unique_ptr<StmtNode>> body_;
     std::unique_ptr<ExprNode> condition_;
+    int endLine_ = -1;
 };
 
 // Numeric for loop: for var = start, end, step do body end

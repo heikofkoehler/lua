@@ -801,7 +801,7 @@ void RCodeGen::visitIndexExpr(IndexExprNode* node) {
 }
 
 void RCodeGen::visitFunctionExpr(FunctionExprNode* node) {
-    setLine(node->line());
+    setLine(node->lastLineDefined() > 0 ? node->lastLineDefined() : node->line());
     std::vector<UpvalueInfo> uvs;
     FunctionObject* child = compileFunctionBody("", node->params(), node->body(), node->hasVarargs(), node->varargName(), uvs, node->lineDefined(), node->lastLineDefined());
     size_t funcIdx = func_->chunk()->addFunction(child);
@@ -1145,6 +1145,9 @@ void RCodeGen::visitWhileStmt(WhileStmtNode* node) {
     int cond = genExpr(node->condition());
     emitAB(ROpCode::ROP_TEST, cond, 0);
     freeReg(cond);
+    if (node->endLine() > 0) {
+        setLine(node->endLine());
+    }
     size_t endJump = emitJump(ROpCode::ROP_JMP, 0);
 
     breakJumps_.push_back({});
@@ -1157,6 +1160,9 @@ void RCodeGen::visitWhileStmt(WhileStmtNode* node) {
 
     for (size_t b : breakJumps_.back()) patchJump(b, code_.size());
     breakJumps_.pop_back();
+    if (node->endLine() > 0) {
+        setLine(node->endLine());
+    }
 }
 
 void RCodeGen::visitRepeatStmt(RepeatStmtNode* node) {
@@ -1213,11 +1219,15 @@ void RCodeGen::visitForStmt(ForStmtNode* node) {
 
     popScope();
 
+    setLine(node->line());
     size_t loopPc = emitJump(ROpCode::ROP_FORLOOP, base);
     patchJump(loopPc, loopStart);
     patchJump(prepPc, loopPc);
 
     for (size_t b : breakJumps_.back()) patchJump(b, code_.size());
+    if (node->endLine() > 0) {
+        setLine(node->endLine());
+    }
     breakJumps_.pop_back();
 }
 
@@ -1290,6 +1300,9 @@ void RCodeGen::visitForInStmt(ForInStmtNode* node) {
     breakJumps_.pop_back();
 
     popScope();
+    if (node->endLine() > 0) {
+        setLine(node->endLine());
+    }
 }
 
 void RCodeGen::visitFunctionDecl(FunctionDeclNode* node) {
