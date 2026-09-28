@@ -1111,6 +1111,11 @@ void RCodeGen::visitIfStmt(IfStmtNode* node) {
     freeReg(cond);
     size_t elseJump = emitJump(ROpCode::ROP_JMP, 0);
     genBlock(node->thenBranch());
+    // The jump to end should be attributed to the 'end' line for correct
+    // debug hook tracing.
+    if (node->endLine() > 0) {
+        setLine(node->endLine());
+    }
     endJumps.push_back(emitJump(ROpCode::ROP_JMP, 0));
 
     for (const auto& eib : node->elseIfBranches()) {
@@ -1128,6 +1133,10 @@ void RCodeGen::visitIfStmt(IfStmtNode* node) {
     genBlock(node->elseBranch());
 
     for (size_t j : endJumps) patchJump(j, code_.size());
+    // Reset line to the 'end' line so following instructions get correct line
+    if (node->endLine() > 0) {
+        setLine(node->endLine());
+    }
 }
 
 void RCodeGen::visitWhileStmt(WhileStmtNode* node) {

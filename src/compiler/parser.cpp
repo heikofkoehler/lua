@@ -521,7 +521,10 @@ std::unique_ptr<StmtNode> Parser::ifStatement() {
         ifNode->setElseBranch(std::move(elseBranch));
     }
 
+    // Capture the END token's line before consuming
+    int endLine = current_.line;
     consume(TokenType::END, "'end' expected (to close 'if' at line " + std::to_string(line) + ")");
+    ifNode->setEndLine(endLine);
     return ifNode;
 }
 

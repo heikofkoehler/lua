@@ -469,10 +469,14 @@ public:
         elseBranch_ = std::move(body);
     }
 
+    void setEndLine(int line) { endLine_ = line; }
+    int endLine() const { return endLine_; }
+
 private:
     std::unique_ptr<ExprNode> condition_;
     std::vector<std::unique_ptr<StmtNode>> thenBranch_;
     std::vector<ElseIfBranch> elseIfBranches_;
+    int endLine_ = -1;
     std::vector<std::unique_ptr<StmtNode>> elseBranch_;
 };
 
