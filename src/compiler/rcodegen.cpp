@@ -117,9 +117,13 @@ void RCodeGen::resetTemps(int base) {
     // Clear stale temporary registers to prevent GC from seeing dead references.
     // This is critical for weak tables: a temp holding a dead object will
     // keep it alive if not cleared.
+    // Use line 0 so these cleanup instructions don't affect debug line hooks.
+    int savedLine = currentLine_;
+    setLine(0);
     for (int r = base; r < nextReg_; ++r) {
         emitAB(ROpCode::ROP_LOADNIL, r, 0);
     }
+    setLine(savedLine);
     nextReg_ = base;
     freeRegs_.clear();
     reservedCounts_.clear();
