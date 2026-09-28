@@ -846,6 +846,14 @@ next_frame:
                     if (currentCoroutine_->frames.size() > prevFrames) {
                         goto next_frame;
                     }
+                    // Frame was reused for tail call (Lua function): restart at pc=0.
+                    // Check if current frame was marked as tail call with ip reset.
+                    if (!currentCoroutine_->frames.empty()) {
+                        CallFrame& curFrame = currentCoroutine_->frames.back();
+                        if (curFrame.isTailCall && curFrame.ip == 0) {
+                            goto next_frame;
+                        }
+                    }
                     // C function tailcall; results on stack, need to return them
                     // For simplicity, copy to R(A) and do RETURN
                     // TODO: proper multires handling
