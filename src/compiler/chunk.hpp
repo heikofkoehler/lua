@@ -50,6 +50,7 @@ public:
     size_t addString(const std::string& str);
     StringObject* getString(size_t index) const;
     size_t numStrings() const { return strings_.size(); }
+    std::vector<StringObject*>& mutableStrings() { return strings_; }
 
     // Add an int64 to the int64 pool
     size_t addInt64(int64_t val);
@@ -85,6 +86,10 @@ public:
     // Access constants
     const std::vector<Value>& constants() const { return constants_; }
     const Value& getConstant(size_t index) const { return constants_[index]; }
+    // Stack constants (for string.dump on register-compiled functions)
+    const std::vector<Value>& stackConstants() const { return stackConstants_; }
+    std::vector<Value>& mutableStackConstants() { return stackConstants_; }
+    void setStackConstants(std::vector<Value> c) { stackConstants_ = std::move(c); }
 
     // Get line number for instruction at offset
     int getLine(size_t offset) const;
@@ -109,6 +114,7 @@ private:
     bool hasRCode_ = false;            // True if rcode_ is valid
     int rFrameSize_ = 0;               // Register frame size (max registers, Phase 4)
     std::vector<Value> constants_;     // Constant pool
+    std::vector<Value> stackConstants_; // Stack VM constant pool (for string.dump on register functions)
     std::unordered_map<uint64_t, size_t> constantMap_; // For constant deduplication
     std::vector<std::string> identifiers_;  // Identifier pool (variable names)
     std::vector<FunctionObject*> functions_;  // Function pool (owned)

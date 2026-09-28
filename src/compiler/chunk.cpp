@@ -571,9 +571,12 @@ void Chunk::serialize(std::ostream& os, const std::string& parentSource, bool st
     }
     
     // Constants (this will recursively serialize functions)
-    uint32_t constCount = static_cast<uint32_t>(constants_.size());
+    // For register-compiled functions, use stackConstants_ (stack VM constant pool)
+    // since the serialized bytecode is the stack VM bytecode (for string.dump/load).
+    const std::vector<Value>& consts = stackConstants_.empty() ? constants_ : stackConstants_;
+    uint32_t constCount = static_cast<uint32_t>(consts.size());
     os.write(reinterpret_cast<const char*>(&constCount), sizeof(constCount));
-    for (const auto& constant : constants_) {
+    for (const auto& constant : consts) {
         constant.serialize(os, this, sourceName_.empty() ? "=?" : sourceName_, strip);
     }
 }
@@ -1098,6 +1101,31 @@ void copyStackBytecode(FunctionObject* rfunc, FunctionObject* sfunc) {
     if (!rfunc || !sfunc || !rfunc->chunk() || !sfunc->chunk()) return;
     rfunc->chunk()->code() = sfunc->chunk()->code();
     rfunc->chunk()->setLines(std::vector<int>(sfunc->chunk()->lines()));
+    // Copy stack constants and string pool: stack bytecode references stack constant
+    // pool indices, but the function's main constant pool holds register constants.
+    // string.dump uses stackConstants() when dumping register-compiled functions.
+    // We deep-copy the string pool so indices remain valid in the destination chunk.
+    rfunc->chunk()->setStackConstants(sfunc->chunk()->constants());
+    // Deep-copy string pool for stackConstants_ indices to be valid.
+    // Stack constant string indices are offset by the destination's existing string count.
+    auto& destStrings = rfunc->chunk()->mutableStrings();
+    size_t stringOffset = destStrings.size();
+    for (size_t i = 0; i < sfunc->chunk()->numStrings(); i++) {
+        StringObject* srcStr = sfunc->chunk()->getString(i);
+        if (srcStr) {
+            destStrings.push_back(new StringObject(srcStr->chars(), srcStr->length()));
+        }
+    }
+    // Adjust string indices in stackConstants_ by the offset
+    auto& stackConsts = rfunc->chunk()->mutableStackConstants();
+    for (auto& c : stackConsts) {
+        if (c.isString() && !c.isRuntimeString()) {
+            size_t oldIdx = c.asStringIndex();
+            // Create new Value with offset index
+            c = Value::string(oldIdx + stringOffset);
+        }
+    }
+    // Recursively copy for nested functions
     size_t rcount = rfunc->chunk()->numFunctions();
     size_t scount = sfunc->chunk()->numFunctions();
     for (size_t i = 0; i < rcount && i < scount; i++) {

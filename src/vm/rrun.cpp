@@ -873,7 +873,6 @@ next_frame:
                         // Desc is ROP_CLOSURE with A=isLocal, Bx=idx
                         uint8_t isLocal = ropGetA(desc);
                         uint16_t idx = ropGetBx(desc);
-                        
                         if (isLocal) {
                             // Capture from current frame's register window
                             size_t stackIndex = base + idx;

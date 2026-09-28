@@ -196,6 +196,14 @@ void RCodeGen::pushScope() {
 void RCodeGen::popScope() {
     if (!scopes_.empty()) {
         Scope s = scopes_.back();
+        // Close upvalues for locals in this scope that were captured by closures.
+        // This must happen before the registers are freed (nextReg_ reset below).
+        // ROP_CLOSE with A=baseReg closes upvalues with stackIndex >= base + baseReg.
+        // Skip for the outermost scope (baseReg==0) as there are no enclosing upvalues to close
+        // at function exit (RETURN handles it).
+        if (!s.locals.empty() && s.baseReg > 0) {
+            emitAB(ROpCode::ROP_CLOSE, s.baseReg, 0);
+        }
         if (s.hasClose && s.minCloseReg >= 0) {
             emitAB(ROpCode::ROP_CLOSE, s.minCloseReg, 0);
         }
