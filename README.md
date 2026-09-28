@@ -121,6 +121,23 @@ curl -s -X POST http://127.0.0.1:8080/api/render \
 
 ---
 
+## VM Performance
+
+Benchmarks comparing the stack VM (`--vm=stack`, default), register VM (`--vm=register`, direct compilation via RCodeGen), and RIO Lua (PUC Lua 5.5.0 reference). Linux x86_64, GCC, Release build.
+
+| Workload | Stack VM | Register VM | RIO Lua |
+|----------|----------|-------------|---------|
+| fib(28) | 0.751s | 0.322s | 0.032s |
+| loop (10M iterations) | 4.147s | 0.408s | 0.087s |
+| table (1M insert + 1M read) | 0.819s | 0.132s | 0.043s |
+| calls (5M function calls) | 3.457s | 1.346s | 0.196s |
+
+Register VM speedup over stack VM: **2.3x** (fib), **10.2x** (loop), **6.2x** (table), **2.6x** (calls).
+
+RIO Lua remains 3-10x faster than the register VM, pointing at remaining CALL/RETURN and dispatch overhead.
+
+---
+
 ## Building
 
 ### Prerequisites
